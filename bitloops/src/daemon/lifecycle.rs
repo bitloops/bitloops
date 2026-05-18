@@ -223,8 +223,37 @@ pub(super) async fn stop() -> Result<()> {
             return Ok(());
         }
 
-        let runtime = runtime
-            .context("Bitloops daemon is not running. Start it with `bitloops daemon start`.")?;
+        let Some(runtime) = runtime else {
+            let Some(orphan_config_path) = current_repo_daemon_config_path(Path::new("."), None, None)
+            else {
+                anyhow::bail!(
+                    "Bitloops daemon is not running. Start it with `bitloops daemon start`."
+                );
+            };
+            let orphan_pids = running_internal_daemon_process_pids_for_config(&orphan_config_path)?;
+            if orphan_pids.is_empty() {
+                anyhow::bail!(
+                    "Bitloops daemon is not running. Start it with `bitloops daemon start`."
+                );
+            }
+            log::warn!(
+                "daemon runtime state is missing; stopping {} orphan daemon process(es) for config {}: {:?}",
+                orphan_pids.len(),
+                orphan_config_path.display(),
+                orphan_pids
+            );
+            stop_current_repo_watcher_if_present();
+            for pid in orphan_pids {
+                terminate_process_and_wait_for_shutdown_cleanup(
+                    pid,
+                    STOP_TIMEOUT,
+                    STOP_RUNTIME_CLEAN_EXIT_GRACE,
+                    FORCE_KILL_TIMEOUT,
+                )?;
+            }
+            log::info!("daemon stop completed for orphan daemon process");
+            return Ok(());
+        };
         log::info!(
             "daemon stopping process pid={} mode={}",
             runtime.pid,

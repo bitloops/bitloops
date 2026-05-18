@@ -216,7 +216,7 @@ pub(crate) fn upsert_checkpoint_session_row(
         .context("serializing summary for checkpoint_sessions row")?;
     let created_at = session_meta.created_at.clone();
 
-    storage.sqlite.with_connection(|conn| {
+    storage.sqlite.with_write_connection(|conn| {
         conn.execute(
             "INSERT INTO checkpoint_sessions (
                 checkpoint_id, session_id, session_index, agent, turn_id,
@@ -289,7 +289,7 @@ pub(crate) fn upsert_checkpoint_row(
         .transpose()
         .context("serializing token_usage for checkpoints row")?;
 
-    storage.sqlite.with_connection(|conn| {
+    storage.sqlite.with_write_connection(|conn| {
         conn.execute(
             "INSERT INTO checkpoints (
                 checkpoint_id, repo_id, strategy, branch, cli_version,
@@ -354,7 +354,7 @@ fn persist_checkpoint_provenance_rows(
 
     storage
         .sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "DELETE FROM checkpoint_artefact_lineage
                  WHERE repo_id = ?1 AND checkpoint_id = ?2 AND session_id = ?3",
@@ -505,7 +505,7 @@ pub(crate) fn update_checkpoint_session_summary_in_db(
 
     let summary_json = serde_json::to_string(summary)
         .context("serializing summary for checkpoint_sessions row")?;
-    storage.sqlite.with_connection(|conn| {
+    storage.sqlite.with_write_connection(|conn| {
         conn.execute(
             "UPDATE checkpoint_sessions
              SET summary = ?3

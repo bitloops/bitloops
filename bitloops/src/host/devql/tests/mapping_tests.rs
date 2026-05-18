@@ -11,6 +11,10 @@ use crate::adapters::languages::java::canonical::{
     JAVA_CANONICAL_MAPPINGS, JAVA_SUPPORTED_LANGUAGE_KINDS,
 };
 use crate::adapters::languages::java::extraction::extract_java_artefacts;
+use crate::adapters::languages::php::canonical::{
+    PHP_CANONICAL_MAPPINGS, PHP_SUPPORTED_LANGUAGE_KINDS,
+};
+use crate::adapters::languages::php::extraction::extract_php_artefacts;
 use crate::adapters::languages::python::canonical::{
     PYTHON_CANONICAL_MAPPINGS, PYTHON_SUPPORTED_LANGUAGE_KINDS,
 };
@@ -24,7 +28,7 @@ use crate::adapters::languages::ts_js::canonical::{
 };
 use crate::adapters::languages::ts_js::extraction::extract_js_ts_artefacts;
 use crate::host::language_adapter::{
-    CSharpKind, GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind,
+    CSharpKind, GoKind, JavaKind, LanguageKind, PhpKind, PythonKind, RustKind, TsJsKind,
 };
 use crate::host::language_adapter::{is_supported_language_kind, resolve_canonical_kind};
 use std::path::PathBuf;

@@ -206,7 +206,11 @@ pub fn handle_lifecycle_turn_end(
                 agent_type: state.agent_type.clone(),
                 model: model.clone(),
                 first_prompt: state.first_prompt.clone(),
-                transcript_path: state.transcript_path.clone(),
+                transcript_path: if state.transcript_path.trim().is_empty() {
+                    transcript_ref.clone()
+                } else {
+                    state.transcript_path.clone()
+                },
                 worktree_path: state.worktree_path.clone(),
                 worktree_id: state.worktree_id.clone(),
                 started_at: if state.started_at.trim().is_empty() {

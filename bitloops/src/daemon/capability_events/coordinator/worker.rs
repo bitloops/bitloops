@@ -19,8 +19,8 @@ use crate::host::capability_host::{DevqlCapabilityHost, ReconcileMode};
 use crate::host::devql::resolve_repo_identity;
 
 use super::types::{
-    CapabilityEventCoordinator, MAX_RUN_ATTEMPTS, RunCompletion, WORKER_POLL_INTERVAL,
-    WorkerStartedGuard,
+    CapabilityEventCoordinator, MAX_CONCURRENT_CURRENT_STATE_RUNS, MAX_RUN_ATTEMPTS, RunCompletion,
+    WORKER_POLL_INTERVAL, WorkerStartedGuard,
 };
 
 impl CapabilityEventCoordinator {
@@ -64,7 +64,7 @@ impl CapabilityEventCoordinator {
             .lock
             .lock()
             .map_err(|_| anyhow!("current-state consumer lock poisoned"))?;
-        let runs = self.runtime_store.with_connection(|conn| {
+        let runs = self.runtime_store.with_write_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
                 .context("starting current-state consumer claim transaction")?;
             let result = (|| {
@@ -144,7 +144,7 @@ impl CapabilityEventCoordinator {
     async fn execute_run(&self, run: StoredRunRecord) -> RunCompletion {
         let plan = match self
             .runtime_store
-            .with_connection(|conn| build_execution_plan(conn, &run.record, &run.repo_root))
+            .with_write_connection(|conn| build_execution_plan(conn, &run.record, &run.repo_root))
         {
             Ok(Some(plan)) => plan,
             Ok(None) => return RunCompletion::NoopCompleted { run: run.record },
@@ -230,7 +230,7 @@ fn reconcile_mode_for_log(mode: ReconcileMode) -> &'static str {
     }
 }
 
-fn load_claimable_runs(conn: &rusqlite::Connection) -> Result<Vec<StoredRunRecord>> {
+pub(super) fn load_claimable_runs(conn: &rusqlite::Connection) -> Result<Vec<StoredRunRecord>> {
     let now = unix_timestamp_now();
     let candidates = load_runs(
         conn,
@@ -238,12 +238,18 @@ fn load_claimable_runs(conn: &rusqlite::Connection) -> Result<Vec<StoredRunRecor
         params![CapabilityEventRunStatus::Queued.to_string()],
     )?;
     let mut running_lanes = BTreeMap::<String, ()>::new();
+    let mut running_count = 0usize;
     for run in load_runs(
         conn,
         "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, init_session_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE status = ?1",
         params![CapabilityEventRunStatus::Running.to_string()],
     )? {
+        running_count += 1;
         running_lanes.insert(run.record.lane_key.clone(), ());
+    }
+    let available_slots = MAX_CONCURRENT_CURRENT_STATE_RUNS.saturating_sub(running_count);
+    if available_slots == 0 {
+        return Ok(Vec::new());
     }
 
     let mut claimable = Vec::new();
@@ -256,6 +262,9 @@ fn load_claimable_runs(conn: &rusqlite::Connection) -> Result<Vec<StoredRunRecor
         }
         running_lanes.insert(run.record.lane_key.clone(), ());
         claimable.push(run);
+        if claimable.len() >= available_slots {
+            break;
+        }
     }
     Ok(claimable)
 }

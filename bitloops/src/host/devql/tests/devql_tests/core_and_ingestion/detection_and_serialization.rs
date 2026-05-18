@@ -21,6 +21,7 @@ fn detect_language_prefers_registered_language_pack_profiles() {
     assert_eq!(detect_language("src/main.go"), "go");
     assert_eq!(detect_language("src/Main.java"), "java");
     assert_eq!(detect_language("src/main.cs"), "csharp");
+    assert_eq!(detect_language("src/main.php"), "php");
     assert_eq!(detect_language("src/readme.custom"), "plain_text");
     assert_eq!(detect_language("README"), "plain_text");
 }
@@ -250,7 +251,8 @@ public class Helper
     };
 
     assert!(artefacts.iter().any(|(symbol_fqn, canonical_kind)| {
-        symbol_fqn == "src/UserService.cs::ns::MyApp.Services" && canonical_kind.is_none()
+        symbol_fqn == "src/UserService.cs::ns::MyApp.Services"
+            && canonical_kind.as_deref() == Some("namespace")
     }));
     assert!(artefacts.iter().any(|(symbol_fqn, canonical_kind)| {
         symbol_fqn == "src/UserService.cs::IRepository"

@@ -3,6 +3,16 @@ use crate::host::language_adapter::{CSharpKind, CanonicalMapping, LanguageKind, 
 
 pub(crate) static CSHARP_CANONICAL_MAPPINGS: &[CanonicalMapping] = &[
     CanonicalMapping {
+        language_kind: LanguageKind::csharp(CSharpKind::Namespace),
+        projection: CanonicalKindProjection::Namespace,
+        condition: MappingCondition::Always,
+    },
+    CanonicalMapping {
+        language_kind: LanguageKind::csharp(CSharpKind::FileScopedNamespace),
+        projection: CanonicalKindProjection::Namespace,
+        condition: MappingCondition::Always,
+    },
+    CanonicalMapping {
         language_kind: LanguageKind::csharp(CSharpKind::Class),
         projection: CanonicalKindProjection::Type,
         condition: MappingCondition::Always,

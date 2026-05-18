@@ -28,6 +28,10 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         Some(JAVA_LANGUAGE_PACK_ID)
     );
     assert_eq!(
+        resolve_language_pack_owner("php"),
+        Some(PHP_LANGUAGE_PACK_ID)
+    );
+    assert_eq!(
         resolve_language_id_for_file_path("src/lib.rs"),
         Some("rust")
     );
@@ -52,6 +56,10 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         resolve_language_id_for_file_path("src/main.cs"),
         Some("csharp")
     );
+    assert_eq!(
+        resolve_language_id_for_file_path("src/main.php"),
+        Some("php")
+    );
     assert!(resolve_language_id_for_file_path("README").is_none());
 }
 
@@ -64,6 +72,7 @@ fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
             CSHARP_LANGUAGE_PACK_ID,
             GO_LANGUAGE_PACK_ID,
             JAVA_LANGUAGE_PACK_ID,
+            PHP_LANGUAGE_PACK_ID,
             PYTHON_LANGUAGE_PACK_ID,
             RUST_LANGUAGE_PACK_ID,
             TS_JS_LANGUAGE_PACK_ID
@@ -75,11 +84,12 @@ fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
     assert!(registry.get(RUST_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(TS_JS_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(PYTHON_LANGUAGE_PACK_ID).is_some());
+    assert!(registry.get(PHP_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get("unknown-pack").is_none());
 }
 
 #[test]
-fn devql_language_adapter_registry_executes_rust_ts_js_python_go_java_and_csharp_built_ins() {
+fn devql_language_adapter_registry_executes_rust_ts_js_python_go_java_csharp_and_php_built_ins() {
     let count_kind = |edges: &[DependencyEdge], kind: EdgeKind| -> usize {
         edges.iter().filter(|edge| edge.edge_kind == kind).count()
     };
@@ -381,5 +391,39 @@ class Greeter extends Base implements Runner {
         edge.edge_kind == EdgeKind::Implements
             && edge.from_symbol_fqn == "src/com/acme/Greeter.java::Greeter"
             && edge.to_target_symbol_fqn.as_deref() == Some("src/com/acme/Greeter.java::Runner")
+    }));
+
+    let php_pack = registry
+        .get(PHP_LANGUAGE_PACK_ID)
+        .expect("resolve php built-in language adapter pack");
+    let php_content = r#"<?php
+namespace App\Services;
+use App\Core\Helper;
+
+class UserService {
+    public function run() {
+        return helper();
+    }
+}
+
+function helper() {
+    return 1;
+}
+"#;
+    let php_artefacts = php_pack
+        .extract_artefacts(php_content, "src/UserService.php")
+        .expect("extract php artefacts via language adapter registry");
+    assert!(
+        php_artefacts
+            .iter()
+            .any(|artefact| artefact.name == "UserService"),
+        "php built-in registry pack should surface type artefacts"
+    );
+    let php_edges = php_pack
+        .extract_dependency_edges(php_content, "src/UserService.php", &php_artefacts)
+        .expect("extract php dependency edges via language adapter registry");
+    assert!(php_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Imports
+            && edge.to_symbol_ref.as_deref() == Some("App\\Core\\Helper")
     }));
 }

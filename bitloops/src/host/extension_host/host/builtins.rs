@@ -139,6 +139,25 @@ pub(crate) const CSHARP_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDesc
     compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
 };
 
+pub(crate) const PHP_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
+    id: "php-language-pack",
+    version: "1.0.0",
+    api_version: 1,
+    display_name: "PHP Language Pack",
+    aliases: &["php-pack"],
+    supported_languages: &["php"],
+    language_profiles: &[LanguageProfileDescriptor {
+        id: "php-standard",
+        display_name: "PHP Standard",
+        language_id: "php",
+        dialect: Some("php"),
+        aliases: &["php-default"],
+        file_extensions: &["php", "phtml", "php5", "php7", "php8"],
+        supported_source_versions: &["^8.1", "^8.2", "^8.3", "^8.4"],
+    }],
+    compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
+};
+
 const KNOWLEDGE_CAPABILITY_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
     id: "knowledge-capability-pack",
     display_name: "Knowledge Capability Pack",

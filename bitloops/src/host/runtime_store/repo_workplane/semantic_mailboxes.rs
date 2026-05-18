@@ -25,7 +25,7 @@ impl RepoSqliteRuntimeStore {
         }
 
         let sqlite = self.connect_repo_sqlite()?;
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
                 .context("starting semantic summary mailbox enqueue transaction")?;
             let result = (|| {
@@ -129,7 +129,7 @@ impl RepoSqliteRuntimeStore {
         }
 
         let sqlite = self.connect_repo_sqlite()?;
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
                 .context("starting semantic embedding mailbox enqueue transaction")?;
             let result = (|| {

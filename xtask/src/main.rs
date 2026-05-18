@@ -122,8 +122,8 @@ fn run_dev_install() -> Result<(), String> {
 
     run_command(
         &workspace_root,
-        "cargo install --path bitloops --force",
-        &["install", "--path", "bitloops", "--force"],
+        "cargo install --path bitloops --force --locked",
+        &["install", "--path", "bitloops", "--force", "--locked"],
     )?;
 
     let binary_path = installed_binary_path("bitloops")?;
@@ -795,10 +795,12 @@ fn resolve_workspace_path(workspace_root: &Path, raw_path: &str) -> PathBuf {
     }
 }
 
-/// Cargo argv fragment for `llvm-cov` LCOV export (after `cargo`). Used for tests and `run_coverage_lcov`.
-fn llvm_cov_lcov_cargo_args(output_path: &str) -> Vec<String> {
+/// Cargo argv fragment for `llvm-cov nextest` LCOV export (after `cargo`).
+/// Used for tests and `run_coverage_lcov`.
+fn llvm_cov_nextest_lcov_cargo_args(output_path: &str) -> Vec<String> {
     vec![
         "llvm-cov".to_string(),
+        "nextest".to_string(),
         "--manifest-path".to_string(),
         BITLOOPS_MANIFEST.to_string(),
         "--workspace".to_string(),
@@ -812,9 +814,9 @@ fn llvm_cov_lcov_cargo_args(output_path: &str) -> Vec<String> {
     ]
 }
 
-fn llvm_cov_lcov_display_command(output_path: &str) -> String {
+fn llvm_cov_nextest_lcov_display_command(output_path: &str) -> String {
     format!(
-        "cargo llvm-cov --manifest-path {} --workspace --all-targets --features slow-tests --no-default-features --lcov --output-path {output_path}",
+        "cargo llvm-cov nextest --manifest-path {} --workspace --all-targets --features slow-tests --no-default-features --lcov --output-path {output_path}",
         BITLOOPS_MANIFEST
     )
 }
@@ -896,6 +898,7 @@ fn unknown_coverage_subcommand_error(subcommand: &str) -> String {
 }
 
 fn run_coverage_lcov(lcov_path: &str) -> Result<(), String> {
+    ensure_cargo_subcommand_available("nextest", nextest_install_hint())?;
     let workspace_root = workspace_root()?;
     let resolved_lcov_path = resolve_workspace_path(&workspace_root, lcov_path);
     if let Some(parent) = resolved_lcov_path.parent() {
@@ -904,8 +907,8 @@ fn run_coverage_lcov(lcov_path: &str) -> Result<(), String> {
     }
     let resolved_lcov_path = resolved_lcov_path.to_string_lossy().to_string();
 
-    let display = llvm_cov_lcov_display_command(&resolved_lcov_path);
-    let args = llvm_cov_lcov_cargo_args(&resolved_lcov_path);
+    let display = llvm_cov_nextest_lcov_display_command(&resolved_lcov_path);
+    let args = llvm_cov_nextest_lcov_cargo_args(&resolved_lcov_path);
     run_command_owned(&workspace_root, &display, &prepend_cargo(&args))
 }
 
@@ -1426,15 +1429,25 @@ fn binary_has_rpath(binary_path: &Path, rpath: &str) -> Result<bool, String> {
 }
 
 fn resolve_workspace_duckdb_dylib(workspace_root: &Path) -> Result<PathBuf, String> {
-    let mut candidates = vec![
-        workspace_root.join("target/release/deps/libduckdb.dylib"),
-        workspace_root.join("target/debug/deps/libduckdb.dylib"),
-    ];
-    if let Ok(entries) = fs::read_dir(workspace_root.join("target/duckdb-download")) {
-        for arch_entry in entries.flatten() {
-            if let Ok(versions) = fs::read_dir(arch_entry.path()) {
-                for version_entry in versions.flatten() {
-                    candidates.push(version_entry.path().join("libduckdb.dylib"));
+    let mut target_roots = Vec::new();
+    if let Some(target_dir) = cargo_metadata_target_dir(workspace_root) {
+        push_unique_path(&mut target_roots, target_dir);
+    }
+    if let Ok(target_dir) = env::var("CARGO_TARGET_DIR") {
+        push_unique_path(&mut target_roots, PathBuf::from(target_dir));
+    }
+    push_unique_path(&mut target_roots, workspace_root.join("target"));
+
+    let mut candidates = Vec::new();
+    for target_root in target_roots {
+        candidates.push(target_root.join("release/deps/libduckdb.dylib"));
+        candidates.push(target_root.join("debug/deps/libduckdb.dylib"));
+        if let Ok(entries) = fs::read_dir(target_root.join("duckdb-download")) {
+            for arch_entry in entries.flatten() {
+                if let Ok(versions) = fs::read_dir(arch_entry.path()) {
+                    for version_entry in versions.flatten() {
+                        candidates.push(version_entry.path().join("libduckdb.dylib"));
+                    }
                 }
             }
         }
@@ -1446,6 +1459,28 @@ fn resolve_workspace_duckdb_dylib(workspace_root: &Path) -> Result<PathBuf, Stri
         .ok_or_else(|| {
             "could not locate libduckdb.dylib under workspace target directories".to_string()
         })
+}
+
+fn cargo_metadata_target_dir(workspace_root: &Path) -> Option<PathBuf> {
+    let output = Command::new("cargo")
+        .current_dir(workspace_root)
+        .args(["metadata", "--format-version", "1", "--no-deps", "--locked"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let metadata: Value = serde_json::from_slice(&output.stdout).ok()?;
+    metadata
+        .get("target_directory")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
 }
 
 fn workspace_root() -> Result<PathBuf, String> {
@@ -1650,7 +1685,7 @@ mod tests {
     use super::{
         BITLOOPS_MANIFEST, DEFAULT_LCOV_PATH, MERGE_SMOKE_TARGETS, SLOW_TEST_TARGETS,
         collect_nextest_binary_paths, collect_rs_files, count_lines, env_u64, is_regression,
-        is_test_file, llvm_cov_lcov_cargo_args, llvm_cov_lcov_display_command,
+        is_test_file, llvm_cov_nextest_lcov_cargo_args, llvm_cov_nextest_lcov_display_command,
         llvm_cov_report_html_cargo_args, llvm_cov_report_html_display_command,
         otool_list_output_links_libduckdb, otool_load_output_contains_rpath, parse_compare_options,
         parse_coverage_all_paths, parse_f64_flag, parse_lcov_metrics, parse_lcov_path,
@@ -2755,13 +2790,14 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; fini
     }
 
     #[test]
-    fn llvm_cov_lcov_args_and_display_match() {
-        let args = llvm_cov_lcov_cargo_args("/tmp/out.info");
+    fn llvm_cov_nextest_lcov_args_and_display_match() {
+        let args = llvm_cov_nextest_lcov_cargo_args("/tmp/out.info");
         assert_eq!(args.last().map(String::as_str), Some("/tmp/out.info"));
+        assert_eq!(args.get(1).map(String::as_str), Some("nextest"));
         let full = prepend_cargo(&args);
         assert_eq!(full[0], "cargo");
-        let display = llvm_cov_lcov_display_command("/tmp/out.info");
-        assert!(display.contains("llvm-cov"));
+        let display = llvm_cov_nextest_lcov_display_command("/tmp/out.info");
+        assert!(display.contains("llvm-cov nextest"));
         assert!(display.contains("/tmp/out.info"));
     }
 

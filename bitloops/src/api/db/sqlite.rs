@@ -57,10 +57,13 @@ impl SqlitePool {
 
     pub(super) async fn execute_batch(&self, sql: &str) -> Result<()> {
         let sql = sql.to_string();
+        let db_path = self.db_path.clone();
         self.with_connection(move |conn| {
-            conn.execute_batch(&sql)
-                .context("executing SQLite statements")?;
-            Ok(())
+            crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+                conn.execute_batch(&sql)
+                    .context("executing SQLite statements")?;
+                Ok(())
+            })
         })
         .await
     }
@@ -110,10 +113,12 @@ pub(super) async fn sqlite_exec_path(path: &Path, sql: &str) -> Result<()> {
     let db_path = path.to_path_buf();
     let statement = sql.to_string();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let conn = open_sqlite_connection(&db_path)?;
-        conn.execute_batch(&statement)
-            .context("executing SQLite statements")?;
-        Ok(())
+        crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+            let conn = open_sqlite_connection(&db_path)?;
+            conn.execute_batch(&statement)
+                .context("executing SQLite statements")?;
+            Ok(())
+        })
     })
     .await
     .context("joining SQLite execute task")?

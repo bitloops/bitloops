@@ -60,7 +60,7 @@ impl CapabilityEventCoordinator {
     }
 
     pub(crate) fn recover_running_runs(&self) -> Result<()> {
-        self.runtime_store.with_connection(|conn| {
+        self.runtime_store.with_write_connection(|conn| {
             conn.execute(
                 "UPDATE capability_workplane_cursor_runs SET status = ?1, started_at_unix = NULL, updated_at_unix = ?2 WHERE status = ?3",
                 params![

@@ -39,6 +39,7 @@ pub(super) fn detect_file_changes_for_turn_end(
         if path.is_empty()
             || path.ends_with('/')
             || crate::utils::paths::is_infrastructure_path(&path)
+            || crate::utils::paths::is_protected_path(&path)
         {
             continue;
         }
@@ -83,7 +84,10 @@ pub(super) fn filter_and_normalize_paths_for_turn_end(
         .iter()
         .map(|p| crate::utils::paths::to_relative_path(p, &base))
         .filter(|p| {
-            !p.is_empty() && !p.starts_with("..") && !crate::utils::paths::is_infrastructure_path(p)
+            !p.is_empty()
+                && !p.starts_with("..")
+                && !crate::utils::paths::is_infrastructure_path(p)
+                && !crate::utils::paths::is_protected_path(p)
         })
         .collect()
 }

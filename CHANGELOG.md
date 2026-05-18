@@ -6,9 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.27] - 2026-05-15
+
+### Fixed
+
+- **Architecture-graph current-table replacement now uses true multi-row SQLite inserts**: architecture-graph replacement still runs atomically inside one serialized SQLite transaction, but node and edge writes are now grouped into multi-row `INSERT` statements sized against SQLite's variable placeholder limit instead of executing one statement per row. This reduces SQLite call overhead during heavy reconciliations without changing current-table semantics or general DevQL sync worker fan-out.
+
+### Changed
+
+- **Agent turn data now flows through a single canonical transcript model**: replaced per-agent JSONL parsing in the dashboard with a backend-derived `TranscriptEntry` stream that carries explicit actor (User/Assistant/System), variant (Chat/Thinking/ToolUse/ToolResult), source (Transcript/PromptFallback), and turn scope for every supported agent (Claude Code, Codex, Copilot, Gemini, Cursor, OpenCode). Per-turn rendering uses each turn's recorded transcript offsets with content-based partitioning as a fallback when offsets are missing, cumulative, or stale, so the turns tab now shows the same shape of user prompt, assistant response, and tool steps regardless of which agent produced the session.
+
+## [0.0.26] - 2026-05-14
+
+### Added
+
+- **PHP language support in the host-managed language adapter runtime**: added a built-in `php-language-pack` with extension-host profile resolution (`.php`, `.phtml`, `.php5`, `.php7`, `.php8`), typed `PhpKind` language kinds, canonical mappings, PHP artefact extraction, baseline dependency-edge extraction, and source-level PHP `LanguageTestSupport` discovery. PHP now participates in built-in language adapter registration, readiness/registry reporting, DevQL language detection, and current-state materialization cached-kind parsing alongside existing Rust/TS-JS/Python/Go/Java/C# support.
+
 ### Fixed
 
 - **Architecture-graph current-state reconcile now uses substantially less memory on large repositories**: `architecture_graph` now streams current canonical artefacts and dependency edges from the relational gateway instead of loading both tables into full in-memory vectors, `CHANGE_UNIT -> IMPACTS` edges now keep only the matched target paths instead of duplicating the entire affected-path set on every edge, and graph replacement now writes nodes, edges, and run metadata through prepared SQLite statements inside one atomic serialized transaction instead of materializing one giant SQL-string batch. This reduces init-time memory spikes while preserving graph topology, current-table atomicity, and reconcile metrics.
+- **PHP test discovery no longer emits duplicate scenario artefact identities for whitespace-variant method signatures**: PHP source discovery now deduplicates scenario candidates using whitespace-insensitive identity normalization before materialization, preventing `duplicate test artefact ids detected before persistence` failures in current-state consumer runs for PHPUnit-style fixtures with equivalent signature variants such as `test_my_app()` vs `test_my_app ()`.
 - **DevQL producer spool no longer blocks unrelated same-repo sync and ingest work**: producer-spool admission now distinguishes promotion-only sync and ingest tasks from expansion-only and inline repo-exclusive producer actions, so watcher sync can be promoted while an unrelated ingest task is already running. Post-merge hook follow-up is now split into sync and ingest producer payloads, with ingest anchored to the merge HEAD captured by the hook. Same-kind work, repo policy changes, and inline producer actions still keep the previous conservative guard.
 
 ## [0.0.25] - 2026-05-12

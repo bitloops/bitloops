@@ -24,7 +24,7 @@ impl SqliteKnowledgeRelationalRepository {
     }
 
     fn ensure_relation_target_version_column(&self) -> Result<()> {
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             let mut stmt = conn
                 .prepare("PRAGMA table_info(knowledge_relation_assertions)")
                 .context("reading relation assertion table metadata")?;
@@ -61,7 +61,7 @@ impl SqliteKnowledgeRelationalRepository {
         source: &KnowledgeSourceRow,
         item: &KnowledgeItemRow,
     ) -> Result<()> {
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")
                 .context("starting SQLite knowledge transaction")?;
 
@@ -90,7 +90,7 @@ impl SqliteKnowledgeRelationalRepository {
         relation: &KnowledgeRelationAssertionRow,
     ) -> Result<()> {
         self.sqlite
-            .with_connection(|conn| insert_relation_assertion_with_conn(conn, relation))
+            .with_write_connection(|conn| insert_relation_assertion_with_conn(conn, relation))
     }
 
     pub fn list_relation_assertions_for_knowledge_version(

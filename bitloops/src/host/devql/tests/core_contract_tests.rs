@@ -25,6 +25,10 @@ fn canonical_projection_maps_to_core_contract_kinds() {
         artefact_core_kind(Some("interface")),
         Some(CoreCanonicalArtefactKind::Type)
     );
+    assert_eq!(
+        artefact_core_kind(Some("namespace")),
+        Some(CoreCanonicalArtefactKind::Namespace)
+    );
     assert!(artefact_has_core_kind(
         Some("method"),
         CoreCanonicalArtefactKind::Callable

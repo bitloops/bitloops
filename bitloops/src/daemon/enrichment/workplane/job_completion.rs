@@ -42,7 +42,7 @@ pub(crate) fn persist_workplane_job_completion(
 ) -> Result<WorkplaneJobCompletionDisposition> {
     let now = unix_timestamp_now();
     let disposition = classify_workplane_job_completion(job, outcome, now);
-    workplane_store.with_connection(|conn| {
+    workplane_store.with_write_connection(|conn| {
         match disposition {
             WorkplaneJobCompletionDisposition::Completed
             | WorkplaneJobCompletionDisposition::Failed => {

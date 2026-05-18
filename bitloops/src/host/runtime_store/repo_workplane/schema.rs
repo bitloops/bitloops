@@ -188,7 +188,7 @@ ON semantic_embedding_mailbox_items (repo_id, representation_kind, dedupe_key);
 "#;
 
 pub(crate) fn ensure_repo_workplane_schema_upgrades(sqlite: &SqliteConnectionPool) -> Result<()> {
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         ensure_table_has_column(
             conn,
             "capability_workplane_cursor_runs",

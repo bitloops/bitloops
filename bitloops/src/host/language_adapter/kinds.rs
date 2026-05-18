@@ -3,6 +3,7 @@ pub(crate) enum LanguageKind {
     CSharp(CSharpKind),
     Go(GoKind),
     Java(JavaKind),
+    Php(PhpKind),
     Python(PythonKind),
     Rust(RustKind),
     TsJs(TsJsKind),
@@ -19,6 +20,10 @@ impl LanguageKind {
 
     pub(crate) const fn python(kind: PythonKind) -> Self {
         Self::Python(kind)
+    }
+
+    pub(crate) const fn php(kind: PhpKind) -> Self {
+        Self::Php(kind)
     }
 
     pub(crate) const fn java(kind: JavaKind) -> Self {
@@ -38,9 +43,57 @@ impl LanguageKind {
             Self::CSharp(kind) => kind.as_str(),
             Self::Go(kind) => kind.as_str(),
             Self::Java(kind) => kind.as_str(),
+            Self::Php(kind) => kind.as_str(),
             Self::Python(kind) => kind.as_str(),
             Self::Rust(kind) => kind.as_str(),
             Self::TsJs(kind) => kind.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum PhpKind {
+    NamespaceDefinition,
+    NamespaceUseDeclaration,
+    ClassDeclaration,
+    InterfaceDeclaration,
+    TraitDeclaration,
+    EnumDeclaration,
+    FunctionDefinition,
+    MethodDeclaration,
+    PropertyDeclaration,
+    ConstDeclaration,
+}
+
+impl PhpKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::NamespaceDefinition => "namespace_definition",
+            Self::NamespaceUseDeclaration => "namespace_use_declaration",
+            Self::ClassDeclaration => "class_declaration",
+            Self::InterfaceDeclaration => "interface_declaration",
+            Self::TraitDeclaration => "trait_declaration",
+            Self::EnumDeclaration => "enum_declaration",
+            Self::FunctionDefinition => "function_definition",
+            Self::MethodDeclaration => "method_declaration",
+            Self::PropertyDeclaration => "property_declaration",
+            Self::ConstDeclaration => "const_declaration",
+        }
+    }
+
+    pub(crate) fn from_tree_sitter_kind(kind: &str) -> Option<Self> {
+        match kind {
+            "namespace_definition" => Some(Self::NamespaceDefinition),
+            "namespace_use_declaration" => Some(Self::NamespaceUseDeclaration),
+            "class_declaration" => Some(Self::ClassDeclaration),
+            "interface_declaration" => Some(Self::InterfaceDeclaration),
+            "trait_declaration" => Some(Self::TraitDeclaration),
+            "enum_declaration" => Some(Self::EnumDeclaration),
+            "function_definition" => Some(Self::FunctionDefinition),
+            "method_declaration" => Some(Self::MethodDeclaration),
+            "property_declaration" => Some(Self::PropertyDeclaration),
+            "const_declaration" => Some(Self::ConstDeclaration),
+            _ => None,
         }
     }
 }
@@ -360,6 +413,12 @@ impl From<PythonKind> for LanguageKind {
     }
 }
 
+impl From<PhpKind> for LanguageKind {
+    fn from(value: PhpKind) -> Self {
+        Self::Php(value)
+    }
+}
+
 impl From<RustKind> for LanguageKind {
     fn from(value: RustKind) -> Self {
         Self::Rust(value)
@@ -379,11 +438,12 @@ impl TryFrom<&str> for LanguageKind {
         let csharp = CSharpKind::from_tree_sitter_kind(value).map(Self::CSharp);
         let rust = RustKind::from_tree_sitter_kind(value).map(Self::Rust);
         let ts_js = TsJsKind::from_tree_sitter_kind(value).map(Self::TsJs);
+        let php = PhpKind::from_tree_sitter_kind(value).map(Self::Php);
         let python = PythonKind::from_tree_sitter_kind(value).map(Self::Python);
         let go = GoKind::from_tree_sitter_kind(value).map(Self::Go);
         let java = JavaKind::from_tree_sitter_kind(value).map(Self::Java);
 
-        match [rust, ts_js, python, go, java, csharp]
+        match [rust, ts_js, php, python, go, java, csharp]
             .into_iter()
             .flatten()
             .collect::<Vec<_>>()
@@ -397,7 +457,9 @@ impl TryFrom<&str> for LanguageKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{CSharpKind, GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind};
+    use super::{
+        CSharpKind, GoKind, JavaKind, LanguageKind, PhpKind, PythonKind, RustKind, TsJsKind,
+    };
 
     #[test]
     fn per_language_kind_parsers_round_trip() {
@@ -445,6 +507,22 @@ mod tests {
         ];
         for kind in python_cases {
             assert_eq!(PythonKind::from_tree_sitter_kind(kind.as_str()), Some(kind));
+        }
+
+        let php_cases = [
+            PhpKind::NamespaceDefinition,
+            PhpKind::NamespaceUseDeclaration,
+            PhpKind::ClassDeclaration,
+            PhpKind::InterfaceDeclaration,
+            PhpKind::TraitDeclaration,
+            PhpKind::EnumDeclaration,
+            PhpKind::FunctionDefinition,
+            PhpKind::MethodDeclaration,
+            PhpKind::PropertyDeclaration,
+            PhpKind::ConstDeclaration,
+        ];
+        for kind in php_cases {
+            assert_eq!(PhpKind::from_tree_sitter_kind(kind.as_str()), Some(kind));
         }
 
         let java_cases = [

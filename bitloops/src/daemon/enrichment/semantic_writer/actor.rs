@@ -136,7 +136,20 @@ fn writer_loop(
     while let Ok(request) = receiver.recv() {
         match (&mut connection, request) {
             (Some(connection), SemanticWriterRequest::Summary { request, response }) => {
-                let result = execute_summary_commit(connection, &request).map_err(|err| {
+                let result = with_semantic_writer_sqlite_locks_map(
+                    &runtime_db_path,
+                    &relational_db_path,
+                    |err| {
+                        SummaryCommitFailure::new(
+                            SummaryCommitPhase::TransactionStart,
+                            SummaryCommitPhaseTimings::default(),
+                            false,
+                            err.context("acquiring semantic summary SQLite write lock"),
+                        )
+                    },
+                    || execute_summary_commit(connection, &request),
+                )
+                .map_err(|err| {
                     SummaryCommitFailure::new(
                         err.phase(),
                         err.timings(),
@@ -151,7 +164,12 @@ fn writer_loop(
                 let _ = response.send(result);
             }
             (Some(connection), SemanticWriterRequest::Embedding { request, response }) => {
-                let result = execute_embedding_commit(connection, &request).map_err(|err| {
+                let result = with_semantic_writer_sqlite_locks(
+                    &runtime_db_path,
+                    &relational_db_path,
+                    || execute_embedding_commit(connection, &request),
+                )
+                .map_err(|err| {
                     format!(
                         "committing semantic embedding batch for repo `{}`: {err:#}",
                         request.repo.repo_id
@@ -172,4 +190,47 @@ fn writer_loop(
             }
         }
     }
+}
+
+pub(super) fn with_semantic_writer_sqlite_locks<T>(
+    runtime_db_path: &Path,
+    relational_db_path: &Path,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    with_semantic_writer_sqlite_locks_map(runtime_db_path, relational_db_path, |err| err, operation)
+}
+
+fn with_semantic_writer_sqlite_locks_map<T, E>(
+    runtime_db_path: &Path,
+    relational_db_path: &Path,
+    map_lock_error: impl Fn(anyhow::Error) -> E,
+    operation: impl FnOnce() -> std::result::Result<T, E>,
+) -> std::result::Result<T, E> {
+    let runtime_key = canonical_lock_order_path(runtime_db_path);
+    let relational_key = canonical_lock_order_path(relational_db_path);
+    if runtime_key <= relational_key {
+        crate::storage::sqlite::with_sqlite_write_lock_map(runtime_db_path, &map_lock_error, || {
+            crate::storage::sqlite::with_sqlite_write_lock_map(
+                relational_db_path,
+                &map_lock_error,
+                operation,
+            )
+        })
+    } else {
+        crate::storage::sqlite::with_sqlite_write_lock_map(
+            relational_db_path,
+            &map_lock_error,
+            || {
+                crate::storage::sqlite::with_sqlite_write_lock_map(
+                    runtime_db_path,
+                    &map_lock_error,
+                    operation,
+                )
+            },
+        )
+    }
+}
+
+fn canonical_lock_order_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }

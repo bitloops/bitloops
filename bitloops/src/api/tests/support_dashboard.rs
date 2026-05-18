@@ -5,6 +5,12 @@ pub(super) fn test_state(
     mode: ServeMode,
     bundle_dir: PathBuf,
 ) -> DashboardState {
+    // Pre-warm the agent registry so its `OnceLock` initialization happens on
+    // the test setup thread rather than racing on a tokio worker thread when
+    // concurrent tests call dashboard resolvers that touch the registry
+    // (interaction.rs, checkpoint.rs).
+    let _ = crate::adapters::agents::AgentRegistry::builtin();
+
     let db = crate::api::DashboardDbPools::default();
     DashboardState {
         config_path: repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
@@ -653,7 +659,7 @@ fn seed_dashboard_commit_row(repo_root: &Path, commit_sha: &str) {
         .expect("initialise devql schema for commit row");
     let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT OR REPLACE INTO commits (
                     commit_sha, repo_id, author_name, author_email, commit_message, committed_at

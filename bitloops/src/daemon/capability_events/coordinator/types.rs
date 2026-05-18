@@ -11,6 +11,7 @@ use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
 pub(crate) const WORKER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 pub(crate) const MAX_RUN_ATTEMPTS: u32 = 5;
+pub(crate) const MAX_CONCURRENT_CURRENT_STATE_RUNS: usize = 1;
 
 #[derive(Debug, Clone)]
 pub struct CapabilityEventEnqueueResult {
