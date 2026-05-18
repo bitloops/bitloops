@@ -65,7 +65,7 @@ pub use dependency_edge::{
 };
 pub use expand_hint::{ExpandHint, ExpandHintParameter};
 pub use file_context::FileContext;
-pub use health::{HealthBackendStatus, HealthStatus};
+pub use health::{HealthBackendStatus, HealthStatus, StorageAuthorityStatus};
 pub use http::{
     HttpBundle, HttpCausalChainLink, HttpConfidence, HttpContextResult, HttpEvidence,
     HttpHeaderProducer, HttpInvalidatedAssumption, HttpLossyTransformAroundInput,

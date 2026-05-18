@@ -80,22 +80,6 @@ impl DaemonEmbeddingsInstallPlan {
                     self.profile_name
                 )
             })?;
-        let desired_code_embeddings = staged_doc
-            .get("semantic_clones")
-            .and_then(Item::as_table)
-            .and_then(|table| table.get("inference"))
-            .and_then(Item::as_table)
-            .and_then(|table| table.get("code_embeddings"))
-            .cloned()
-            .context("staged code_embeddings binding missing from prepared config")?;
-        let desired_summary_embeddings = staged_doc
-            .get("semantic_clones")
-            .and_then(Item::as_table)
-            .and_then(|table| table.get("inference"))
-            .and_then(Item::as_table)
-            .and_then(|table| table.get("summary_embeddings"))
-            .cloned()
-            .context("staged summary_embeddings binding missing from prepared config")?;
 
         let current_contents = match fs::read_to_string(&self.config_path) {
             Ok(contents) => contents,
@@ -126,13 +110,6 @@ impl DaemonEmbeddingsInstallPlan {
             runtimes[&self.runtime_name] = desired_runtime;
             let profiles = ensure_child_table(inference, "profiles");
             profiles[&self.profile_name] = desired_profile;
-        }
-
-        {
-            let semantic_clones = ensure_table(&mut current_doc, "semantic_clones");
-            let inference = ensure_child_table(semantic_clones, "inference");
-            inference["code_embeddings"] = desired_code_embeddings;
-            inference["summary_embeddings"] = desired_summary_embeddings;
         }
 
         let updated_contents = current_doc.to_string();

@@ -162,6 +162,45 @@ pub(crate) fn delete_checkpoint_artefact_lineage_rows_sql(
     )
 }
 
+pub(crate) fn delete_checkpoint_file_rows_for_session_sql(
+    repo_id: &str,
+    checkpoint_id: &str,
+    session_id: &str,
+) -> String {
+    format!(
+        "DELETE FROM checkpoint_files WHERE repo_id = '{}' AND checkpoint_id = '{}' AND session_id = '{}'",
+        esc_pg(repo_id),
+        esc_pg(checkpoint_id),
+        esc_pg(session_id),
+    )
+}
+
+pub(crate) fn delete_checkpoint_artefact_rows_for_session_sql(
+    repo_id: &str,
+    checkpoint_id: &str,
+    session_id: &str,
+) -> String {
+    format!(
+        "DELETE FROM checkpoint_artefacts WHERE repo_id = '{}' AND checkpoint_id = '{}' AND session_id = '{}'",
+        esc_pg(repo_id),
+        esc_pg(checkpoint_id),
+        esc_pg(session_id),
+    )
+}
+
+pub(crate) fn delete_checkpoint_artefact_lineage_rows_for_session_sql(
+    repo_id: &str,
+    checkpoint_id: &str,
+    session_id: &str,
+) -> String {
+    format!(
+        "DELETE FROM checkpoint_artefact_lineage WHERE repo_id = '{}' AND checkpoint_id = '{}' AND session_id = '{}'",
+        esc_pg(repo_id),
+        esc_pg(checkpoint_id),
+        esc_pg(session_id),
+    )
+}
+
 fn checkpoint_event_time_sql(event_time: &str, dialect: RelationalDialect) -> String {
     let trimmed = event_time.trim();
     match dialect {

@@ -341,6 +341,31 @@ fn list_uncheckpointed_turns_excludes_assigned_turns() {
 }
 
 #[test]
+fn refresh_turn_local_only_updates_spool_rows_without_queueing_remote_work() {
+    let (_dir, spool) = test_spool();
+    let mut turn = sample_turn();
+    spool.record_turn(&turn).expect("record turn");
+    spool
+        .flush(&MockRepository::new("repo-test"))
+        .expect("flush initial turn");
+
+    turn.checkpoint_id = Some("cp-1".into());
+    turn.updated_at = "2026-04-05T10:10:00Z".into();
+    spool
+        .refresh_turn_local_only(&turn)
+        .expect("refresh local-only turn");
+
+    let refreshed = spool
+        .list_turns_for_session("session-1", 10)
+        .expect("load turns")
+        .pop()
+        .expect("one refreshed turn");
+    assert_eq!(refreshed.checkpoint_id.as_deref(), Some("cp-1"));
+    assert_eq!(refreshed.updated_at, "2026-04-05T10:10:00Z");
+    assert!(!spool.has_pending_mutations().expect("queue state"));
+}
+
+#[test]
 fn recording_tool_events_refreshes_tool_use_and_search_projections() {
     let (_dir, spool) = test_spool();
     let mut session = sample_session();

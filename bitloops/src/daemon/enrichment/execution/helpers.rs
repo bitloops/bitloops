@@ -3,8 +3,11 @@ use std::path::Path;
 
 use anyhow::Result;
 
+#[cfg(test)]
 use crate::capability_packs::semantic_clones::{
     clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
+};
+use crate::capability_packs::semantic_clones::{
     load_semantic_feature_inputs_for_current_artefacts,
     load_semantic_feature_inputs_for_current_repo,
 };
@@ -15,6 +18,7 @@ use crate::host::runtime_store::{
 
 use super::SemanticFeatureInput;
 
+#[cfg(test)]
 pub(crate) async fn clear_embedding_outputs(
     relational: &RelationalStorage,
     repo_id: &str,

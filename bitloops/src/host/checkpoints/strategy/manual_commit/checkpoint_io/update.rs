@@ -19,9 +19,11 @@ pub(crate) fn update_committed_db_and_blobs(
 ) -> Result<bool> {
     let storage = open_checkpoint_storage_context(repo_root)?;
     let target_index =
-        find_checkpoint_session_index(&storage.sqlite, &opts.checkpoint_id, &opts.session_id)?.or(
-            latest_checkpoint_session_index(&storage.sqlite, &opts.checkpoint_id)?,
-        );
+        find_checkpoint_session_index(&storage.relational, &opts.checkpoint_id, &opts.session_id)?
+            .or(latest_checkpoint_session_index(
+                &storage.relational,
+                &opts.checkpoint_id,
+            )?);
     let Some(session_index) = target_index else {
         return Ok(false);
     };
@@ -38,16 +40,14 @@ pub(crate) fn update_committed_db_and_blobs(
             crate::storage::blob::BlobType::Transcript,
             &redacted,
         )?;
-        storage.sqlite.with_write_connection(|conn| {
-            conn.execute(
-                "UPDATE checkpoint_sessions
-                 SET content_hash = ?3
-                 WHERE checkpoint_id = ?1 AND session_index = ?2",
-                rusqlite::params![opts.checkpoint_id, session_index, content_hash],
-            )
-            .context("updating checkpoint_sessions content_hash")?;
-            Ok(())
-        })?;
+        exec_checkpoint_metadata_statements(
+            &storage.relational,
+            &[build_update_checkpoint_session_content_hash_sql(
+                &opts.checkpoint_id,
+                session_index,
+                &content_hash,
+            )],
+        )?;
         updated_any = true;
     }
 
@@ -80,16 +80,15 @@ pub(crate) fn update_committed_db_and_blobs(
     }
 
     if updated_any {
-        storage.sqlite.with_write_connection(|conn| {
-            conn.execute(
-                "UPDATE checkpoints
-                 SET updated_at = datetime('now')
-                 WHERE checkpoint_id = ?1",
-                rusqlite::params![opts.checkpoint_id],
-            )
-            .context("touching checkpoint updated_at after update_committed")?;
-            Ok(())
-        })?;
+        exec_checkpoint_metadata_statements(
+            &storage.relational,
+            &[build_touch_checkpoint_updated_at_sql(
+                &opts.checkpoint_id,
+                storage
+                    .relational
+                    .dialect_for_role(crate::host::devql::RelationalStorageRole::SharedRelational),
+            )],
+        )?;
     }
     Ok(true)
 }

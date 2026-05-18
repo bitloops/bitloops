@@ -164,6 +164,71 @@ local_path = "stores/blob"
 }
 
 #[test]
+fn persist_daemon_store_backend_selection_copies_remote_store_selection_without_clobbering_local_paths()
+ {
+    let source = NamedTempFile::new().expect("create source config");
+    fs::write(
+        source.path(),
+        r#"
+[runtime]
+local_dev = false
+
+[stores.relational]
+postgres_dsn = "postgres://user:pass@localhost:5432/bitloops"
+
+[stores.events]
+clickhouse_url = "http://localhost:8123"
+clickhouse_user = "bitloops"
+clickhouse_password = "secret"
+clickhouse_database = "bitloops"
+
+[stores.blob]
+s3_bucket = "bitloops-bucket"
+s3_region = "eu-central-1"
+s3_access_key_id = "AKIA..."
+s3_secret_access_key = "secret-key"
+"#,
+    )
+    .expect("write source config");
+
+    let target = NamedTempFile::new().expect("create target config");
+    fs::write(
+        target.path(),
+        r#"
+[runtime]
+local_dev = false
+
+[stores.relational]
+sqlite_path = "stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "stores/event/events.duckdb"
+
+[stores.blob]
+local_path = "stores/blob"
+"#,
+    )
+    .expect("write target config");
+
+    persist_daemon_store_backend_selection(source.path(), target.path())
+        .expect("persist remote store selection");
+
+    let rendered = fs::read_to_string(target.path()).expect("read updated target config");
+    assert!(rendered.contains("sqlite_path = \"stores/relational/relational.db\""));
+    assert!(rendered.contains("duckdb_path = \"stores/event/events.duckdb\""));
+    assert!(rendered.contains("local_path = \"stores/blob\""));
+    assert!(rendered.contains("postgres_dsn = \"postgres://user:pass@localhost:5432/bitloops\""));
+    assert!(rendered.contains("clickhouse_url = \"http://localhost:8123\""));
+    assert!(rendered.contains("clickhouse_user = \"bitloops\""));
+    assert!(rendered.contains("clickhouse_password = \"secret\""));
+    assert!(rendered.contains("clickhouse_database = \"bitloops\""));
+    assert!(rendered.contains("s3_bucket = \"bitloops-bucket\""));
+    assert!(rendered.contains("s3_region = \"eu-central-1\""));
+    assert!(rendered.contains("s3_access_key_id = \"AKIA...\""));
+    assert!(rendered.contains("s3_secret_access_key = \"secret-key\""));
+}
+
+#[test]
 fn prepare_daemon_embeddings_install_applies_staged_runtime_args_cleanup() {
     let config = NamedTempFile::new().expect("create temp config");
     fs::write(
@@ -194,6 +259,26 @@ request_timeout_secs = 300
     assert!(
         !rendered.contains("\"-B\""),
         "expected stale python-style args removed:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("[inference.profiles.local_code]"),
+        "expected local embeddings profile table:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("task = \"embeddings\"")
+            && rendered.contains("driver = \"bitloops_embeddings_ipc\"")
+            && rendered.contains("runtime = \"bitloops_local_embeddings\"")
+            && rendered.contains("model = \"bge-m3\""),
+        "expected local embeddings profile fields:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("[semantic_clones.inference]"),
+        "expected local embeddings install not to write daemon semantic bindings:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("code_embeddings = \"local_code\"")
+            && !rendered.contains("summary_embeddings = \"local_code\""),
+        "expected local embeddings install not to bind semantic profiles:\n{rendered}"
     );
 }
 
@@ -262,6 +347,11 @@ max_output_tokens = 200
         rendered.contains("command = \"/tmp/bitloops-local-embeddings\""),
         "expected embeddings runtime command to be rewritten:\n{rendered}"
     );
+    assert!(
+        !rendered.contains("code_embeddings = \"local_code\"")
+            && !rendered.contains("summary_embeddings = \"local_code\""),
+        "expected managed embeddings apply not to add semantic bindings:\n{rendered}"
+    );
 }
 
 #[test]
@@ -306,9 +396,23 @@ local_dev = false
         "expected platform profile runtime binding:\n{rendered}"
     );
     assert!(
-        rendered.contains("code_embeddings = \"platform_code\"")
-            && rendered.contains("summary_embeddings = \"platform_code\""),
-        "expected semantic clone bindings:\n{rendered}"
+        rendered.contains("[inference.profiles.platform_code]"),
+        "expected platform embeddings profile table:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("task = \"embeddings\"")
+            && rendered.contains("driver = \"bitloops_embeddings_ipc\"")
+            && rendered.contains("model = \"bge-m3\""),
+        "expected platform embeddings profile fields:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("[semantic_clones.inference]"),
+        "expected platform embeddings install not to write daemon semantic bindings:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("code_embeddings = \"platform_code\"")
+            && !rendered.contains("summary_embeddings = \"platform_code\""),
+        "expected platform embeddings install not to bind semantic profiles:\n{rendered}"
     );
 }
 
@@ -345,6 +449,42 @@ model = "bge-m3"
 
     assert_eq!(plan.profile_name, "platform_code");
     assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::SkipHosted);
+    assert!(!plan.config_modified);
+}
+
+#[test]
+fn prepare_daemon_embeddings_install_warms_legacy_daemon_bound_profile() {
+    let config = NamedTempFile::new().expect("create temp config");
+    fs::write(
+        config.path(),
+        r#"
+[runtime]
+local_dev = false
+
+[semantic_clones.inference]
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
+
+[inference.runtimes.bitloops_local_embeddings]
+command = "bitloops-local-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "bge-m3"
+"#,
+    )
+    .expect("write temp config");
+
+    let plan =
+        prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
+
+    assert_eq!(plan.profile_name, "local_code");
+    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::WarmExisting);
     assert!(!plan.config_modified);
 }
 

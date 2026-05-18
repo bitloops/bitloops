@@ -27,7 +27,9 @@ pub(super) async fn upsert_file_state_row(
 ) -> Result<()> {
     let sql = build_upsert_file_state_sql(repo_id, commit_sha, path, blob_sha);
 
-    relational.exec(&sql).await
+    relational
+        .exec_for_role(RelationalStorageRole::SharedRelational, &sql)
+        .await
 }
 
 #[cfg(test)]
@@ -68,43 +70,40 @@ pub(super) async fn upsert_file_artefact_row(
     let artefact_id = revision_artefact_id(repo_id, blob_sha, &symbol_id);
     let line_count = blob_content.line_count().max(1);
     let byte_count = blob_content.byte_count().max(0);
-    let modifiers_sql = sql_json_text_array(relational, &[]);
     let file_docstring = blob_content
         .text
         .as_deref()
         .and_then(|content| extract_file_docstring_for_language_pack(path, language, content));
-    let docstring_sql = sql_nullable_text(file_docstring.as_deref());
-
-    let sql = format!(
-        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, language, extraction_fingerprint, canonical_kind, language_kind, symbol_fqn, signature, modifiers, docstring, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', '{}', 'file', 'file', '{}', NULL, {}, {}, '{}') \
-ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, language = EXCLUDED.language, extraction_fingerprint = EXCLUDED.extraction_fingerprint, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
-        esc_pg(&artefact_id),
-        esc_pg(&symbol_id),
-        esc_pg(repo_id),
-        esc_pg(language),
-        esc_pg(extraction_fingerprint),
-        esc_pg(path),
-        modifiers_sql,
-        docstring_sql,
-        esc_pg(blob_sha),
+    let sql = build_upsert_historical_file_artefact_sql(
+        repo_id,
+        relational,
+        path,
+        blob_sha,
+        language,
+        extraction_fingerprint,
+        file_docstring.as_deref(),
     );
 
-    relational.exec(&sql).await?;
     relational
-        .exec(&build_upsert_historical_artefact_snapshot_sql(
-            repo_id,
-            blob_sha,
-            &HistoricalArtefactSnapshotRecord {
-                artefact_id: artefact_id.clone(),
-                path: path.to_string(),
-                parent_artefact_id: None,
-                start_line: 1,
-                end_line: line_count,
-                start_byte: 0,
-                end_byte: byte_count,
-            },
-        ))
+        .exec_for_role(RelationalStorageRole::SharedRelational, &sql)
+        .await?;
+    relational
+        .exec_for_role(
+            RelationalStorageRole::SharedRelational,
+            &build_upsert_historical_artefact_snapshot_sql(
+                repo_id,
+                blob_sha,
+                &HistoricalArtefactSnapshotRecord {
+                    artefact_id: artefact_id.clone(),
+                    path: path.to_string(),
+                    parent_artefact_id: None,
+                    start_line: 1,
+                    end_line: line_count,
+                    start_byte: 0,
+                    end_byte: byte_count,
+                },
+            ),
+        )
         .await?;
     Ok(FileArtefactRow {
         artefact_id,
@@ -141,6 +140,37 @@ pub(super) fn build_file_current_record(
     }
 }
 
+pub(super) fn build_upsert_historical_file_artefact_sql(
+    repo_id: &str,
+    relational: &RelationalStorage,
+    path: &str,
+    blob_sha: &str,
+    language: &str,
+    extraction_fingerprint: &str,
+    file_docstring: Option<&str>,
+) -> String {
+    let symbol_id = file_symbol_id(path);
+    let artefact_id = revision_artefact_id(repo_id, blob_sha, &symbol_id);
+    let shared_dialect = relational.dialect_for_role(RelationalStorageRole::SharedRelational);
+    let modifiers_sql = sql_json_text_array_for_dialect(shared_dialect, &[]);
+    let docstring_sql = sql_nullable_text(file_docstring);
+
+    format!(
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, language, extraction_fingerprint, canonical_kind, language_kind, symbol_fqn, signature, modifiers, docstring, content_hash) \
+VALUES ('{}', '{}', '{}', '{}', '{}', 'file', 'file', '{}', NULL, {}, {}, '{}') \
+ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, language = EXCLUDED.language, extraction_fingerprint = EXCLUDED.extraction_fingerprint, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
+        esc_pg(&artefact_id),
+        esc_pg(&symbol_id),
+        esc_pg(repo_id),
+        esc_pg(language),
+        esc_pg(extraction_fingerprint),
+        esc_pg(path),
+        modifiers_sql,
+        docstring_sql,
+        esc_pg(blob_sha),
+    )
+}
+
 pub(super) fn build_upsert_historical_artefact_snapshot_sql(
     repo_id: &str,
     blob_sha: &str,
@@ -175,6 +205,7 @@ pub(super) fn build_upsert_historical_artefact_snapshot_sql(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::devql::RelationalPrimaryBackend;
 
     #[test]
     fn build_upsert_file_state_sql_escapes_and_targets_expected_table() {
@@ -190,6 +221,31 @@ mod tests {
         assert!(
             sql.contains("ON CONFLICT (repo_id, commit_sha, path)"),
             "builder should preserve conflict target"
+        );
+    }
+
+    #[test]
+    fn build_upsert_historical_file_artefact_sql_uses_shared_relational_dialect() {
+        let relational = RelationalStorage::primary_backend_for_tests(
+            PathBuf::from("devql.sqlite"),
+            RelationalPrimaryBackend::Postgres,
+        );
+        let sql = build_upsert_historical_file_artefact_sql(
+            "repo-id",
+            &relational,
+            "src/path.rs",
+            "blob-sha",
+            "rust",
+            "fingerprint",
+            Some("docs"),
+        );
+        assert!(
+            sql.contains("'[]'::jsonb"),
+            "historical file artefact SQL should use shared Postgres jsonb when remote shared authority is active"
+        );
+        assert!(
+            sql.contains("src/path.rs"),
+            "historical file artefact SQL should still target the provided file path"
         );
     }
 }
