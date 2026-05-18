@@ -516,8 +516,7 @@ fn build_schema_subset_sql(full_sql: &str, included_objects: &[&str]) -> String 
             }
             let object_name = schema_statement_object_name(statement)?;
             included_objects
-                .iter()
-                .any(|candidate| *candidate == object_name)
+                .contains(&object_name)
                 .then(|| format!("{statement};\n"))
         })
         .collect::<Vec<_>>()

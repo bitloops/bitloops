@@ -511,23 +511,6 @@ ALTER TABLE IF EXISTS test_links ADD COLUMN IF NOT EXISTS linkage_status TEXT NO
 "#
 }
 
-pub(crate) fn workspace_revisions_sql() -> &'static str {
-    r#"
-CREATE TABLE IF NOT EXISTS workspace_revisions (
-    id         BIGSERIAL PRIMARY KEY,
-    repo_id    TEXT      NOT NULL,
-    tree_hash  TEXT      NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS workspace_revisions_repo_idx
-ON workspace_revisions (repo_id);
-
-CREATE UNIQUE INDEX IF NOT EXISTS workspace_revisions_repo_tree_unique_idx
-ON workspace_revisions (repo_id, tree_hash);
-"#
-}
-
 pub(crate) fn edge_model_cleanup_postgres_sql() -> &'static str {
     r#"
 UPDATE artefact_edges

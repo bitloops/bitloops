@@ -348,6 +348,17 @@ pub(crate) async fn run_for_project_root(
         .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
     let scope_exclude = normalize_cli_exclusions(&args.exclude);
     let scope_exclude_from = normalize_exclude_from_paths(project_root, &args.exclude_from)?;
+    if let Some(target_daemon_config_path) = daemon_config_path.as_deref() {
+        let source_daemon_config_path =
+            crate::config::resolve_preferred_daemon_config_path_for_repo(project_root)
+                .ok()
+                .filter(|path| path.is_file())
+                .unwrap_or_else(|| target_daemon_config_path.to_path_buf());
+        crate::config::persist_daemon_store_backend_selection(
+            &source_daemon_config_path,
+            target_daemon_config_path,
+        )?;
+    }
     let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
     write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance(
         &local_policy_path,

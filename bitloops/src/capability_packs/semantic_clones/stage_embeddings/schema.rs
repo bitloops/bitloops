@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 
 use crate::host::devql::{postgres_exec, sqlite_exec_path_allow_create};
 
+#[cfg(test)]
 pub(crate) fn semantic_embeddings_postgres_schema_sql() -> &'static str {
     r#"
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -175,6 +176,7 @@ CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
 "#
 }
 
+#[cfg(test)]
 pub(crate) fn semantic_embeddings_sqlite_shared_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS semantic_embedding_setups (
@@ -243,155 +245,6 @@ CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (repo_id, representation_kind)
 );
-"#
-}
-
-fn semantic_embeddings_postgres_upgrade_sql() -> &'static str {
-    r#"
-CREATE TABLE IF NOT EXISTS semantic_embedding_setups (
-    setup_fingerprint TEXT PRIMARY KEY,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    dimension INTEGER NOT NULL CHECK (dimension > 0),
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
-ALTER TABLE symbol_embeddings
-    ADD COLUMN IF NOT EXISTS representation_kind TEXT NOT NULL DEFAULT 'code';
-ALTER TABLE symbol_embeddings
-    ADD COLUMN IF NOT EXISTS setup_fingerprint TEXT;
-ALTER TABLE symbol_embeddings_current
-    ADD COLUMN IF NOT EXISTS representation_kind TEXT NOT NULL DEFAULT 'code';
-ALTER TABLE symbol_embeddings_current
-    ADD COLUMN IF NOT EXISTS setup_fingerprint TEXT;
-ALTER TABLE semantic_clone_embedding_setup_state
-    ADD COLUMN IF NOT EXISTS representation_kind TEXT NOT NULL DEFAULT 'code';
-ALTER TABLE semantic_clone_embedding_setup_state
-    ADD COLUMN IF NOT EXISTS setup_fingerprint TEXT;
-
-UPDATE symbol_embeddings
-SET setup_fingerprint = 'provider=' || provider || '|model=' || model || '|dimension=' || dimension::text
-WHERE setup_fingerprint IS NULL OR btrim(setup_fingerprint) = '';
-
-UPDATE symbol_embeddings_current
-SET setup_fingerprint = 'provider=' || provider || '|model=' || model || '|dimension=' || dimension::text
-WHERE setup_fingerprint IS NULL OR btrim(setup_fingerprint) = '';
-
-UPDATE semantic_clone_embedding_setup_state
-SET setup_fingerprint = 'provider=' || provider || '|model=' || model || '|dimension=' || dimension::text
-WHERE setup_fingerprint IS NULL OR btrim(setup_fingerprint) = '';
-
-INSERT INTO semantic_embedding_setups (setup_fingerprint, provider, model, dimension)
-SELECT DISTINCT setup_fingerprint, provider, model, dimension
-FROM symbol_embeddings
-WHERE setup_fingerprint IS NOT NULL AND btrim(setup_fingerprint) <> ''
-ON CONFLICT (setup_fingerprint) DO UPDATE
-SET provider = EXCLUDED.provider, model = EXCLUDED.model, dimension = EXCLUDED.dimension;
-
-INSERT INTO semantic_embedding_setups (setup_fingerprint, provider, model, dimension)
-SELECT DISTINCT setup_fingerprint, provider, model, dimension
-FROM symbol_embeddings_current
-WHERE setup_fingerprint IS NOT NULL AND btrim(setup_fingerprint) <> ''
-ON CONFLICT (setup_fingerprint) DO UPDATE
-SET provider = EXCLUDED.provider, model = EXCLUDED.model, dimension = EXCLUDED.dimension;
-
-INSERT INTO semantic_embedding_setups (setup_fingerprint, provider, model, dimension)
-SELECT DISTINCT setup_fingerprint, provider, model, dimension
-FROM semantic_clone_embedding_setup_state
-WHERE setup_fingerprint IS NOT NULL AND btrim(setup_fingerprint) <> ''
-ON CONFLICT (setup_fingerprint) DO UPDATE
-SET provider = EXCLUDED.provider, model = EXCLUDED.model, dimension = EXCLUDED.dimension;
-
-ALTER TABLE symbol_embeddings
-    ALTER COLUMN setup_fingerprint SET NOT NULL;
-ALTER TABLE symbol_embeddings_current
-    ALTER COLUMN setup_fingerprint SET NOT NULL;
-ALTER TABLE semantic_clone_embedding_setup_state
-    ALTER COLUMN setup_fingerprint SET NOT NULL;
-
-DROP INDEX IF EXISTS symbol_embeddings_repo_artefact_idx;
-CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_artefact_idx
-ON symbol_embeddings (repo_id, artefact_id, representation_kind, setup_fingerprint);
-
-DROP INDEX IF EXISTS symbol_embeddings_repo_model_idx;
-CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_model_idx
-ON symbol_embeddings (repo_id, representation_kind, setup_fingerprint, blob_sha);
-
-DROP INDEX IF EXISTS symbol_embeddings_current_repo_artefact_idx;
-CREATE UNIQUE INDEX IF NOT EXISTS symbol_embeddings_current_repo_artefact_idx
-ON symbol_embeddings_current (repo_id, artefact_id, representation_kind, setup_fingerprint);
-
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conrelid = 'symbol_embeddings'::regclass
-          AND conname = 'symbol_embeddings_pkey'
-    ) THEN
-        ALTER TABLE symbol_embeddings DROP CONSTRAINT symbol_embeddings_pkey;
-    END IF;
-EXCEPTION WHEN undefined_table THEN
-    NULL;
-END $$;
-
-DO $$
-BEGIN
-    ALTER TABLE symbol_embeddings
-        ADD CONSTRAINT symbol_embeddings_pkey PRIMARY KEY (artefact_id, representation_kind, setup_fingerprint);
-EXCEPTION WHEN duplicate_table THEN
-    NULL;
-WHEN duplicate_object THEN
-    NULL;
-END $$;
-
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conrelid = 'symbol_embeddings_current'::regclass
-          AND conname = 'symbol_embeddings_current_pkey'
-    ) THEN
-        ALTER TABLE symbol_embeddings_current DROP CONSTRAINT symbol_embeddings_current_pkey;
-    END IF;
-EXCEPTION WHEN undefined_table THEN
-    NULL;
-END $$;
-
-DO $$
-BEGIN
-    ALTER TABLE symbol_embeddings_current
-        ADD CONSTRAINT symbol_embeddings_current_pkey PRIMARY KEY (artefact_id, representation_kind, setup_fingerprint);
-EXCEPTION WHEN duplicate_table THEN
-    NULL;
-WHEN duplicate_object THEN
-    NULL;
-END $$;
-
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conrelid = 'semantic_clone_embedding_setup_state'::regclass
-          AND conname = 'semantic_clone_embedding_setup_state_pkey'
-    ) THEN
-        ALTER TABLE semantic_clone_embedding_setup_state DROP CONSTRAINT semantic_clone_embedding_setup_state_pkey;
-    END IF;
-EXCEPTION WHEN undefined_table THEN
-    NULL;
-END $$;
-
-DO $$
-BEGIN
-    ALTER TABLE semantic_clone_embedding_setup_state
-        ADD CONSTRAINT semantic_clone_embedding_setup_state_pkey PRIMARY KEY (repo_id, representation_kind);
-EXCEPTION WHEN duplicate_table THEN
-    NULL;
-WHEN duplicate_object THEN
-    NULL;
-END $$;
 "#
 }
 

@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use super::persistence_sql::build_repair_all_current_semantic_projection_from_historical_sql;
 use crate::host::devql::RelationalDialect;
 
+#[cfg(test)]
 pub(crate) fn semantic_features_postgres_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS symbol_semantics (
@@ -89,6 +90,7 @@ ON symbol_features_current (repo_id, artefact_id);
 "#
 }
 
+#[cfg(test)]
 pub(crate) fn semantic_features_postgres_shared_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS symbol_semantics (
@@ -212,6 +214,7 @@ ON symbol_features_current (repo_id, artefact_id);
 "#
 }
 
+#[cfg(test)]
 pub(crate) fn semantic_features_sqlite_shared_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS symbol_semantics (
@@ -251,6 +254,7 @@ ON symbol_features (repo_id, blob_sha);
 "#
 }
 
+#[cfg(test)]
 pub(crate) fn semantic_features_sqlite_current_projection_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS symbol_semantics_current (

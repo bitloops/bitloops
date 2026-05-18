@@ -11,6 +11,7 @@ mod toml;
 #[path = "daemon_config/tests.rs"]
 mod tests;
 
+pub(crate) use file::persist_daemon_store_backend_selection;
 pub(crate) use file::validate_daemon_config_text;
 pub use file::{
     DaemonCliSettings, DaemonTelemetryConsentState, LoadedDaemonSettings,

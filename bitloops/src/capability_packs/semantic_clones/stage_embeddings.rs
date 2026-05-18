@@ -25,11 +25,13 @@ pub(crate) use self::schema::{
     init_sqlite_current_projection_semantic_embeddings_schema,
     init_sqlite_semantic_embeddings_schema, semantic_embeddings_sqlite_schema_sql,
 };
+#[cfg(test)]
+pub(crate) use self::sql::build_postgres_current_symbol_embedding_persist_sql;
 pub(crate) use self::sql::{
     build_active_embedding_setup_persist_sql, build_current_symbol_embedding_persist_sql,
     build_delete_stale_current_symbol_embedding_rows_for_path_sql,
-    build_embedding_setup_persist_sql, build_postgres_current_symbol_embedding_persist_sql,
-    build_postgres_symbol_embedding_persist_sql, build_sqlite_symbol_embedding_persist_sql,
+    build_embedding_setup_persist_sql, build_postgres_symbol_embedding_persist_sql,
+    build_sqlite_symbol_embedding_persist_sql,
 };
 pub(crate) use self::storage::{
     determine_repo_embedding_sync_action, load_active_embedding_setup,

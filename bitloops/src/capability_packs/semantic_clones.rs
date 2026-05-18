@@ -27,13 +27,12 @@ pub(crate) use stage_embeddings::{
     RepoEmbeddingSyncAction, build_active_embedding_setup_persist_sql,
     build_current_symbol_embedding_persist_sql,
     build_delete_stale_current_symbol_embedding_rows_for_path_sql,
-    build_embedding_setup_persist_sql, build_postgres_current_symbol_embedding_persist_sql,
-    build_postgres_symbol_embedding_persist_sql, build_sqlite_symbol_embedding_persist_sql,
-    clear_current_symbol_embedding_rows_for_path, clear_current_symbol_embedding_rows_for_paths,
-    clear_repo_active_embedding_setup, clear_repo_active_embedding_setup_for_representation,
-    clear_repo_symbol_embedding_rows, clear_repo_symbol_embedding_rows_for_representation,
-    determine_repo_embedding_sync_action, ensure_semantic_embeddings_schema,
-    init_postgres_semantic_embeddings_schema,
+    build_embedding_setup_persist_sql, build_postgres_symbol_embedding_persist_sql,
+    build_sqlite_symbol_embedding_persist_sql, clear_current_symbol_embedding_rows_for_path,
+    clear_current_symbol_embedding_rows_for_paths, clear_repo_active_embedding_setup,
+    clear_repo_active_embedding_setup_for_representation, clear_repo_symbol_embedding_rows,
+    clear_repo_symbol_embedding_rows_for_representation, determine_repo_embedding_sync_action,
+    ensure_semantic_embeddings_schema, init_postgres_semantic_embeddings_schema,
     init_sqlite_current_projection_semantic_embeddings_schema,
     init_sqlite_semantic_embeddings_schema, load_active_embedding_setup,
     load_current_repo_embedding_states, load_current_semantic_summary_map,
@@ -54,7 +53,7 @@ pub(crate) use stage_search_documents::{
     ensure_search_documents_schema, init_postgres_search_documents_schema,
     init_sqlite_current_projection_search_documents_schema, init_sqlite_search_documents_schema,
     persist_current_search_document_row, persist_search_document_row,
-    search_documents_postgres_schema_sql, search_documents_sqlite_schema_sql,
+    search_documents_sqlite_schema_sql,
 };
 #[allow(unused_imports)]
 pub(crate) use stage_semantic_features::{

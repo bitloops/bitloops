@@ -360,6 +360,7 @@ pub(crate) fn build_postgres_pgvector_partial_index_sql(table: &str, dimension: 
     )
 }
 
+#[cfg(test)]
 pub(crate) fn build_postgres_nearest_current_candidates_sql(
     query: SemanticVectorQuery<'_>,
 ) -> Result<String> {
@@ -511,15 +512,6 @@ async fn load_sqlite_nearest_current_candidates(
     });
     candidates.truncate(query.limit.max(1));
     Ok(candidates)
-}
-
-async fn load_postgres_nearest_current_candidates(
-    relational: &RelationalStorage,
-    query: SemanticVectorQuery<'_>,
-) -> Result<Vec<SemanticNearestCandidate>> {
-    let sql = build_postgres_nearest_current_candidates_sql(query)?;
-    let rows = relational.query_rows_primary(&sql).await?;
-    Ok(parse_nearest_candidates(rows))
 }
 
 fn parse_nearest_candidates(rows: Vec<Value>) -> Vec<SemanticNearestCandidate> {

@@ -8,9 +8,12 @@ pub(super) fn sql_nullable_text(value: Option<&str>) -> String {
         .unwrap_or_else(|| "NULL".to_string())
 }
 
-pub(super) fn sql_json_text_array(relational: &RelationalStorage, values: &[String]) -> String {
+pub(super) fn sql_json_text_array_for_dialect(
+    dialect: RelationalDialect,
+    values: &[String],
+) -> String {
     let raw = esc_pg(&serde_json::to_string(values).unwrap_or_else(|_| "[]".to_string()));
-    match relational.dialect() {
+    match dialect {
         RelationalDialect::Postgres => format!("'{raw}'::jsonb"),
         RelationalDialect::Sqlite => format!("'{raw}'"),
     }

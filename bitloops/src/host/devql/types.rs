@@ -164,7 +164,7 @@ impl RelationalStorage {
             None
         };
 
-        Ok(Self {
+        let storage = Self {
             local: SqliteStorage { path: sqlite_path },
             remote,
             remote_dsn: remote_dsn.map(ToOwned::to_owned),
@@ -173,14 +173,12 @@ impl RelationalStorage {
             } else {
                 RelationalPrimaryBackend::Sqlite
             },
-        })
-        .map(|storage| {
-            register_shared_relational_authority(
-                &storage.local.path,
-                storage.primary_backend == RelationalPrimaryBackend::Postgres,
-            );
-            storage
-        })
+        };
+        register_shared_relational_authority(
+            &storage.local.path,
+            storage.primary_backend == RelationalPrimaryBackend::Postgres,
+        );
+        Ok(storage)
     }
 
     pub fn local_only(path: PathBuf) -> Self {

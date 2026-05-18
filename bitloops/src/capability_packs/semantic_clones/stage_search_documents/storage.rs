@@ -45,74 +45,6 @@ pub(crate) fn build_search_document_from_semantic_rows(
     }
 }
 
-pub(crate) fn search_documents_postgres_schema_sql() -> &'static str {
-    r#"
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-
-CREATE TABLE IF NOT EXISTS symbol_search_documents (
-    artefact_id TEXT PRIMARY KEY,
-    repo_id TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
-    path TEXT NOT NULL,
-    symbol_id TEXT,
-    signature_text TEXT,
-    summary_text TEXT,
-    body_text TEXT NOT NULL,
-    searchable_text TEXT NOT NULL,
-    generated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS symbol_search_documents_repo_blob_idx
-ON symbol_search_documents (repo_id, blob_sha);
-
-CREATE INDEX IF NOT EXISTS symbol_search_documents_repo_path_idx
-ON symbol_search_documents (repo_id, path);
-
-CREATE INDEX IF NOT EXISTS symbol_search_documents_tsv_idx
-ON symbol_search_documents
-USING GIN ((
-    setweight(to_tsvector('simple', COALESCE(signature_text, '')), 'A') ||
-    setweight(to_tsvector('simple', COALESCE(summary_text, '')), 'B') ||
-    setweight(to_tsvector('simple', COALESCE(body_text, '')), 'C')
-));
-
-CREATE INDEX IF NOT EXISTS symbol_search_documents_searchable_trgm_idx
-ON symbol_search_documents
-USING GIN (searchable_text gin_trgm_ops);
-
-CREATE TABLE IF NOT EXISTS symbol_search_documents_current (
-    artefact_id TEXT PRIMARY KEY,
-    repo_id TEXT NOT NULL,
-    path TEXT NOT NULL,
-    content_id TEXT NOT NULL,
-    symbol_id TEXT,
-    signature_text TEXT,
-    summary_text TEXT,
-    body_text TEXT NOT NULL,
-    searchable_text TEXT NOT NULL,
-    generated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS symbol_search_documents_current_repo_path_idx
-ON symbol_search_documents_current (repo_id, path);
-
-CREATE UNIQUE INDEX IF NOT EXISTS symbol_search_documents_current_repo_artefact_idx
-ON symbol_search_documents_current (repo_id, artefact_id);
-
-CREATE INDEX IF NOT EXISTS symbol_search_documents_current_tsv_idx
-ON symbol_search_documents_current
-USING GIN ((
-    setweight(to_tsvector('simple', COALESCE(signature_text, '')), 'A') ||
-    setweight(to_tsvector('simple', COALESCE(summary_text, '')), 'B') ||
-    setweight(to_tsvector('simple', COALESCE(body_text, '')), 'C')
-));
-
-CREATE INDEX IF NOT EXISTS symbol_search_documents_current_searchable_trgm_idx
-ON symbol_search_documents_current
-USING GIN (searchable_text gin_trgm_ops);
-"#
-}
-
 pub(crate) fn search_documents_postgres_shared_schema_sql() -> &'static str {
     r#"
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -218,6 +150,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS symbol_search_documents_current_fts USING fts
 "#
 }
 
+#[cfg(test)]
 pub(crate) fn search_documents_sqlite_shared_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS symbol_search_documents (
