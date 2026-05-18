@@ -73,6 +73,46 @@ pub(crate) struct EmbeddingBatchPrepareTimings {
     pub total_ms: u64,
 }
 
+fn acked_embedding_mailbox_batch(
+    batch: &ClaimedEmbeddingMailboxBatch,
+    config_ms: u64,
+    total_ms: u64,
+) -> PreparedEmbeddingMailboxBatch {
+    PreparedEmbeddingMailboxBatch {
+        commit: CommitEmbeddingBatchRequest {
+            repo: SemanticBatchRepoContext {
+                repo_id: batch.repo_id.clone(),
+                repo_root: batch.repo_root.clone(),
+                config_root: batch.config_root.clone(),
+            },
+            lease_token: batch.lease_token.clone(),
+            embedding_statements: Vec::new(),
+            setup_statements: Vec::new(),
+            remote_embedding_statements: Vec::new(),
+            remote_setup_statements: Vec::new(),
+            clone_rebuild_signal: None,
+            replacement_backfill_item: None,
+            acked_item_ids: batch
+                .items
+                .iter()
+                .map(|item| item.item_id.clone())
+                .collect(),
+        },
+        expanded_count: 0,
+        attempts: batch
+            .items
+            .iter()
+            .map(|item| item.attempts)
+            .max()
+            .unwrap_or(0),
+        timings: EmbeddingBatchPrepareTimings {
+            config_ms,
+            total_ms,
+            ..EmbeddingBatchPrepareTimings::default()
+        },
+    }
+}
+
 pub(crate) async fn prepare_embedding_mailbox_batch(
     batch: &ClaimedEmbeddingMailboxBatch,
 ) -> Result<PreparedEmbeddingMailboxBatch> {
@@ -87,6 +127,24 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     let inference = capability_host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
     let config =
         resolve_semantic_clones_config(&capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID));
+    let mailbox_intent =
+        crate::capability_packs::semantic_clones::workplane::load_effective_mailbox_intent_for_repo(
+            &batch.repo_root,
+            &config,
+        )?;
+    let representation_active = match batch.representation_kind {
+        EmbeddingRepresentationKind::Code | EmbeddingRepresentationKind::Identity => {
+            mailbox_intent.code_embeddings_active
+        }
+        EmbeddingRepresentationKind::Summary => mailbox_intent.summary_embeddings_active,
+    };
+    if !representation_active {
+        return Ok(acked_embedding_mailbox_batch(
+            batch,
+            elapsed_ms(config_started),
+            elapsed_ms(total_started),
+        ));
+    }
     let selection = resolve_embedding_provider(
         &config,
         &inference,
@@ -94,10 +152,11 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         EmbeddingProviderMode::ConfiguredStrict,
     )?;
     let Some(provider) = selection.provider else {
-        anyhow::bail!(
-            "embedding provider is unavailable for representation `{}`",
-            batch.representation_kind
-        );
+        return Ok(acked_embedding_mailbox_batch(
+            batch,
+            elapsed_ms(config_started),
+            elapsed_ms(total_started),
+        ));
     };
     let setup = resolve_embedding_setup(provider.as_ref())?;
     let code_feature_hash_provider = if batch.representation_kind

@@ -36,6 +36,8 @@ jobs:
           cache-workspace-crates: true
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --locked
       - name: Generate LCOV
         run: cargo dev-coverage
       - name: Extract coverage metrics

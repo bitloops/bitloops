@@ -195,6 +195,26 @@ request_timeout_secs = 300
         !rendered.contains("\"-B\""),
         "expected stale python-style args removed:\n{rendered}"
     );
+    assert!(
+        rendered.contains("[inference.profiles.local_code]"),
+        "expected local embeddings profile table:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("task = \"embeddings\"")
+            && rendered.contains("driver = \"bitloops_embeddings_ipc\"")
+            && rendered.contains("runtime = \"bitloops_local_embeddings\"")
+            && rendered.contains("model = \"bge-m3\""),
+        "expected local embeddings profile fields:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("[semantic_clones.inference]"),
+        "expected local embeddings install not to write daemon semantic bindings:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("code_embeddings = \"local_code\"")
+            && !rendered.contains("summary_embeddings = \"local_code\""),
+        "expected local embeddings install not to bind semantic profiles:\n{rendered}"
+    );
 }
 
 #[test]
@@ -262,6 +282,11 @@ max_output_tokens = 200
         rendered.contains("command = \"/tmp/bitloops-local-embeddings\""),
         "expected embeddings runtime command to be rewritten:\n{rendered}"
     );
+    assert!(
+        !rendered.contains("code_embeddings = \"local_code\"")
+            && !rendered.contains("summary_embeddings = \"local_code\""),
+        "expected managed embeddings apply not to add semantic bindings:\n{rendered}"
+    );
 }
 
 #[test]
@@ -306,9 +331,23 @@ local_dev = false
         "expected platform profile runtime binding:\n{rendered}"
     );
     assert!(
-        rendered.contains("code_embeddings = \"platform_code\"")
-            && rendered.contains("summary_embeddings = \"platform_code\""),
-        "expected semantic clone bindings:\n{rendered}"
+        rendered.contains("[inference.profiles.platform_code]"),
+        "expected platform embeddings profile table:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("task = \"embeddings\"")
+            && rendered.contains("driver = \"bitloops_embeddings_ipc\"")
+            && rendered.contains("model = \"bge-m3\""),
+        "expected platform embeddings profile fields:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("[semantic_clones.inference]"),
+        "expected platform embeddings install not to write daemon semantic bindings:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("code_embeddings = \"platform_code\"")
+            && !rendered.contains("summary_embeddings = \"platform_code\""),
+        "expected platform embeddings install not to bind semantic profiles:\n{rendered}"
     );
 }
 
@@ -345,6 +384,42 @@ model = "bge-m3"
 
     assert_eq!(plan.profile_name, "platform_code");
     assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::SkipHosted);
+    assert!(!plan.config_modified);
+}
+
+#[test]
+fn prepare_daemon_embeddings_install_warms_legacy_daemon_bound_profile() {
+    let config = NamedTempFile::new().expect("create temp config");
+    fs::write(
+        config.path(),
+        r#"
+[runtime]
+local_dev = false
+
+[semantic_clones.inference]
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
+
+[inference.runtimes.bitloops_local_embeddings]
+command = "bitloops-local-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "bge-m3"
+"#,
+    )
+    .expect("write temp config");
+
+    let plan =
+        prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
+
+    assert_eq!(plan.profile_name, "local_code");
+    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::WarmExisting);
     assert!(!plan.config_modified);
 }
 

@@ -15,6 +15,7 @@ mod repo_excludes;
 mod status;
 mod summary_setup;
 mod workflow;
+mod workflow_output;
 
 #[cfg(test)]
 mod tests;

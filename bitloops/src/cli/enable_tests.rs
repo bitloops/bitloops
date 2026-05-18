@@ -1459,11 +1459,26 @@ supported = ["claude-code"]
                                 assert!(
                                     rendered.contains("Pulled embedding profile `local_code`.")
                                 );
+                                let local_policy =
+                                    fs::read_to_string(settings_local_path(repo.path()))
+                                        .expect("read local policy");
+                                assert!(local_policy.contains("[semantic_clones]"));
+                                assert!(
+                                    local_policy
+                                        .contains("embedding_mode = \"semantic_aware_once\"")
+                                );
+                                assert!(local_policy.contains("[semantic_clones.inference]"));
+                                assert!(local_policy.contains("code_embeddings = \"local_code\""));
+                                assert!(
+                                    local_policy.contains("summary_embeddings = \"local_code\"")
+                                );
                                 let daemon_config = fs::read_to_string(
                                     default_daemon_config_path().expect("daemon config path"),
                                 )
                                 .expect("read daemon config");
-                                assert!(daemon_config.contains("code_embeddings = \"local_code\""));
+                                assert!(
+                                    !daemon_config.contains("code_embeddings = \"local_code\"")
+                                );
                             });
                         },
                     );
@@ -1484,6 +1499,13 @@ enabled = false
 
 [agents]
 supported = ["claude-code"]
+
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "openai"
+summary_embeddings = "openai"
 "#,
     );
 
@@ -1577,7 +1599,7 @@ supported = ["claude-code"]
                 fs::create_dir_all(parent).expect("create daemon config dir");
             }
             fs::write(
-                daemon_config_path,
+                &daemon_config_path,
                 r#"
 [runtime]
 local_dev = false
@@ -1592,6 +1614,13 @@ model = "text-embedding-3-large"
 "#,
             )
             .expect("write daemon config");
+            setup_local_settings(
+                &repo,
+                &format!(
+                    "[daemon]\nconfig_path = {:?}\n",
+                    daemon_config_path.display().to_string()
+                ),
+            );
 
             with_global_graphql_executor_hook(
                 |_runtime_root, _query, _variables| {

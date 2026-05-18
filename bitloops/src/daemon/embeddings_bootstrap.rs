@@ -959,9 +959,9 @@ mod tests {
                 let rendered =
                     std::fs::read_to_string(&config_path).expect("read daemon config after task");
                 assert!(
-                    rendered.contains("code_embeddings = \"platform_code\"")
-                        && rendered.contains("summary_embeddings = \"platform_code\""),
-                    "expected platform embeddings bindings:\n{rendered}"
+                    !rendered.contains("code_embeddings = \"platform_code\"")
+                        && !rendered.contains("summary_embeddings = \"platform_code\""),
+                    "daemon bootstrap must not write repo-owned semantic embeddings bindings:\n{rendered}"
                 );
                 assert!(
                     rendered.contains(&format!("command = \"{}\"", binary_path.display())),
