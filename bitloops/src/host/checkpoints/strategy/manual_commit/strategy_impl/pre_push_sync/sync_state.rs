@@ -21,6 +21,23 @@ pub(super) async fn mark_branch_sync_complete(
     local.exec_batch_transactional(&statements).await
 }
 
+pub(super) async fn mark_branch_sync_pending(
+    local: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    remote_name: &str,
+    remote_branch: &str,
+    local_sha: &str,
+) -> Result<()> {
+    let pending_key = branch_sync_pending_key(remote_name, remote_branch);
+    local
+        .exec_batch_transactional(&[build_sync_state_upsert_sql(
+            repo_id,
+            &pending_key,
+            local_sha,
+        )])
+        .await
+}
+
 pub(super) fn branch_sync_watermark_key(remote_name: &str, remote_branch: &str) -> String {
     format!(
         "{}:{}:{}",

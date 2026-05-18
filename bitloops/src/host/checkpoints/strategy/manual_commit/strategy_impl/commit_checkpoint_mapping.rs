@@ -6,8 +6,13 @@ fn open_commit_checkpoint_mapping_store(
     crate::host::relational_store::DefaultRelationalStore,
     String,
 )> {
-    open_checkpoint_relational_store(repo_root)
-        .context("opening relational store for commit_checkpoints")
+    let relational = crate::host::relational_store::DefaultRelationalStore::
+        open_primary_for_repo_root_preferring_bound_config(repo_root)
+        .context("opening relational store for commit_checkpoints")?;
+    let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
+        .context("resolving repo identity for commit_checkpoints")?
+        .repo_id;
+    Ok((relational, repo_id))
 }
 
 pub(crate) fn commit_has_checkpoint_mapping(repo_root: &Path, commit_sha: &str) -> Result<bool> {

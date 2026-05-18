@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS symbol_clone_edges (
     structural_score REAL NOT NULL,
     clone_input_hash TEXT NOT NULL,
     explanation_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    generated_at DATETIME DEFAULT now(),
+    generated_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (repo_id, source_artefact_id, target_artefact_id)
 );
 
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS symbol_clone_edges_current (
     structural_score REAL NOT NULL,
     clone_input_hash TEXT NOT NULL,
     explanation_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    generated_at DATETIME DEFAULT now(),
+    generated_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (repo_id, source_symbol_id, target_symbol_id)
 );
 
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS symbol_clone_edges (
     structural_score REAL NOT NULL,
     clone_input_hash TEXT NOT NULL,
     explanation_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    generated_at DATETIME DEFAULT now(),
+    generated_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (repo_id, source_artefact_id, target_artefact_id)
 );
 
@@ -231,5 +231,16 @@ mod tests {
         let sqlite_current = semantic_clones_sqlite_current_projection_schema_sql();
         assert!(sqlite_current.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges_current ("));
         assert!(!sqlite_current.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges ("));
+    }
+
+    #[test]
+    fn semantic_clone_postgres_schemas_use_postgres_timestamp_type() {
+        for sql in [
+            semantic_clones_postgres_schema_sql(),
+            semantic_clones_postgres_shared_schema_sql(),
+        ] {
+            assert!(sql.contains("generated_at TIMESTAMPTZ DEFAULT now()"));
+            assert!(!sql.contains("generated_at DATETIME DEFAULT now()"));
+        }
     }
 }

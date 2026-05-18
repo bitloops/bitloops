@@ -25,6 +25,7 @@ use crate::graphql::types::{
     EmbeddingRepresentationKind as GraphqlEmbeddingRepresentationKind,
 };
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
+use crate::host::devql::artefact_query_support::hydrate_artefact_rows_for_storage_ownership;
 use crate::host::devql::artefact_sql::build_filtered_artefacts_cte_sql;
 use crate::host::devql::{RelationalStorage, RelationalStorageRole, esc_pg, sql_string_list_pg};
 use crate::host::inference::EmbeddingInputType;
@@ -428,6 +429,8 @@ async fn load_semantic_candidates_for_artefact_ids(
     let rows = relational
         .query_rows_for_role(RelationalStorageRole::CurrentProjection, &sql)
         .await?;
+    let rows =
+        hydrate_artefact_rows_for_storage_ownership(relational, repo_id, false, rows).await?;
     rows.into_iter().map(candidate_from_row).collect()
 }
 

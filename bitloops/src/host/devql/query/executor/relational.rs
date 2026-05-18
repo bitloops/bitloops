@@ -110,11 +110,7 @@ pub(crate) async fn execute_relational_clones_pipeline(
         .await;
     }
 
-    let spec = resolve_current_activity_snapshots(
-        relational,
-        plan_devql_artefact_query(cfg, repo_id, parsed)?,
-    )
-    .await?;
+    let spec = plan_devql_artefact_query(cfg, repo_id, parsed)?;
     let role = relational_query_role(spec.temporal_scope.use_historical_tables());
     let sql = build_relational_clones_query(cfg, events_cfg, parsed, relational, repo_id).await?;
     Ok(relational
@@ -129,14 +125,10 @@ pub(crate) async fn build_relational_clones_query(
     cfg: &DevqlConfig,
     _events_cfg: &EventsBackendConfig,
     parsed: &ParsedDevqlQuery,
-    relational: &RelationalStorage,
+    _relational: &RelationalStorage,
     repo_id: &str,
 ) -> Result<String> {
-    let spec = resolve_current_activity_snapshots(
-        relational,
-        plan_devql_artefact_query(cfg, repo_id, parsed)?,
-    )
-    .await?;
+    let spec = plan_devql_artefact_query(cfg, repo_id, parsed)?;
     let filtered_cte = build_filtered_artefacts_cte_sql(&spec);
     let use_historical_tables = spec.temporal_scope.use_historical_tables();
     let clone_edges_table = if use_historical_tables {

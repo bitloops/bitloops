@@ -93,6 +93,13 @@ pub(crate) async fn execute_devql_pre_push_sync(
         remote.trim()
     };
 
+    if let Some(dsn) = remote_dsn.as_deref()
+        && let Err(err) = crate::storage::postgres::connect_postgres_client(dsn).await
+    {
+        record_remote_branch_sync_pending(&local, &repo.repo_id, remote_name, &updates).await?;
+        return Err(err).context("connecting shared relational Postgres for pre-push DevQL sync");
+    }
+
     record_remote_branch_sync_watermarks(&local, &repo.repo_id, remote_name, &updates).await
 }
 
@@ -104,6 +111,25 @@ pub(super) async fn record_remote_branch_sync_watermarks(
 ) -> Result<()> {
     for update in updates {
         sync_state::mark_branch_sync_complete(
+            local,
+            repo_id,
+            remote_name,
+            &update.remote_branch,
+            &update.local_sha,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn record_remote_branch_sync_pending(
+    local: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    remote_name: &str,
+    updates: &[types::PrePushRefUpdate],
+) -> Result<()> {
+    for update in updates {
+        sync_state::mark_branch_sync_pending(
             local,
             repo_id,
             remote_name,
