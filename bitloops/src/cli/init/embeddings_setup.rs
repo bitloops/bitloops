@@ -29,6 +29,7 @@ pub(crate) fn should_install_embeddings_during_init(
     args: &InitArgs,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
+    allow_prompt: bool,
 ) -> Result<InitEmbeddingsSetupSelection> {
     if args.no_embeddings {
         return Ok(InitEmbeddingsSetupSelection::Skip);
@@ -50,6 +51,10 @@ pub(crate) fn should_install_embeddings_during_init(
         EmbeddingsInstallState::NotConfigured
     ) {
         return Ok(InitEmbeddingsSetupSelection::Existing);
+    }
+
+    if !allow_prompt {
+        return Ok(InitEmbeddingsSetupSelection::Unchanged);
     }
 
     if !telemetry_consent::can_prompt_interactively() {

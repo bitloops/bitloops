@@ -49,6 +49,8 @@ pub(crate) use repo_excludes::{
     clear_repo_local_policy_excluded, clear_repo_managed_skill_files_excluded,
 };
 pub(super) use summary_setup::choose_summary_setup_during_init;
+#[cfg(test)]
+pub(super) use workflow_output::with_dashboard_open_hook;
 
 pub type AgentSelector = dyn Fn(&[String], bool) -> std::result::Result<InitAgentSelection, String>;
 

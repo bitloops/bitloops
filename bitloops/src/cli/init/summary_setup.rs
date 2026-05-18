@@ -15,6 +15,7 @@ pub(crate) async fn choose_summary_setup_during_init(
     no_summaries: bool,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
+    allow_prompt: bool,
 ) -> Result<SummarySetupSelection> {
     if no_summaries {
         return Ok(SummarySetupSelection::Skip);
@@ -29,6 +30,10 @@ pub(crate) async fn choose_summary_setup_during_init(
     }
 
     if !install_default_daemon {
+        return Ok(SummarySetupSelection::Skip);
+    }
+
+    if !allow_prompt {
         return Ok(SummarySetupSelection::Skip);
     }
 

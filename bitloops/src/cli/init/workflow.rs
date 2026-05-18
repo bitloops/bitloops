@@ -87,6 +87,7 @@ pub(crate) async fn run_for_project_root(
 ) -> Result<()> {
     let git_root = crate::cli::enable::find_repo_root(project_root)?;
     let daemon_config_existed_at_entry = default_daemon_config_exists()?;
+    let can_prompt_interactively = telemetry_consent::can_prompt_interactively();
     let telemetry_choice =
         telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
     if args.backfill.is_some() && args.ingest == Some(false) {
@@ -99,8 +100,7 @@ pub(crate) async fn run_for_project_root(
         args.ingest
     };
 
-    if (args.sync.is_none() || effective_ingest.is_none())
-        && !telemetry_consent::can_prompt_interactively()
+    if (args.sync.is_none() || effective_ingest.is_none()) && !can_prompt_interactively
     {
         bail!(
             "`bitloops init` requires explicit `--sync=true|false` and `--ingest=true|false` choices when not running interactively."
@@ -145,6 +145,7 @@ pub(crate) async fn run_for_project_root(
     }
     let should_manage_telemetry_via_daemon =
         args.install_default_daemon || daemon_config_existed_at_entry;
+    let defer_to_dashboard_handoff = args.install_default_daemon && can_prompt_interactively;
     let should_prompt_for_telemetry = if should_manage_telemetry_via_daemon {
         telemetry_consent::ensure_default_daemon_running().await?;
         if let Some(choice) = telemetry_choice {
@@ -156,6 +157,8 @@ pub(crate) async fn run_for_project_root(
             if persisted.needs_prompt {
                 bail!("failed to persist telemetry consent");
             }
+            false
+        } else if defer_to_dashboard_handoff {
             false
         } else {
             let state =
@@ -233,7 +236,13 @@ pub(crate) async fn run_for_project_root(
     let mut prepared_summary_setup = None;
     let mut login_required = false;
     let embeddings_selection =
-        should_install_embeddings_during_init(project_root, &args, out, input)?;
+        should_install_embeddings_during_init(
+            project_root,
+            &args,
+            out,
+            input,
+            !defer_to_dashboard_handoff,
+        )?;
     match embeddings_selection {
         InitEmbeddingsSetupSelection::Unchanged => {}
         InitEmbeddingsSetupSelection::Existing => {
@@ -308,13 +317,21 @@ pub(crate) async fn run_for_project_root(
         args.no_summaries,
         out,
         input,
+        !defer_to_dashboard_handoff,
     )
     .await?;
     if matches!(summary_selection, SummarySetupSelection::Cloud) {
         login_required = true;
     }
     let context_guidance_selection =
-        choose_context_guidance_setup_during_init(project_root, &args, out, input).await?;
+        choose_context_guidance_setup_during_init(
+            project_root,
+            &args,
+            out,
+            input,
+            !defer_to_dashboard_handoff,
+        )
+        .await?;
     if matches!(
         context_guidance_selection,
         ContextGuidanceSetupSelection::Cloud
@@ -412,14 +429,27 @@ pub(crate) async fn run_for_project_root(
     }
     let summaries_selected =
         prepared_summary_setup.is_some() || summary_generation_configured(project_root);
+    let sync_choice = if defer_to_dashboard_handoff {
+        args.sync.or(Some(false))
+    } else {
+        args.sync
+    };
+    let ingest_choice = if defer_to_dashboard_handoff {
+        effective_ingest.or(Some(false))
+    } else {
+        effective_ingest
+    };
     let final_setup_selection = choose_final_setup_options(
-        args.sync,
+        sync_choice,
         out,
         input,
-        effective_ingest,
+        ingest_choice,
         InitFinalSetupPromptOptions {
-            show_telemetry: should_prompt_for_telemetry,
-            show_auto_start_daemon: args.install_default_daemon && !daemon_already_always_on,
+            show_sync_and_ingest: !defer_to_dashboard_handoff,
+            show_telemetry: should_prompt_for_telemetry && !defer_to_dashboard_handoff,
+            show_auto_start_daemon: args.install_default_daemon
+                && !daemon_already_always_on
+                && !defer_to_dashboard_handoff,
         },
     )?;
     if args.install_default_daemon {

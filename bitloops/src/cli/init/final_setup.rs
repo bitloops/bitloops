@@ -19,6 +19,7 @@ pub(crate) struct InitFinalSetupSelection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InitFinalSetupPromptOptions {
+    pub show_sync_and_ingest: bool,
     pub show_telemetry: bool,
     pub show_auto_start_daemon: bool,
 }
@@ -52,8 +53,7 @@ pub(crate) fn choose_final_setup_options(
         telemetry: prompt_options.show_telemetry,
         auto_start_daemon: prompt_options.show_auto_start_daemon && can_prompt,
     };
-    let requires_prompt = sync.is_none()
-        || ingest.is_none()
+    let requires_prompt = ((sync.is_none() || ingest.is_none()) && prompt_options.show_sync_and_ingest)
         || prompt_options.show_telemetry
         || (prompt_options.show_auto_start_daemon && can_prompt);
 
@@ -62,7 +62,7 @@ pub(crate) fn choose_final_setup_options(
     }
 
     if !can_prompt {
-        if sync.is_none() || ingest.is_none() {
+        if prompt_options.show_sync_and_ingest && (sync.is_none() || ingest.is_none()) {
             bail!(
                 "`bitloops init` requires explicit `--sync=true|false` and `--ingest=true|false` choices when not running interactively."
             );
@@ -256,18 +256,19 @@ fn prompt_final_setup_selection_with_text_input(
 fn final_setup_option_specs(
     prompt_options: InitFinalSetupPromptOptions,
 ) -> Vec<InitFinalSetupOptionSpec> {
-    let mut options = vec![
-        InitFinalSetupOptionSpec {
+    let mut options = Vec::new();
+    if prompt_options.show_sync_and_ingest {
+        options.push(InitFinalSetupOptionSpec {
             kind: InitFinalSetupOptionKind::Sync,
             label: "Sync codebase",
             insert_spacing_before: false,
-        },
-        InitFinalSetupOptionSpec {
+        });
+        options.push(InitFinalSetupOptionSpec {
             kind: InitFinalSetupOptionKind::Ingest,
             label: "Import commit history",
             insert_spacing_before: false,
-        },
-    ];
+        });
+    }
 
     let mut first_setting = true;
     if prompt_options.show_telemetry {

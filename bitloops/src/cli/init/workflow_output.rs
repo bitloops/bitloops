@@ -2,12 +2,24 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::Result;
+#[cfg(test)]
+use std::{cell::RefCell, rc::Rc};
 
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
 use crate::utils::platform_dirs::bitloops_home_dir;
 
 const SUCCESS_GREEN_HEX: &str = "#22c55e";
 const INTEGRATION_SPINNER_FRAME: &str = "⠋";
+const INIT_CONFIGURATION_ROUTE: &str = "/settings/configuration";
+
+#[cfg(test)]
+type DashboardOpenHook = dyn Fn(&str) -> Result<()> + 'static;
+
+#[cfg(test)]
+thread_local! {
+    static DASHBOARD_OPEN_HOOK: RefCell<Option<Rc<DashboardOpenHook>>> =
+        RefCell::new(None);
+}
 
 fn shell_escape_display_path(path: &Path) -> String {
     let preferred = display_path_with_home(path);
@@ -198,6 +210,7 @@ pub(super) async fn write_init_setup_handoff(
     let dashboard_url = current_dashboard_url()
         .await?
         .unwrap_or_else(default_dashboard_url_for_init_handoff);
+    let dashboard_opened = maybe_open_dashboard_for_init_handoff(&dashboard_url);
     let mut background_steps = Vec::new();
     if options.run_sync {
         background_steps.push("Syncing your current codebase");
@@ -246,6 +259,10 @@ pub(super) async fn write_init_setup_handoff(
         }
         writeln!(out)?;
     }
+    if dashboard_opened {
+        writeln!(out, "Opening the dashboard in your browser…")?;
+        writeln!(out)?;
+    }
     writeln!(out, "You can:")?;
     writeln!(out, "  • View progress: {dashboard_url}")?;
     writeln!(out, "  • Check status anytime: bitloops init status")?;
@@ -282,8 +299,9 @@ fn default_dashboard_url_for_init_handoff() -> String {
         "http"
     };
     format!(
-        "{scheme}://127.0.0.1:{}",
-        crate::api::DEFAULT_DASHBOARD_PORT
+        "{scheme}://127.0.0.1:{}{}",
+        crate::api::DEFAULT_DASHBOARD_PORT,
+        INIT_CONFIGURATION_ROUTE
     )
 }
 
@@ -310,5 +328,69 @@ fn write_local_http_mkcert_notice(out: &mut dyn Write) -> Result<()> {
 }
 
 async fn current_dashboard_url() -> Result<Option<String>> {
-    Ok(crate::daemon::runtime_state()?.map(|runtime| runtime.url))
+    Ok(crate::daemon::runtime_state()?.map(|runtime| configuration_dashboard_url(&runtime.url)))
+}
+
+fn configuration_dashboard_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    if trimmed.ends_with(INIT_CONFIGURATION_ROUTE) {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}{INIT_CONFIGURATION_ROUTE}")
+    }
+}
+
+fn maybe_open_dashboard_for_init_handoff(dashboard_url: &str) -> bool {
+    if !crate::cli::telemetry_consent::can_prompt_interactively() {
+        return false;
+    }
+
+    #[cfg(test)]
+    if let Some(result) = maybe_run_dashboard_open_hook(dashboard_url) {
+        return result.is_ok();
+    }
+
+    #[cfg(not(test))]
+    {
+        if let Err(err) = crate::api::open_in_default_browser(dashboard_url) {
+            log::warn!(
+                "failed to open dashboard after `bitloops init --install-default-daemon`: {err:#}"
+            );
+            return false;
+        }
+        true
+    }
+
+    #[cfg(test)]
+    {
+        false
+    }
+}
+
+#[cfg(test)]
+fn maybe_run_dashboard_open_hook(dashboard_url: &str) -> Option<Result<()>> {
+    DASHBOARD_OPEN_HOOK.with(|cell: &RefCell<Option<Rc<DashboardOpenHook>>>| {
+        cell.borrow()
+            .as_ref()
+            .map(|hook| hook(dashboard_url))
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn with_dashboard_open_hook<T>(
+    hook: impl Fn(&str) -> Result<()> + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    DASHBOARD_OPEN_HOOK.with(|cell: &RefCell<Option<Rc<DashboardOpenHook>>>| {
+        assert!(
+            cell.borrow().is_none(),
+            "dashboard open hook already installed"
+        );
+        *cell.borrow_mut() = Some(Rc::new(hook));
+    });
+    let result = f();
+    DASHBOARD_OPEN_HOOK.with(|cell: &RefCell<Option<Rc<DashboardOpenHook>>>| {
+        *cell.borrow_mut() = None;
+    });
+    result
 }

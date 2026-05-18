@@ -808,6 +808,7 @@ fn choose_context_guidance_setup_during_init_skips_noninteractive_without_explic
                     &args,
                     &mut out,
                     &mut input,
+                    true,
                 ))
             },
         )
@@ -838,6 +839,7 @@ fn choose_summary_setup_during_init_skips_when_summary_mode_is_off() {
             false,
             &mut out,
             &mut input,
+            true,
         ))
         .expect("choose summary setup");
 
@@ -3374,7 +3376,7 @@ fn run_init_with_install_default_daemon_shows_mkcert_notice_before_live_progress
     let rendered = render_install_default_daemon_handoff_with_mkcert(&repo, &app_dirs, false);
     let notice =
         "Notice: local dashboard HTTPS is unavailable because `mkcert` is not on your PATH.";
-    let progress_url = "  • View progress: http://127.0.0.1:5667";
+    let progress_url = "  • View progress: http://127.0.0.1:5667/settings/configuration";
     let live_progress = "Live Progress";
 
     assert!(
@@ -3409,7 +3411,7 @@ fn run_init_with_install_default_daemon_prefers_https_fallback_when_mkcert_is_av
     let rendered = render_install_default_daemon_handoff_with_mkcert(&repo, &app_dirs, true);
 
     assert!(
-        rendered.contains("  • View progress: https://127.0.0.1:5667"),
+        rendered.contains("  • View progress: https://127.0.0.1:5667/settings/configuration"),
         "expected HTTPS fallback URL in init handoff:\n{rendered}"
     );
     assert!(
@@ -3894,11 +3896,98 @@ fn run_init_with_install_default_daemon_can_skip_summaries_via_flag() {
 }
 
 #[test]
-fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_accepted() {
+fn run_init_with_install_default_daemon_defers_dashboard_owned_choices_by_default() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, true, true, false, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        with_graphql_executor_hook(
+                            |_repo_root, query, _variables| {
+                                panic!("unexpected repo-scoped query during deferred init flow: {query}");
+                            },
+                            || {
+                                let mut out = Vec::new();
+                                let mut input = Cursor::new("\n");
+                                let runtime = test_runtime();
+                                runtime
+                                    .block_on(run_with_io_async_for_project_root(
+                                        InitArgs {
+                                            command: None,
+                                            install_default_daemon: true,
+                                            force: false,
+                                            disable_devql_guidance: false,
+                                            agent: vec![DEFAULT_AGENT.to_string()],
+                                            telemetry: Some(false),
+                                            no_telemetry: false,
+                                            skip_baseline: false,
+                                            sync: None,
+                                            ingest: None,
+                                            backfill: None,
+                                            exclude: Vec::new(),
+                                            exclude_from: Vec::new(),
+                                            embeddings_runtime: None,
+                                            no_embeddings: false,
+                                            no_summaries: false,
+                                            context_guidance_runtime: None,
+                                            no_context_guidance: false,
+                                            context_guidance_gateway_url: None,
+                                            context_guidance_api_key_env: None,
+                                            embeddings_gateway_url: None,
+                                            embeddings_api_key_env:
+                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                        },
+                                        repo.path(),
+                                        &mut out,
+                                        &mut input,
+                                        None,
+                                    ))
+                                    .expect("run init with deferred dashboard-owned setup");
+
+                                let rendered = String::from_utf8(out).expect("utf8 output");
+                                assert!(!rendered.contains("Configure embeddings"));
+                                assert!(!rendered.contains("Configure semantic summaries"));
+                                assert!(!rendered.contains("Configure context guidance"));
+                                assert!(!rendered.contains("Sync codebase"));
+                                assert!(!rendered.contains("Import commit history"));
+                                assert!(rendered.contains(
+                                    "Bitloops is ready. No background indexing steps were selected during setup."
+                                ));
+                            },
+                        );
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_with_install_default_daemon_defers_summary_configuration_to_dashboard() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     let repo_id = test_repo_id(repo.path());
-    let session_id = "init-session-summary-bootstrap";
+    let session_id = "init-session-summary-deferred";
     let saw_start_init = std::rc::Rc::new(std::cell::RefCell::new(false));
     setup_git_repo(&repo);
 
@@ -3981,12 +4070,8 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                             json!("local_code")
                                                                         );
                                                                         assert_eq!(
-                                                                            variables["input"]["summariesBootstrap"]["action"],
-                                                                            json!("CONFIGURE_LOCAL")
-                                                                        );
-                                                                        assert_eq!(
-                                                                            variables["input"]["summariesBootstrap"]["modelName"],
-                                                                            json!("ministral-3:3b")
+                                                                            variables["input"]["summariesBootstrap"],
+                                                                            serde_json::Value::Null
                                                                         );
                                                                         return Ok(runtime_start_init_result_json(session_id));
                                                                     }
@@ -4007,8 +4092,7 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                             },
                                                             || {
                                                                 let mut out = Vec::new();
-                                                                let mut input =
-                                                                    Cursor::new("3\n\n");
+                                                                let mut input = Cursor::new("");
                                                                 let select = |_items: &[String],
                                                                               enable_devql_guidance: bool| {
                                                                     Ok(InitAgentSelection {
@@ -4059,25 +4143,12 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                 assert!(!rendered.contains(
                                                                     "Sign in to Bitloops"
                                                                 ));
-                                                                assert!(rendered.contains(
+                                                                assert!(!rendered.contains(
                                                                     "Configure semantic summaries"
                                                                 ));
-                                                                assert!(rendered.contains(
-                                                                    "1. Skip for now (recommended)"
+                                                                assert!(!rendered.contains(
+                                                                    "Summaries"
                                                                 ));
-                                                                assert!(
-                                                                    rendered.contains(
-                                                                        "2. Bitloops Cloud (limited availability)"
-                                                                    )
-                                                                );
-                                                                assert!(
-                                                                    rendered.contains(
-                                                                        "3. Local (Ollama)"
-                                                                    )
-                                                                );
-                                                                assert!(
-                                                                    rendered.contains("Summaries")
-                                                                );
 
                                                                 let daemon_config_path =
                                                                     ensure_daemon_config_exists()
@@ -4113,7 +4184,7 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
 
     assert!(
         *saw_start_init.borrow(),
-        "init should send a summary bootstrap request to the runtime API"
+        "init should still start the runtime session for explicit embeddings work"
     );
 }
 
@@ -4534,6 +4605,7 @@ model = "bge-m3"
         },
         &mut out,
         &mut input,
+        true,
     )
     .expect("select embeddings setup");
 
@@ -5118,7 +5190,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                     },
                                                     || {
                                                         let mut out = Vec::new();
-                                                        let mut input = Cursor::new("1\n1\n");
+                                                        let mut input = Cursor::new("");
                                                         let runtime = test_runtime();
                                                         runtime
                                                             .block_on(run_with_io_async_for_project_root(
@@ -5136,7 +5208,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                                     backfill: None,
                                                                     exclude: Vec::new(),
                                                                     exclude_from: Vec::new(),
-                                                                    embeddings_runtime: None,
+                                                                    embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Platform),
                                                                     no_embeddings: false,
                                                                     no_summaries: false,
                                                                     context_guidance_runtime: None,
@@ -5163,10 +5235,12 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                                 .contains("Sign in to Bitloops")
                                                         );
                                                         assert!(
-                                                            rendered
+                                                            !rendered
                                                                 .contains("Configure embeddings")
                                                         );
-                                                        assert!(rendered.contains("Embeddings"));
+                                                        assert!(rendered.contains(
+                                                            "Preparing the embeddings runtime"
+                                                        ));
                                                         assert!(!rendered.contains(
                                                             "Configured platform embeddings in"
                                                         ));
@@ -5320,7 +5394,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                 },
                                                 || {
                                                     let mut out = Vec::new();
-                                                    let mut input = Cursor::new("1\n1\n");
+                                                    let mut input = Cursor::new("");
                                                     let runtime = test_runtime();
                                                     runtime
                                                         .block_on(run_with_io_async_for_project_root(
@@ -5338,7 +5412,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                                 backfill: None,
                                                                 exclude: Vec::new(),
                                                                 exclude_from: Vec::new(),
-                                                                embeddings_runtime: None,
+                                                                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Platform),
                                                                 no_embeddings: false,
                                                                 no_summaries: false,
                                                                 context_guidance_runtime: None,
@@ -5364,7 +5438,12 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                     assert!(
                                                         !rendered.contains("Sign in to Bitloops")
                                                     );
-                                                    assert!(rendered.contains("Embeddings"));
+                                                    assert!(!rendered.contains(
+                                                        "Configure embeddings"
+                                                    ));
+                                                    assert!(rendered.contains(
+                                                        "Preparing the embeddings runtime"
+                                                    ));
                                                 },
                                             );
                                         },
@@ -5381,7 +5460,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
 }
 
 #[test]
-fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_summaries() {
+fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_when_summaries_are_deferred() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     let repo_id = test_repo_id(repo.path());
@@ -5475,16 +5554,8 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                                     )
                                                                 );
                                                                 assert_eq!(
-                                                                    variables["input"]["summariesBootstrap"]
-                                                                        ["action"],
-                                                                    json!("CONFIGURE_CLOUD")
-                                                                );
-                                                                assert_eq!(
-                                                                    variables["input"]["summariesBootstrap"]
-                                                                        ["gatewayUrlOverride"],
-                                                                    json!(
-                                                                        "https://platform.example/v1/chat/completions"
-                                                                    )
+                                                                    variables["input"]["summariesBootstrap"],
+                                                                    serde_json::Value::Null
                                                                 );
                                                                 return Ok(
                                                                     runtime_start_init_result_json(
@@ -5511,7 +5582,7 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                     },
                                                     || {
                                                         let mut out = Vec::new();
-                                                        let mut input = Cursor::new("1\n2\n");
+                                                        let mut input = Cursor::new("");
                                                         let runtime = test_runtime();
                                                         runtime
                                                             .block_on(run_with_io_async_for_project_root(
@@ -5529,7 +5600,7 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                                     backfill: None,
                                                                     exclude: Vec::new(),
                                                                     exclude_from: Vec::new(),
-                                                                    embeddings_runtime: None,
+                                                                    embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Platform),
                                                                     no_embeddings: false,
                                                                     no_summaries: false,
                                                                     context_guidance_runtime: None,
@@ -5555,6 +5626,13 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                             !rendered
                                                                 .contains("Sign in to Bitloops")
                                                         );
+                                                        assert!(!rendered.contains(
+                                                            "Configure semantic summaries"
+                                                        ));
+                                                        assert!(rendered.contains(
+                                                            "Preparing the embeddings runtime"
+                                                        ));
+                                                        assert!(!rendered.contains("Summaries"));
                                                     },
                                                 );
                                             },
@@ -6305,6 +6383,7 @@ fn choose_final_setup_options_renders_final_setup_prompt() {
             &mut input,
             None,
             InitFinalSetupPromptOptions {
+                show_sync_and_ingest: true,
                 show_telemetry: false,
                 show_auto_start_daemon: false,
             },
@@ -6341,6 +6420,7 @@ fn choose_final_setup_options_preselects_telemetry_when_shown() {
             &mut input,
             Some(false),
             InitFinalSetupPromptOptions {
+                show_sync_and_ingest: true,
                 show_telemetry: true,
                 show_auto_start_daemon: false,
             },
@@ -6373,6 +6453,7 @@ fn choose_final_setup_options_defaults_auto_start_to_disabled_when_not_interacti
             &mut input,
             Some(false),
             InitFinalSetupPromptOptions {
+                show_sync_and_ingest: true,
                 show_telemetry: false,
                 show_auto_start_daemon: true,
             },
@@ -6396,7 +6477,145 @@ fn choose_final_setup_options_defaults_auto_start_to_disabled_when_not_interacti
 }
 
 #[test]
-fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
+fn choose_final_setup_options_can_hide_sync_and_ingest_prompts() {
+    with_test_tty_override(true, || {
+        let mut out = Vec::new();
+        let mut input = Cursor::new("\n");
+
+        let selection = choose_final_setup_options(
+            Some(false),
+            &mut out,
+            &mut input,
+            Some(false),
+            InitFinalSetupPromptOptions {
+                show_sync_and_ingest: false,
+                show_telemetry: false,
+                show_auto_start_daemon: false,
+            },
+        )
+        .expect("render reduced prompt");
+
+        assert_eq!(
+            selection,
+            InitFinalSetupSelection {
+                sync: false,
+                ingest: false,
+                telemetry: false,
+                auto_start_daemon: false,
+            }
+        );
+        let rendered = String::from_utf8(out).expect("utf8 output");
+        assert!(!rendered.contains("Sync codebase"));
+        assert!(!rendered.contains("Import commit history"));
+        assert!(!rendered.contains(
+            "Start Bitloops daemon automatically when you sign in"
+        ));
+    });
+}
+
+#[test]
+fn run_init_with_install_default_daemon_skips_final_setup_prompt_and_opens_dashboard() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    let opened_urls = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, true, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
+                Ok(())
+            },
+            || {
+                with_dashboard_open_hook(
+                    {
+                        let opened_urls = std::rc::Rc::clone(&opened_urls);
+                        move |url| {
+                            opened_urls.borrow_mut().push(url.to_string());
+                            Ok(())
+                        }
+                    },
+                    || {
+                        with_global_graphql_executor_hook(
+                            |_runtime_root, _query, variables| {
+                                assert_eq!(variables["telemetry"], serde_json::Value::Null);
+                                Ok(serde_json::json!({
+                                    "updateCliTelemetryConsent": {
+                                        "telemetry": serde_json::Value::Null,
+                                        "needsPrompt": true
+                                    }
+                                }))
+                            },
+                            || {
+                                let mut out = Vec::new();
+                                let mut input = Cursor::new("");
+                                let select = |_items: &[String], enable_devql_guidance: bool| {
+                                    Ok(InitAgentSelection {
+                                        agents: vec!["claude-code".to_string()],
+                                        enable_devql_guidance,
+                                    })
+                                };
+                                let runtime = test_runtime();
+                                runtime
+                                    .block_on(run_with_io_async_for_project_root(
+                                        InitArgs {
+                                            command: None,
+                                            install_default_daemon: true,
+                                            force: false,
+                                            disable_devql_guidance: false,
+                                            agent: Vec::new(),
+                                            telemetry: None,
+                                            no_telemetry: false,
+                                            skip_baseline: false,
+                                            sync: None,
+                                            ingest: None,
+                                            backfill: None,
+                                            exclude: Vec::new(),
+                                            exclude_from: Vec::new(),
+                                            embeddings_runtime: None,
+                                            no_embeddings: true,
+                                            no_summaries: false,
+                                            context_guidance_runtime: None,
+                                            no_context_guidance: false,
+                                            context_guidance_gateway_url: None,
+                                            context_guidance_api_key_env: None,
+                                            embeddings_gateway_url: None,
+                                            embeddings_api_key_env:
+                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                        },
+                                        repo.path(),
+                                        &mut out,
+                                        &mut input,
+                                        Some(&select),
+                                    ))
+                                    .expect("run init");
+
+                                let rendered = String::from_utf8(out).expect("utf8 output");
+                                assert!(!rendered.contains("Final setup"));
+                                assert!(!rendered.contains("Enable anonymous telemetry"));
+                                assert!(!rendered.contains(
+                                    "Start Bitloops daemon automatically when you sign in"
+                                ));
+                                assert!(rendered.contains("Opening the dashboard in your browser"));
+                            },
+                        )
+                    },
+                )
+            },
+        );
+    });
+
+    assert_eq!(
+        &*opened_urls.borrow(),
+        &["http://127.0.0.1:5667/settings/configuration".to_string()]
+    );
+}
+
+#[test]
+fn run_init_with_install_default_daemon_does_not_enable_auto_start_during_dashboard_handoff() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     let service_enabled = std::rc::Rc::new(std::cell::RefCell::new(false));
@@ -6415,8 +6634,7 @@ fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
                 with_enable_default_daemon_service_hook(
                     {
                         let service_enabled = std::rc::Rc::clone(&service_enabled);
-                        move |enable_default_daemon_service| {
-                            assert!(enable_default_daemon_service);
+                        move |_enable_default_daemon_service| {
                             *service_enabled.borrow_mut() = true;
                             Ok(())
                         }
@@ -6434,7 +6652,7 @@ fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
                             },
                             || {
                                 let mut out = Vec::new();
-                                let mut input = Cursor::new("\n");
+                                let mut input = Cursor::new("");
                                 let select = |_items: &[String], enable_devql_guidance: bool| {
                                     Ok(InitAgentSelection {
                                         agents: vec!["claude-code".to_string()],
@@ -6477,7 +6695,7 @@ fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
                                     .expect("run init");
 
                                 let rendered = String::from_utf8(out).expect("utf8 output");
-                                assert!(rendered.contains(
+                                assert!(!rendered.contains(
                                     "Start Bitloops daemon automatically when you sign in"
                                 ));
                             },
@@ -6489,101 +6707,8 @@ fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
     });
 
     assert!(
-        *service_enabled.borrow(),
-        "expected init to enable the always-on daemon service"
-    );
-}
-
-#[test]
-fn run_init_with_install_default_daemon_can_skip_auto_start() {
-    let repo = tempfile::tempdir().unwrap();
-    let app_dirs = tempfile::tempdir().unwrap();
-    let service_enabled = std::rc::Rc::new(std::cell::RefCell::new(false));
-    setup_git_repo(&repo);
-
-    with_temp_app_dirs(&app_dirs, true, true, || {
-        with_install_default_daemon_hook(
-            move |install_default_daemon| {
-                assert!(install_default_daemon);
-                let config_path =
-                    ensure_daemon_config_exists().expect("create default daemon config");
-                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
-                Ok(())
-            },
-            || {
-                with_enable_default_daemon_service_hook(
-                    {
-                        let service_enabled = std::rc::Rc::clone(&service_enabled);
-                        move |_enable_default_daemon_service| {
-                            *service_enabled.borrow_mut() = true;
-                            Ok(())
-                        }
-                    },
-                    || {
-                        with_global_graphql_executor_hook(
-                            |_runtime_root, _query, variables| {
-                                assert_eq!(variables["telemetry"], serde_json::json!(false));
-                                Ok(serde_json::json!({
-                                    "updateCliTelemetryConsent": {
-                                        "telemetry": false,
-                                        "needsPrompt": false
-                                    }
-                                }))
-                            },
-                            || {
-                                let mut out = Vec::new();
-                                let mut input = Cursor::new("none\n");
-                                let select = |_items: &[String], enable_devql_guidance: bool| {
-                                    Ok(InitAgentSelection {
-                                        agents: vec!["claude-code".to_string()],
-                                        enable_devql_guidance,
-                                    })
-                                };
-                                let runtime = test_runtime();
-                                runtime
-                                    .block_on(run_with_io_async_for_project_root(
-                                        InitArgs {
-                                            command: None,
-                                            install_default_daemon: true,
-                                            force: false,
-                                            disable_devql_guidance: false,
-                                            agent: Vec::new(),
-                                            telemetry: Some(false),
-                                            no_telemetry: false,
-                                            skip_baseline: false,
-                                            sync: Some(false),
-                                            ingest: Some(false),
-                                            backfill: None,
-                                            exclude: Vec::new(),
-                                            exclude_from: Vec::new(),
-                                            embeddings_runtime: None,
-                                            no_embeddings: true,
-                                            no_summaries: false,
-                                            context_guidance_runtime: None,
-                                            no_context_guidance: false,
-                                            context_guidance_gateway_url: None,
-                                            context_guidance_api_key_env: None,
-                                            embeddings_gateway_url: None,
-                                            embeddings_api_key_env:
-                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
-                                        },
-                                        repo.path(),
-                                        &mut out,
-                                        &mut input,
-                                        Some(&select),
-                                    ))
-                                    .expect("run init");
-                            },
-                        )
-                    },
-                )
-            },
-        );
-    });
-
-    assert!(
         !*service_enabled.borrow(),
-        "expected init to leave the daemon in detached mode when auto-start is skipped"
+        "expected init to leave always-on daemon setup to the dashboard flow"
     );
 }
 

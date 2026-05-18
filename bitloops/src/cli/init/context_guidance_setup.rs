@@ -16,6 +16,7 @@ pub(crate) async fn choose_context_guidance_setup_during_init(
     args: &InitArgs,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
+    allow_prompt: bool,
 ) -> Result<ContextGuidanceSetupSelection> {
     if args.no_context_guidance {
         return Ok(ContextGuidanceSetupSelection::Skip);
@@ -37,6 +38,10 @@ pub(crate) async fn choose_context_guidance_setup_during_init(
     }
     if args.context_guidance_gateway_url.is_some() || args.context_guidance_api_key_env.is_some() {
         return Ok(ContextGuidanceSetupSelection::Cloud);
+    }
+
+    if !allow_prompt {
+        return Ok(ContextGuidanceSetupSelection::Skip);
     }
 
     if !telemetry_consent::can_prompt_interactively() {
