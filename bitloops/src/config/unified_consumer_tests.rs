@@ -399,6 +399,7 @@ summary_embeddings = "repo_summary"
         capability.architecture.inference,
         ArchitectureInferenceBindings {
             fact_synthesis: Some("local_agent".to_string()),
+            role_adjudication: None,
         }
     );
 }

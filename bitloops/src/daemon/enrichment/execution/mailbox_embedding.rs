@@ -138,6 +138,7 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         EmbeddingRepresentationKind::Code | EmbeddingRepresentationKind::Identity => {
             mailbox_intent.code_embeddings_active
         }
+        EmbeddingRepresentationKind::Architecture => mailbox_intent.architecture_embeddings_active,
         EmbeddingRepresentationKind::Summary => mailbox_intent.summary_embeddings_active,
     };
     if !representation_active {
@@ -387,29 +388,15 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         };
     let mut repaired_feature_projection = false;
     if batch.representation_kind == EmbeddingRepresentationKind::Architecture {
-        for path in &path_cleanup_paths {
-            let delete_sql = build_delete_stale_current_symbol_embedding_rows_for_path_sql(
-                &batch.repo_id,
-                path,
-                "",
-                batch.representation_kind,
-                &[],
-            );
-            embedding_statements.push(delete_sql.clone());
-            embedding_statements.extend(
-                build_sqlite_stale_current_rows_for_path_delete_statements(
-                    &relational,
-                    &batch.repo_id,
-                    path,
-                    batch.representation_kind,
-                    &[],
-                )
-                .await?,
-            );
-            if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
-                remote_embedding_statements.push(delete_sql);
-            }
-        }
+        let cleanup_statements = build_architecture_path_cleanup_statements(
+            &relational,
+            &batch.repo_id,
+            batch.representation_kind,
+            &path_cleanup_paths,
+        )
+        .await?;
+        embedding_statements.extend(cleanup_statements.local);
+        remote_embedding_statements.extend(cleanup_statements.remote);
     }
     if batch.representation_kind == EmbeddingRepresentationKind::Code {
         let feature_hash_provider = code_feature_hash_provider
@@ -663,6 +650,44 @@ fn explicit_artefact_ids_from_batch(
     ids
 }
 
+struct ArchitecturePathCleanupStatements {
+    local: Vec<String>,
+    remote: Vec<String>,
+}
+
+async fn build_architecture_path_cleanup_statements(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    representation_kind: EmbeddingRepresentationKind,
+    path_cleanup_paths: &[String],
+) -> Result<ArchitecturePathCleanupStatements> {
+    let mut local = Vec::new();
+    for path in path_cleanup_paths {
+        let delete_sql = build_delete_stale_current_symbol_embedding_rows_for_path_sql(
+            repo_id,
+            path,
+            "",
+            representation_kind,
+            &[],
+        );
+        local.push(delete_sql);
+        local.extend(
+            build_sqlite_stale_current_rows_for_path_delete_statements(
+                relational,
+                repo_id,
+                path,
+                representation_kind,
+                &[],
+            )
+            .await?,
+        );
+    }
+    Ok(ArchitecturePathCleanupStatements {
+        local,
+        remote: Vec::new(),
+    })
+}
+
 fn path_cleanup_path_from_payload(payload: &serde_json::Value) -> Option<String> {
     payload
         .get("path_cleanup")
@@ -732,4 +757,46 @@ ORDER BY current.artefact_id",
 
 fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn architecture_path_cleanup_keeps_current_projection_cleanup_local() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let sqlite_path = temp.path().join("semantic.sqlite");
+        drop(rusqlite::Connection::open(&sqlite_path).expect("create sqlite db"));
+        let relational = RelationalStorage::primary_backend_for_tests(
+            sqlite_path,
+            crate::host::devql::RelationalPrimaryBackend::Postgres,
+        );
+        let paths = vec!["src/api.rs".to_string()];
+        let statements = build_architecture_path_cleanup_statements(
+            &relational,
+            "repo-1",
+            EmbeddingRepresentationKind::Architecture,
+            &paths,
+        )
+        .await
+        .expect("build architecture path cleanup statements");
+
+        assert!(
+            statements
+                .local
+                .iter()
+                .any(|statement| statement.contains("DELETE FROM symbol_embeddings_current"))
+        );
+        assert!(
+            statements
+                .local
+                .iter()
+                .any(|statement| statement.contains("path = 'src/api.rs'"))
+        );
+        assert!(
+            statements.remote.is_empty(),
+            "current projection cleanup must stay in local SQLite even when the shared backend is remote"
+        );
+    }
 }
