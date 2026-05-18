@@ -1,11 +1,68 @@
 use anyhow::Result;
 
 use crate::capability_packs::semantic_clones::scoring;
-use crate::host::devql::{RelationalStorage, esc_pg, sql_json_value, sql_now};
+use crate::host::devql::{
+    RelationalDialect, RelationalStorage, RelationalStorageRole, esc_pg,
+    sql_json_value_for_dialect, sql_now_for_dialect,
+};
 
 use super::schema::{CloneProjection, ensure_semantic_clones_schema};
 
 const SYMBOL_CLONE_EDGE_UPSERT_CHUNK_SIZE: usize = 250;
+
+fn projection_storage_role(projection: CloneProjection) -> RelationalStorageRole {
+    match projection {
+        CloneProjection::Historical => RelationalStorageRole::SharedRelational,
+        CloneProjection::Current => RelationalStorageRole::CurrentProjection,
+    }
+}
+
+fn projection_dialect(
+    relational: &RelationalStorage,
+    projection: CloneProjection,
+) -> RelationalDialect {
+    relational.dialect_for_role(projection_storage_role(projection))
+}
+
+async fn exec_for_projection(
+    relational: &RelationalStorage,
+    projection: CloneProjection,
+    sql: &str,
+) -> Result<()> {
+    match projection {
+        CloneProjection::Historical => {
+            relational
+                .exec_for_role(RelationalStorageRole::SharedRelational, sql)
+                .await
+        }
+        CloneProjection::Current => relational.exec_serialized(sql).await,
+    }
+}
+
+async fn exec_batch_for_projection(
+    relational: &RelationalStorage,
+    projection: CloneProjection,
+    statements: &[String],
+) -> Result<()> {
+    if statements.is_empty() {
+        return Ok(());
+    }
+    match projection {
+        CloneProjection::Historical => {
+            relational
+                .exec_batch_transactional_for_role(
+                    RelationalStorageRole::SharedRelational,
+                    statements,
+                )
+                .await
+        }
+        CloneProjection::Current => {
+            relational
+                .exec_serialized_batch_transactional(statements)
+                .await
+        }
+    }
+}
 
 pub(crate) async fn delete_repo_symbol_clone_edges(
     relational: &RelationalStorage,
@@ -31,7 +88,7 @@ pub(super) async fn delete_repo_symbol_clone_edges_for_projection(
 ) -> Result<()> {
     ensure_semantic_clones_schema(relational).await?;
     let sql = build_delete_repo_symbol_clone_edges_sql(repo_id, projection);
-    relational.exec_serialized(&sql).await
+    exec_for_projection(relational, projection, &sql).await
 }
 
 pub(super) async fn replace_repo_symbol_clone_edges_for_projection(
@@ -47,9 +104,7 @@ pub(super) async fn replace_repo_symbol_clone_edges_for_projection(
     statements.extend(build_persist_symbol_clone_edge_statements(
         relational, projection, rows,
     ));
-    relational
-        .exec_serialized_batch_transactional(&statements)
-        .await
+    exec_batch_for_projection(relational, projection, &statements).await
 }
 
 fn build_delete_repo_symbol_clone_edges_sql(repo_id: &str, projection: CloneProjection) -> String {
@@ -65,20 +120,21 @@ fn build_persist_symbol_clone_edge_statements(
     projection: CloneProjection,
     rows: &[scoring::SymbolCloneEdgeRow],
 ) -> Vec<String> {
+    let dialect = projection_dialect(relational, projection);
     rows.chunks(SYMBOL_CLONE_EDGE_UPSERT_CHUNK_SIZE)
-        .map(|chunk| build_persist_symbol_clone_edge_statement(relational, projection, chunk))
+        .map(|chunk| build_persist_symbol_clone_edge_statement(dialect, projection, chunk))
         .collect()
 }
 
-fn build_persist_symbol_clone_edge_statement(
-    relational: &RelationalStorage,
+pub(super) fn build_persist_symbol_clone_edge_statement(
+    dialect: RelationalDialect,
     projection: CloneProjection,
     rows: &[scoring::SymbolCloneEdgeRow],
 ) -> String {
-    let generated_at = sql_now(relational);
+    let generated_at = sql_now_for_dialect(dialect);
     let values = rows
         .iter()
-        .map(|row| build_symbol_clone_edge_values_sql(relational, row))
+        .map(|row| build_symbol_clone_edge_values_sql(dialect, row))
         .collect::<Vec<_>>()
         .join(", ");
     let conflict_target = match projection {
@@ -97,10 +153,10 @@ ON CONFLICT {conflict_target} DO UPDATE SET source_symbol_id = EXCLUDED.source_s
 }
 
 fn build_symbol_clone_edge_values_sql(
-    relational: &RelationalStorage,
+    dialect: RelationalDialect,
     row: &scoring::SymbolCloneEdgeRow,
 ) -> String {
-    let explanation_expr = sql_json_value(relational, &row.explanation_json);
+    let explanation_expr = sql_json_value_for_dialect(dialect, &row.explanation_json);
     format!(
         "('{repo_id}', '{source_symbol_id}', '{source_artefact_id}', '{target_symbol_id}', '{target_artefact_id}', '{relation_kind}', {score}, {semantic_score}, {lexical_score}, {structural_score}, '{clone_input_hash}', {explanation_json})",
         repo_id = esc_pg(&row.repo_id),

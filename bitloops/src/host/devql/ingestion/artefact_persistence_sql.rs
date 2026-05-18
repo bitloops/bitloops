@@ -25,8 +25,12 @@ pub(super) fn sql_jsonb_text_array(values: &[String]) -> String {
 }
 
 pub(crate) fn sql_json_value(relational: &RelationalStorage, value: &Value) -> String {
+    sql_json_value_for_dialect(relational.dialect(), value)
+}
+
+pub(crate) fn sql_json_value_for_dialect(dialect: RelationalDialect, value: &Value) -> String {
     let raw = esc_pg(&value.to_string());
-    match relational.dialect() {
+    match dialect {
         RelationalDialect::Postgres => format!("'{raw}'::jsonb"),
         RelationalDialect::Sqlite => format!("'{raw}'"),
     }

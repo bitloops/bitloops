@@ -278,6 +278,79 @@ async fn init_postgres_schema_preserves_existing_sync_rows_on_repeated_runs() {
 
 #[tokio::test]
 #[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn ensure_repository_row_populates_local_current_projection_catalog_when_shared_authority_is_remote()
+ {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 {\n    1\n}\n",
+    )
+    .expect("write lib.rs");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "seed repo"]);
+    write_test_daemon_config(repo.path());
+
+    let repo_identity = resolve_repo_identity(repo.path()).expect("resolve repo identity");
+    let mut cfg = DevqlConfig::from_roots(
+        repo.path().to_path_buf(),
+        repo.path().to_path_buf(),
+        repo_identity,
+    )
+    .expect("build DevQL config");
+    cfg.pg_dsn = Some(dsn.clone());
+    cfg.repo.repo_id = deterministic_uuid("repo://postgres-local-current-projection-catalog");
+
+    let relational = postgres_relational_store(&cfg, &dsn).await;
+    init_sqlite_schema(&relational.local.path)
+        .await
+        .expect("initialise local sqlite schema");
+    init_postgres_schema(&cfg, &client)
+        .await
+        .expect("initialise postgres schema");
+
+    ensure_repository_row(&cfg, &relational)
+        .await
+        .expect("ensure repository row across both stores");
+
+    let local_conn = rusqlite::Connection::open(&relational.local.path).expect("open local sqlite");
+    let local_count: i64 = local_conn
+        .query_row(
+            "SELECT COUNT(*) FROM repositories WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id],
+            |row| row.get(0),
+        )
+        .expect("count local repository rows");
+    assert_eq!(
+        local_count, 1,
+        "expected local current/projection repo catalog row"
+    );
+
+    let remote_count: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM repositories WHERE repo_id = $1",
+            &[&cfg.repo.repo_id],
+        )
+        .await
+        .expect("count remote repository rows")
+        .get(0);
+    assert_eq!(remote_count, 1, "expected remote shared repository row");
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
 async fn rebuilding_legacy_remote_sync_schema_upgrades_paths_sync_to_repair() {
     let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
     let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();

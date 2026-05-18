@@ -11,19 +11,36 @@ pub(super) async fn ensure_repository_row(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
 ) -> Result<()> {
-    let role = RelationalStorageRole::SharedRelational;
     let metadata_json = build_repository_metadata_json(cfg)
         .context("building repository metadata profile for DevQL persistence")?;
-    let sql_with_metadata = format!(
-        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch, metadata_json) VALUES ('{}', '{}', '{}', '{}', '{}', '{}') \
-ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization = EXCLUDED.organization, name = EXCLUDED.name, default_branch = EXCLUDED.default_branch, metadata_json = EXCLUDED.metadata_json",
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(&cfg.repo.provider),
-        esc_pg(&cfg.repo.organization),
-        esc_pg(&cfg.repo.name),
-        esc_pg(&default_branch_name(&cfg.repo_root)),
-        esc_pg(&metadata_json),
-    );
+    ensure_repository_row_for_role(
+        cfg,
+        relational,
+        RelationalStorageRole::CurrentProjection,
+        &metadata_json,
+    )
+    .await?;
+    if relational.backend_for_role(RelationalStorageRole::CurrentProjection)
+        == relational.backend_for_role(RelationalStorageRole::SharedRelational)
+    {
+        return Ok(());
+    }
+    ensure_repository_row_for_role(
+        cfg,
+        relational,
+        RelationalStorageRole::SharedRelational,
+        &metadata_json,
+    )
+    .await
+}
+
+async fn ensure_repository_row_for_role(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    role: RelationalStorageRole,
+    metadata_json: &str,
+) -> Result<()> {
+    let sql_with_metadata = repository_upsert_sql_with_metadata(cfg, metadata_json);
     if let Err(err) = relational.exec_for_role(role, &sql_with_metadata).await {
         let message = format!("{err:#}");
         let missing_metadata_column = message.contains("no column named metadata_json")
@@ -32,18 +49,35 @@ ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization =
             return Err(err);
         }
 
-        let legacy_sql = format!(
-            "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) VALUES ('{}', '{}', '{}', '{}', '{}') \
-ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization = EXCLUDED.organization, name = EXCLUDED.name, default_branch = EXCLUDED.default_branch",
-            esc_pg(&cfg.repo.repo_id),
-            esc_pg(&cfg.repo.provider),
-            esc_pg(&cfg.repo.organization),
-            esc_pg(&cfg.repo.name),
-            esc_pg(&default_branch_name(&cfg.repo_root)),
-        );
+        let legacy_sql = repository_upsert_sql_legacy(cfg);
         return relational.exec_for_role(role, &legacy_sql).await;
     }
     Ok(())
+}
+
+fn repository_upsert_sql_with_metadata(cfg: &DevqlConfig, metadata_json: &str) -> String {
+    format!(
+        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch, metadata_json) VALUES ('{}', '{}', '{}', '{}', '{}', '{}') \
+ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization = EXCLUDED.organization, name = EXCLUDED.name, default_branch = EXCLUDED.default_branch, metadata_json = EXCLUDED.metadata_json",
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&cfg.repo.provider),
+        esc_pg(&cfg.repo.organization),
+        esc_pg(&cfg.repo.name),
+        esc_pg(&default_branch_name(&cfg.repo_root)),
+        esc_pg(metadata_json),
+    )
+}
+
+fn repository_upsert_sql_legacy(cfg: &DevqlConfig) -> String {
+    format!(
+        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) VALUES ('{}', '{}', '{}', '{}', '{}') \
+ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization = EXCLUDED.organization, name = EXCLUDED.name, default_branch = EXCLUDED.default_branch",
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&cfg.repo.provider),
+        esc_pg(&cfg.repo.organization),
+        esc_pg(&cfg.repo.name),
+        esc_pg(&default_branch_name(&cfg.repo_root)),
+    )
 }
 
 fn build_repository_metadata_json(cfg: &DevqlConfig) -> Result<String> {
@@ -535,4 +569,76 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
         .await?;
 
     Ok(file_rows.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::git_fixtures::{git_ok, init_test_repo, write_test_daemon_config};
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn ensure_repository_row_for_current_projection_populates_local_catalog_when_shared_authority_is_remote()
+     {
+        let repo_dir = tempdir().expect("temp dir");
+        init_test_repo(
+            repo_dir.path(),
+            "main",
+            "Bitloops Test",
+            "bitloops-test@example.com",
+        );
+        std::fs::create_dir_all(repo_dir.path().join("src")).expect("create src dir");
+        std::fs::write(
+            repo_dir.path().join("src/lib.rs"),
+            "pub fn one() -> i32 {\n    1\n}\n",
+        )
+        .expect("write source");
+        git_ok(repo_dir.path(), &["add", "."]);
+        git_ok(repo_dir.path(), &["commit", "-m", "seed"]);
+        write_test_daemon_config(repo_dir.path());
+
+        let repo = resolve_repo_identity(repo_dir.path()).expect("resolve repo identity");
+        let mut cfg =
+            DevqlConfig::from_env(repo_dir.path().to_path_buf(), repo).expect("build config");
+        cfg.pg_dsn = Some("postgres://example.invalid/bitloops".to_string());
+
+        let sqlite_path = repo_dir.path().join("devql-current-projection.db");
+        init_sqlite_current_projection_schema(&sqlite_path)
+            .await
+            .expect("initialise local current projection schema");
+        let relational = RelationalStorage::primary_backend_for_tests(
+            sqlite_path.clone(),
+            RelationalPrimaryBackend::Postgres,
+        );
+        let metadata_json = build_repository_metadata_json(&cfg).expect("build metadata");
+
+        ensure_repository_row_for_role(
+            &cfg,
+            &relational,
+            RelationalStorageRole::CurrentProjection,
+            &metadata_json,
+        )
+        .await
+        .expect("upsert local current projection repository row");
+
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+        let row: (String, String, String, String) = conn
+            .query_row(
+                "SELECT provider, organization, name, default_branch FROM repositories WHERE repo_id = ?1",
+                rusqlite::params![cfg.repo.repo_id],
+                |record| {
+                    Ok((
+                        record.get(0)?,
+                        record.get(1)?,
+                        record.get(2)?,
+                        record.get(3)?,
+                    ))
+                },
+            )
+            .expect("read local repository catalog row");
+        assert_eq!(row.0, cfg.repo.provider);
+        assert_eq!(row.1, cfg.repo.organization);
+        assert_eq!(row.2, cfg.repo.name);
+        assert_eq!(row.3, "main");
+    }
 }

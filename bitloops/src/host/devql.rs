@@ -867,7 +867,9 @@ use self::ingestion_artefact_persistence::*;
 use self::ingestion_artefact_persistence_edges::*;
 use self::ingestion_artefact_persistence_file::*;
 use self::ingestion_artefact_persistence_sql::*;
-pub(crate) use self::ingestion_artefact_persistence_sql::{sql_json_value, sql_now};
+pub(crate) use self::ingestion_artefact_persistence_sql::{
+    sql_json_value, sql_json_value_for_dialect, sql_now, sql_now_for_dialect,
+};
 use self::ingestion_artefact_persistence_symbols::*;
 use self::ingestion_artefact_persistence_types::*;
 use self::ingestion_baseline::*;

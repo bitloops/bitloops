@@ -140,11 +140,17 @@ Adopt an explicit storage-authority model and remove ambiguous dual-target behav
 
 ### Relational ownership split
 
-- [ ] Audit relational tables and classify each one as local current/projection or shared relational authority.
-- [x] Treat all `*_current` relational tables as local-only workspace projection tables.
-- [x] Treat `semantic_clone_embedding_setup_state` and current-vector/index helper tables as local-only current/projection state.
+- [x] Audit the main relational table families and classify them as local current/projection or shared relational authority.
+- [ ] Finish the long-tail audit for remaining pack-owned tables and helper/index tables.
+- [ ] Treat all `*_current` relational tables as local-only workspace projection tables.
+- [ ] Treat `semantic_clone_embedding_setup_state` as local-only current/projection state.
+- [x] Treat local current-vector/index helper tables derived from current embeddings as local-only current/projection state.
+- [x] Keep `symbol_clone_edges_current` local-only and route historical `symbol_clone_edges` writes through shared relational authority in remote mode.
 - [ ] Route all non-current relational tables through shared relational authority only.
 - [ ] Stop dual-writing relational data to local SQLite and remote relational backends at the same time.
+- [ ] Stop duplicating semantic embedding state across SQLite and Postgres in remote mode: `symbol_embeddings`, `symbol_embeddings_current`, `semantic_embedding_setups`, and `semantic_clone_embedding_setup_state`.
+- [ ] Move non-current semantic tables like `symbol_features` and `symbol_semantics` to shared relational authority only in remote mode.
+- [ ] Move committed/history-oriented DevQL tables like `commits`, `commit_ingest_ledger`, `file_state`, `artefacts`, and `artefact_edges` to shared relational authority only in remote mode.
 - [ ] Update relational readers so progress, freshness, and feature logic read from the owning relational side instead of whichever side happens to contain data.
 
 ### Schema and bootstrap
@@ -154,6 +160,7 @@ Adopt an explicit storage-authority model and remove ambiguous dual-target behav
 - [x] Preserve the existing local-only SQLite bootstrap path that creates both shared and current/projection tables when no remote relational backend is configured.
 - [x] Detect legacy mirrored tables/rows and surface warnings without auto-deleting data in the first pass.
 - [ ] Make legacy mirrored tables inert by stopping further reads/writes on the disallowed side.
+- [ ] Harden init/config persistence so selecting remote relational and events backends is reflected in the daemon config before the first sync/ingest writes begin.
 
 ### Events and blobs
 
@@ -176,6 +183,7 @@ Adopt an explicit storage-authority model and remove ambiguous dual-target behav
 
 - [ ] Add relational tests for remote relational mode: current tables local-only, non-current tables remote-only.
 - [ ] Add relational tests for local-only mode: both current and non-current relational data remain local.
+- [x] Add clone-edge regression tests covering remote-shared historical routing, remote-shared current local routing, local-only routing, and projection-owned SQL dialect selection.
 - [ ] Add multi-workspace tests proving different branches/worktrees do not overwrite each other’s local current state.
 - [ ] Add event tests proving canonical event rows exist only in the selected event backend.
 - [x] Add blob tests proving runtime/session payloads stay local while project/knowledge payloads follow the configured blob backend.

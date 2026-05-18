@@ -1105,8 +1105,8 @@ mod tests {
         conn.execute("CREATE TABLE checkpoint_files(relation_id TEXT)", [])
             .expect("create checkpoint_files");
 
-        let detected = detect_legacy_shared_sqlite_tables(&conn)
-            .expect("detect legacy shared sqlite tables");
+        let detected =
+            detect_legacy_shared_sqlite_tables(&conn).expect("detect legacy shared sqlite tables");
 
         assert!(detected.contains(&"sync_state".to_string()));
         assert!(detected.contains(&"checkpoint_files".to_string()));
