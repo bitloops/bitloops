@@ -60,6 +60,6 @@ pub(crate) use readiness::current_workplane_mailbox_blocked_statuses_for_repo;
 pub(crate) use setup::{default_state, migrate_legacy_semantic_workplane_rows};
 pub(crate) use sql::{repo_identity_from_runtime_metadata, sql_i64};
 pub(crate) use status::{
-    iter_workplane_job_config_roots, last_failed_embedding_job_from_workplane,
-    project_workplane_status,
+    iter_workplane_job_config_roots, iter_workplane_job_repo_roots,
+    last_failed_embedding_job_from_workplane, project_workplane_status,
 };

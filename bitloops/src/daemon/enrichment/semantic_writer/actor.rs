@@ -314,6 +314,7 @@ mod tests {
                 repo: repo(),
                 lease_token: "summary-lease".to_string(),
                 semantic_statements: Vec::new(),
+                remote_semantic_statements: Vec::new(),
                 embedding_follow_ups: Vec::new(),
                 replacement_backfill_item: None,
                 acked_item_ids: Vec::new(),

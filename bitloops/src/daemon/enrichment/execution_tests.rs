@@ -2785,10 +2785,12 @@ async fn prepare_summary_mailbox_batch_with_explicit_repo_backfill_ids_keeps_rem
         .expect("remaining explicit repo backfill ids should stay queued");
     assert_eq!(
         replacement.payload_json,
-        Some(serde_json::to_value(
-            requested[super::super::workplane::SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE..].to_vec()
+        Some(
+            serde_json::to_value(
+                requested[super::super::workplane::SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE..].to_vec()
+            )
+            .expect("remaining payload json")
         )
-        .expect("remaining payload json"))
     );
 }
 

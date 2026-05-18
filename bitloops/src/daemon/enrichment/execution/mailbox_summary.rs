@@ -114,18 +114,16 @@ where
                     .map(payload_artefact_ids_from_value);
                 let mut selected = match requested_ids {
                     Some(requested_ids) => {
-                        let (selected_ids, remaining_ids) =
-                            if requested_ids.len() > SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE {
-                                (
-                                    requested_ids[..SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE].to_vec(),
-                                    Some(
-                                        requested_ids[SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE..]
-                                            .to_vec(),
-                                    ),
-                                )
-                            } else {
-                                (requested_ids, None)
-                            };
+                        let (selected_ids, remaining_ids) = if requested_ids.len()
+                            > SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE
+                        {
+                            (
+                                requested_ids[..SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE].to_vec(),
+                                Some(requested_ids[SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE..].to_vec()),
+                            )
+                        } else {
+                            (requested_ids, None)
+                        };
                         if let Some(remaining_ids) = remaining_ids {
                             replacement_backfill_item =
                                 Some(SemanticSummaryMailboxItemInsert::new(
@@ -367,6 +365,32 @@ fn summary_embedding_follow_up_for(
     )
 }
 
+async fn load_current_summary_backfill_artefact_ids(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<Vec<String>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT current.artefact_id \
+FROM artefacts_current current \
+JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
+WHERE current.repo_id = '{}' \
+  AND state.analysis_mode = 'code' \
+  AND LOWER(COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol'))) <> 'import' \
+ORDER BY current.path, current.start_line, current.symbol_id, COALESCE(current.start_byte, 0), current.artefact_id",
+            esc_pg(repo_id),
+        ))
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row: Value| {
+            row.get("artefact_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::summary_embedding_follow_up_for;
@@ -413,30 +437,4 @@ mod tests {
 
         assert_eq!(follow_up.init_session_id, None);
     }
-}
-
-async fn load_current_summary_backfill_artefact_ids(
-    relational: &RelationalStorage,
-    repo_id: &str,
-) -> Result<Vec<String>> {
-    let rows = relational
-        .query_rows(&format!(
-            "SELECT current.artefact_id \
-FROM artefacts_current current \
-JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
-WHERE current.repo_id = '{}' \
-  AND state.analysis_mode = 'code' \
-  AND LOWER(COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol'))) <> 'import' \
-ORDER BY current.path, current.start_line, current.symbol_id, COALESCE(current.start_byte, 0), current.artefact_id",
-            esc_pg(repo_id),
-        ))
-        .await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|row: Value| {
-            row.get("artefact_id")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .collect())
 }

@@ -100,8 +100,12 @@ pub(crate) fn claim_embedding_mailbox_batch(
     }
     workplane_store.with_write_connection(|conn| {
         let candidates = load_embedding_mailbox_repo_candidates(conn, unix_timestamp_now())?;
-        let candidates =
-            prioritize_embedding_mailbox_repo_candidates(conn, workplane_store, candidates)?;
+        let candidates = prioritize_embedding_mailbox_repo_candidates(
+            conn,
+            workplane_store,
+            control_state,
+            candidates,
+        )?;
         let mut readiness_cache = BTreeMap::new();
         for candidate in candidates {
             let EmbeddingMailboxRepoCandidate {
@@ -242,6 +246,7 @@ fn load_embedding_mailbox_repo_candidates(
 fn prioritize_embedding_mailbox_repo_candidates(
     conn: &rusqlite::Connection,
     workplane_store: &DaemonSqliteRuntimeStore,
+    control_state: &EnrichmentControlState,
     values: Vec<EmbeddingMailboxRepoCandidate>,
 ) -> Result<Vec<EmbeddingMailboxRepoCandidate>> {
     if values.is_empty() {
@@ -257,65 +262,134 @@ fn prioritize_embedding_mailbox_repo_candidates(
     let has_non_summary_candidates = values
         .iter()
         .any(|candidate| candidate.representation_kind != EmbeddingRepresentationKind::Summary);
+    let fallback_config_root = values
+        .first()
+        .map(|candidate| candidate.config_root.as_path())
+        .expect("checked non-empty candidates");
+    let embeddings_budget =
+        effective_worker_budgets(workplane_store, fallback_config_root)?.embeddings;
+    let preferred_non_summary_kind = preferred_non_summary_representation_kind(conn, &values)?;
+    if embeddings_budget == 1
+        && has_summary_overlap_candidates
+        && has_summary_candidates
+        && has_non_summary_candidates
+    {
+        return Ok(prioritize_single_worker_summary_overlap_candidates(
+            values,
+            control_state.last_embedding_claim_kind,
+            preferred_non_summary_kind,
+        ));
+    }
     let can_prioritize_summary = if has_summary_candidates && has_non_summary_candidates {
-        let fallback_config_root = values
-            .first()
-            .map(|candidate| candidate.config_root.as_path())
-            .expect("checked non-empty candidates");
         let summary_priority_worker_limit = summary_embedding_priority_worker_limit(
-            workplane_store,
-            fallback_config_root,
+            embeddings_budget,
             has_summary_overlap_candidates,
-        )?;
+        );
         let leased_summary_batches =
             leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Summary)?;
         leased_summary_batches < summary_priority_worker_limit
     } else {
         false
     };
-    let preferred_non_summary_kind = preferred_non_summary_representation_kind(conn, &values)?;
 
-    let mut prioritized_summary = Vec::new();
+    Ok(prioritize_multi_worker_candidates(
+        values,
+        preferred_non_summary_kind,
+        can_prioritize_summary,
+    ))
+}
+
+fn prioritize_multi_worker_candidates(
+    values: Vec<EmbeddingMailboxRepoCandidate>,
+    preferred_non_summary_kind: Option<EmbeddingRepresentationKind>,
+    prioritize_summary: bool,
+) -> Vec<EmbeddingMailboxRepoCandidate> {
+    let CandidateBuckets {
+        summary,
+        preferred_non_summary,
+        fallback_non_summary,
+    } = split_embedding_candidates(values, preferred_non_summary_kind);
+    let mut prioritized = Vec::new();
+    if prioritize_summary {
+        prioritized.extend(summary);
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+    } else {
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+        prioritized.extend(summary);
+    }
+    prioritized
+}
+
+fn prioritize_single_worker_summary_overlap_candidates(
+    values: Vec<EmbeddingMailboxRepoCandidate>,
+    last_embedding_claim_kind: Option<EmbeddingRepresentationKind>,
+    preferred_non_summary_kind: Option<EmbeddingRepresentationKind>,
+) -> Vec<EmbeddingMailboxRepoCandidate> {
+    let Some(last_embedding_claim_kind) = last_embedding_claim_kind else {
+        return values;
+    };
+    let CandidateBuckets {
+        summary,
+        preferred_non_summary,
+        fallback_non_summary,
+    } = split_embedding_candidates(values, preferred_non_summary_kind);
+    let mut prioritized = Vec::new();
+    if last_embedding_claim_kind == EmbeddingRepresentationKind::Summary {
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+        prioritized.extend(summary);
+    } else {
+        prioritized.extend(summary);
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+    }
+    prioritized
+}
+
+struct CandidateBuckets {
+    summary: Vec<EmbeddingMailboxRepoCandidate>,
+    preferred_non_summary: Vec<EmbeddingMailboxRepoCandidate>,
+    fallback_non_summary: Vec<EmbeddingMailboxRepoCandidate>,
+}
+
+fn summary_embedding_priority_worker_limit(
+    embeddings_budget: usize,
+    has_active_summary_overlap: bool,
+) -> usize {
+    if embeddings_budget <= 1 {
+        return 0;
+    }
+    if has_active_summary_overlap {
+        return embeddings_budget / 2;
+    }
+    1
+}
+
+fn split_embedding_candidates(
+    values: Vec<EmbeddingMailboxRepoCandidate>,
+    preferred_non_summary_kind: Option<EmbeddingRepresentationKind>,
+) -> CandidateBuckets {
+    let mut summary = Vec::new();
     let mut preferred_non_summary = Vec::new();
-    let mut fallback = Vec::new();
-    let mut deferred_summary = Vec::new();
+    let mut fallback_non_summary = Vec::new();
     for candidate in values {
-        let is_summary_candidate =
-            candidate.representation_kind == EmbeddingRepresentationKind::Summary;
-        if is_summary_candidate {
-            if can_prioritize_summary {
-                prioritized_summary.push(candidate);
-            } else {
-                deferred_summary.push(candidate);
-            }
+        if candidate.representation_kind == EmbeddingRepresentationKind::Summary {
+            summary.push(candidate);
         } else if preferred_non_summary_kind
             .is_some_and(|kind| candidate.representation_kind == kind)
         {
             preferred_non_summary.push(candidate);
         } else {
-            fallback.push(candidate);
+            fallback_non_summary.push(candidate);
         }
     }
-
-    prioritized_summary.extend(preferred_non_summary);
-    prioritized_summary.extend(fallback);
-    prioritized_summary.extend(deferred_summary);
-    Ok(prioritized_summary)
-}
-
-fn summary_embedding_priority_worker_limit(
-    workplane_store: &DaemonSqliteRuntimeStore,
-    fallback_config_root: &std::path::Path,
-    has_active_summary_overlap: bool,
-) -> Result<usize> {
-    let embeddings = effective_worker_budgets(workplane_store, fallback_config_root)?.embeddings;
-    if embeddings <= 1 {
-        return Ok(0);
+    CandidateBuckets {
+        summary,
+        preferred_non_summary,
+        fallback_non_summary,
     }
-    if has_active_summary_overlap {
-        return Ok(embeddings / 2);
-    }
-    Ok(1)
 }
 
 fn preferred_non_summary_representation_kind(
@@ -632,3 +706,7 @@ fn load_selected_embedding_item_ids(
     }
     Ok(values)
 }
+
+#[cfg(test)]
+#[path = "mailbox_claim_tests.rs"]
+mod tests;

@@ -814,6 +814,7 @@ fn new_test_coordinator(temp: &TempDir) -> (EnrichmentCoordinator, EnrichmentJob
             workplane_store: DaemonSqliteRuntimeStore::open_at(runtime_db_path)
                 .expect("open test workplane store"),
             daemon_config_root: config_root.clone(),
+            self_ref: std::sync::OnceLock::new(),
             subscription_hub: std::sync::Mutex::new(None),
             lock: Mutex::new(()),
             notify: Notify::new(),
@@ -1136,6 +1137,147 @@ model = "bge-m3"
     ));
     fs::write(&config_path, config)
         .expect("write test daemon config with remote embeddings profile");
+    config_path
+}
+
+fn configure_repo_local_remote_embeddings_for_repo(
+    target: &EnrichmentJobTarget,
+    profile_name: &str,
+) -> PathBuf {
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
+    config.push_str(&format!(
+        r#"
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+
+[inference.runtimes.bitloops_platform_embeddings]
+command = "platform-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.runtimes.bitloops_inference]
+command = "platform-summary"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.{profile_name}]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_platform_embeddings"
+model = "bge-m3"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+runtime = "bitloops_inference"
+driver = "bitloops_platform_chat"
+model = "ministral-3-3b-instruct"
+api_key = "${{BITLOOPS_PLATFORM_GATEWAY_TOKEN}}"
+temperature = "0.1"
+max_output_tokens = 200
+"#
+    ));
+    fs::write(&config_path, config)
+        .expect("write daemon config with remote summary and embeddings profiles");
+    fs::write(
+        target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        format!(
+            r#"[daemon]
+config_path = {:?}
+
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "{profile_name}"
+summary_embeddings = "{profile_name}"
+"#,
+            config_path.display().to_string(),
+        ),
+    )
+    .expect("write repo-local semantic embeddings policy");
+    config_path
+}
+
+fn configure_repo_local_remote_embeddings_with_fake_summary_for_repo(
+    target: &EnrichmentJobTarget,
+    profile_name: &str,
+) -> PathBuf {
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+
+    #[cfg(unix)]
+    let (summary_command, summary_args) =
+        fake_text_generation_runtime_command_and_args(&target.repo_root);
+    #[cfg(windows)]
+    let (summary_command, summary_args) =
+        fake_text_generation_runtime_command_and_args(&target.repo_root);
+    let summary_runtime_args = summary_args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
+    config.push_str(&format!(
+        r#"
+[semantic_clones.inference]
+summary_generation = "summary_local"
+
+[inference.runtimes.bitloops_platform_embeddings]
+command = "platform-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.runtimes.bitloops_inference]
+command = {summary_command:?}
+args = [{summary_runtime_args}]
+startup_timeout_secs = 1
+request_timeout_secs = 1
+
+[inference.profiles.{profile_name}]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_platform_embeddings"
+model = "bge-m3"
+
+[inference.profiles.summary_local]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+base_url = "http://127.0.0.1:11434/api/chat"
+temperature = "0.1"
+max_output_tokens = 200
+"#
+    ));
+    fs::write(&config_path, config)
+        .expect("write daemon config with remote embeddings and fake summary profile");
+    fs::write(
+        target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        format!(
+            r#"[daemon]
+config_path = {:?}
+
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "{profile_name}"
+summary_embeddings = "{profile_name}"
+"#,
+            config_path.display().to_string(),
+        ),
+    )
+    .expect("write repo-local semantic embeddings policy");
     config_path
 }
 
@@ -3412,6 +3554,41 @@ fn effective_worker_budgets_use_remote_embedding_defaults_for_active_config_root
     assert_eq!(budgets.embeddings, 4);
 }
 
+#[test]
+fn effective_worker_budgets_use_active_repo_roots_when_semantic_policy_is_repo_local() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let _config_path = configure_repo_local_remote_embeddings_for_repo(&target, "platform_code");
+
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            representation_kind: "code",
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            item_id: "code-pending",
+            payload_json: None,
+            status: SemanticMailboxItemStatus::Pending,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+
+    let budgets = effective_worker_budgets(
+        &coordinator.workplane_store,
+        &coordinator.daemon_config_root,
+    )
+    .expect("resolve effective worker budgets");
+
+    assert_eq!(budgets.embeddings, 4);
+}
+
 struct WorkplaneJobFixture<'a> {
     repo_id: &'a str,
     mailbox_name: &'a str,
@@ -3862,6 +4039,131 @@ async fn enqueue_repo_backfill_embedding_jobs_chunks_large_payloads_for_parallel
             })
             .sum::<u64>(),
         55
+    );
+}
+
+#[tokio::test]
+async fn enqueue_embeddings_refreshes_worker_capacity_for_active_repo_policy() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, _repo_id) = new_test_coordinator(&temp);
+    let coordinator = Arc::new(coordinator);
+    let _config_path = configure_repo_local_remote_embeddings_for_repo(&target, "platform_code");
+
+    coordinator.ensure_started();
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        1,
+        "startup should begin with the fallback daemon-config embedding worker budget",
+    );
+
+    coordinator
+        .enqueue_follow_up(FollowUpJob::RepoBackfillEmbeddings {
+            target,
+            artefact_ids: vec!["artefact-001".to_string()],
+            representation_kind: EmbeddingRepresentationKind::Code,
+        })
+        .await
+        .expect("enqueue repo backfill embedding work");
+
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        4,
+        "enqueueing active repo-local embedding work should refresh the worker budget",
+    );
+}
+
+#[tokio::test]
+async fn summary_commit_refreshes_worker_capacity_for_follow_up_embeddings() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let coordinator = Arc::new(coordinator);
+
+    if let Ok(mut counts) = coordinator.started_worker_counts.lock() {
+        *counts = super::worker_count::EnrichmentWorkerBudgets {
+            summary_refresh: 32,
+            embeddings: 1,
+            clone_rebuild: 32,
+        };
+    }
+    coordinator.ensure_started();
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        1,
+        "startup should still reflect the fallback daemon-config embedding worker budget",
+    );
+
+    seed_summary_refresh_perf_repo(&target.repo_root, 2);
+    let _config_path =
+        configure_repo_local_remote_embeddings_with_fake_summary_for_repo(&target, "platform_code");
+    let inputs = load_summary_refresh_perf_inputs(&target).await;
+    let selected = inputs
+        .first()
+        .expect("summary perf fixture should produce at least one semantic input");
+
+    insert_summary_mailbox_item(
+        &coordinator,
+        &target,
+        SummaryMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "summary-item-1",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some(&selected.artefact_id),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        1,
+        "direct mailbox writes should not refresh worker capacity on their own",
+    );
+
+    assert!(
+        coordinator
+            .process_next_summary_batch_for_test()
+            .await
+            .expect("process summary batch"),
+        "the inserted summary mailbox item should be processed",
+    );
+
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        4,
+        "successful summary commits should refresh worker capacity for follow-up embeddings",
+    );
+    assert!(
+        load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending)
+            .iter()
+            .any(
+                |item| item.representation_kind == EmbeddingRepresentationKind::Summary.to_string()
+            ),
+        "summary commits should enqueue summary embedding follow-up work",
     );
 }
 

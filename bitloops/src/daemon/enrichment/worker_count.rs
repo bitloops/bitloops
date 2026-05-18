@@ -184,7 +184,7 @@ fn resolve_worker_budgets_from_sources(
     let default_embedding_workers = if sources.embeddings_remote {
         DEFAULT_REMOTE_EMBEDDING_WORKERS
     } else if sources.multiple_embedding_representations_active {
-        2
+        3
     } else {
         DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS
     };
@@ -481,8 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_worker_budgets_promote_local_embeddings_when_code_and_summary_embeddings_are_active()
-     {
+    fn configured_worker_budgets_default_to_three_local_embedding_workers_for_full_overlap() {
         let temp = tempdir().expect("temp dir");
         let config_path = temp.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
         if let Some(parent) = config_path.parent() {
@@ -517,6 +516,64 @@ model = "local-summary"
 "#,
         )
         .expect("write semantic clones config with local code and summary embeddings");
+
+        let _guard = enter_process_state(
+            Some(temp.path()),
+            &[
+                (SEMANTIC_CLONES_SUMMARY_WORKER_COUNT_ENV, None),
+                (SEMANTIC_CLONES_EMBEDDING_WORKER_COUNT_ENV, None),
+                (SEMANTIC_CLONES_CLONE_REBUILD_WORKER_COUNT_ENV, None),
+                (SEMANTIC_CLONES_ENRICHMENT_WORKER_COUNT_ENV, None),
+            ],
+        );
+
+        assert_eq!(
+            configured_enrichment_worker_budgets(),
+            EnrichmentWorkerBudgets {
+                summary_refresh: 1,
+                embeddings: 3,
+                clone_rebuild: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn configured_worker_budgets_keep_explicit_local_embedding_worker_override_for_full_overlap() {
+        let temp = tempdir().expect("temp dir");
+        let config_path = temp.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).expect("create config dir");
+        }
+        fs::write(
+            &config_path,
+            r#"[semantic_clones]
+embedding_workers = 2
+
+[semantic_clones.inference]
+summary_generation = "summary_local"
+code_embeddings = "local_code"
+summary_embeddings = "local_summary"
+
+[inference.profiles.summary_local]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "local-code"
+
+[inference.profiles.local_summary]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "local-summary"
+"#,
+        )
+        .expect("write semantic clones config with explicit local embedding worker override");
 
         let _guard = enter_process_state(
             Some(temp.path()),

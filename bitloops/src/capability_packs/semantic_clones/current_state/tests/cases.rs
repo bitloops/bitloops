@@ -12,7 +12,7 @@ use crate::host::capability_host::{
 use super::super::super::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use super::super::consumer::SemanticClonesCurrentStateConsumer;
 use super::super::projection::current_repo_backfill_artefact_ids;
@@ -680,6 +680,47 @@ async fn reconcile_full_reconcile_chunks_backfill_jobs_for_parallel_mailbox_work
     assert_eq!(metrics["enqueued_code_embedding_jobs"], json!(2));
     assert_eq!(metrics["enqueued_identity_embedding_jobs"], json!(2));
     assert_eq!(metrics["enqueued_clone_rebuild"], json!(1));
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconcile_full_reconcile_does_not_enqueue_summary_embedding_backfill_during_active_refresh()
+-> Result<()> {
+    let repo = tempdir().expect("temp repo");
+    let repo_id = "repo-full-no-summary-backfill";
+    let request = request(
+        repo.path(),
+        repo_id,
+        ReconcileMode::FullReconcile,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let workplane = CapturingWorkplaneGateway::default();
+    let ctx = test_context(
+        config_root(Some("summary"), Some("code"), Some("summary-embed")),
+        workplane,
+        request,
+    )
+    .await?;
+    seed_current_artefact_ids(&ctx.sqlite_path, repo_id, 10).await;
+
+    let result = SemanticClonesCurrentStateConsumer
+        .reconcile(&ctx.request, &ctx.context)
+        .await?;
+    let jobs = ctx.workplane.jobs();
+    let metrics = metrics_map(&result);
+
+    assert!(
+        jobs.iter()
+            .all(|job| job.mailbox_name != SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX),
+        "summary embeddings should only be scheduled from completed summary chunks while refresh is active"
+    );
+    assert_eq!(metrics["enqueued_summary_jobs"], json!(1));
+    assert_eq!(metrics["enqueued_code_embedding_jobs"], json!(1));
+    assert_eq!(metrics["enqueued_identity_embedding_jobs"], json!(1));
+    assert_eq!(metrics["enqueued_summary_embedding_jobs"], json!(0));
     Ok(())
 }
 
