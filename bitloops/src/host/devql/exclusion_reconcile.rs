@@ -56,23 +56,23 @@ pub(crate) async fn purge_scope_excluded_repo_data(
 
     let artefact_ids = load_distinct_string_set(
         relational,
-        &excluded_artefact_ids_sql(&cfg.repo.repo_id, &excluded_paths),
+        &excluded_artefact_id_queries(&cfg.repo.repo_id, &excluded_paths),
         "artefact_id",
     )
     .await?;
     let blob_shas = load_distinct_string_set(
         relational,
-        &excluded_blob_shas_sql(&cfg.repo.repo_id, &excluded_paths),
+        &excluded_blob_sha_queries(&cfg.repo.repo_id, &excluded_paths),
         "blob_sha",
     )
     .await?;
     let content_ids = load_distinct_string_set(
         relational,
-        &excluded_content_ids_sql(&cfg.repo.repo_id, &excluded_paths),
+        &excluded_content_id_queries(&cfg.repo.repo_id, &excluded_paths),
         "content_id",
     )
     .await?;
-    let statements = build_purge_statements(
+    let statements = build_purge_statements_by_role(
         &cfg.repo.repo_id,
         &excluded_paths,
         &artefact_ids,
@@ -83,15 +83,29 @@ pub(crate) async fn purge_scope_excluded_repo_data(
         return Ok(snapshot.fingerprint);
     }
 
-    relational
-        .exec_batch_transactional(&statements)
-        .await
-        .context("purging excluded DevQL rows from local relational storage")?;
-    if relational.remote_client().is_some() {
+    if !statements
+        .statements_for(RelationalStorageRole::CurrentProjection)
+        .is_empty()
+    {
         relational
-            .exec_remote_batch_transactional(&statements)
+            .exec_batch_transactional_for_role(
+                RelationalStorageRole::CurrentProjection,
+                statements.statements_for(RelationalStorageRole::CurrentProjection),
+            )
             .await
-            .context("purging excluded DevQL rows from remote relational storage")?;
+            .context("purging excluded DevQL rows from current-projection storage")?;
+    }
+    if !statements
+        .statements_for(RelationalStorageRole::SharedRelational)
+        .is_empty()
+    {
+        relational
+            .exec_batch_transactional_for_role(
+                RelationalStorageRole::SharedRelational,
+                statements.statements_for(RelationalStorageRole::SharedRelational),
+            )
+            .await
+            .context("purging excluded DevQL rows from shared relational storage")?;
     }
     let excluded_paths_vec = excluded_paths.iter().cloned().collect::<Vec<_>>();
     clear_sqlite_current_rows_for_paths(relational, &cfg.repo.repo_id, &excluded_paths_vec)
@@ -180,7 +194,7 @@ async fn load_excluded_paths(
     repo_id: &str,
     matcher: &RepoExclusionMatcher,
 ) -> Result<BTreeSet<String>> {
-    let rows = query_rows_all(relational, &stored_repo_paths_sql(repo_id)).await?;
+    let rows = query_rows_for_role_queries(relational, &stored_repo_path_queries(repo_id)).await?;
     let mut paths = BTreeSet::new();
     for row in rows {
         let Some(path) = row
@@ -199,11 +213,11 @@ async fn load_excluded_paths(
 
 async fn load_distinct_string_set(
     relational: &RelationalStorage,
-    sql: &str,
+    queries: &[(RelationalStorageRole, String)],
     column: &str,
 ) -> Result<BTreeSet<String>> {
     let mut values = BTreeSet::new();
-    for row in query_rows_all(relational, sql).await? {
+    for row in query_rows_for_role_queries(relational, queries).await? {
         if let Some(value) = row
             .as_object()
             .and_then(|row| row.get(column))
@@ -215,24 +229,34 @@ async fn load_distinct_string_set(
     Ok(values)
 }
 
-async fn query_rows_all(relational: &RelationalStorage, sql: &str) -> Result<Vec<Value>> {
-    let mut rows = relational.query_rows(sql).await?;
-    if relational.remote_client().is_some() {
-        rows.extend(relational.query_rows_remote(sql).await?);
+async fn query_rows_for_role_queries(
+    relational: &RelationalStorage,
+    queries: &[(RelationalStorageRole, String)],
+) -> Result<Vec<Value>> {
+    let mut rows = Vec::new();
+    for (role, sql) in queries {
+        rows.extend(relational.query_rows_for_role(*role, sql).await?);
     }
     Ok(rows)
 }
 
-fn stored_repo_paths_sql(repo_id: &str) -> String {
+fn stored_repo_path_queries(repo_id: &str) -> Vec<(RelationalStorageRole, String)> {
     let repo_id = esc_pg(repo_id);
-    format!(
-        "SELECT DISTINCT path FROM current_file_state WHERE repo_id = '{repo_id}' \
-UNION \
-SELECT DISTINCT path FROM file_state WHERE repo_id = '{repo_id}' \
+    vec![
+        (
+            RelationalStorageRole::CurrentProjection,
+            format!(
+                "SELECT DISTINCT path FROM current_file_state WHERE repo_id = '{repo_id}' \
 UNION \
 SELECT DISTINCT path FROM artefacts_current WHERE repo_id = '{repo_id}' \
 UNION \
-SELECT DISTINCT path FROM artefact_edges_current WHERE repo_id = '{repo_id}' \
+SELECT DISTINCT path FROM artefact_edges_current WHERE repo_id = '{repo_id}'"
+            ),
+        ),
+        (
+            RelationalStorageRole::SharedRelational,
+            format!(
+                "SELECT DISTINCT path FROM file_state WHERE repo_id = '{repo_id}' \
 UNION \
 SELECT DISTINCT path FROM artefact_snapshots WHERE repo_id = '{repo_id}' \
 UNION \
@@ -241,24 +265,43 @@ UNION \
 SELECT DISTINCT path_after AS path FROM checkpoint_files WHERE repo_id = '{repo_id}' AND path_after IS NOT NULL \
 UNION \
 SELECT DISTINCT copy_source_path AS path FROM checkpoint_files WHERE repo_id = '{repo_id}' AND copy_source_path IS NOT NULL"
-    )
+            ),
+        ),
+    ]
 }
 
-fn excluded_artefact_ids_sql(repo_id: &str, paths: &BTreeSet<String>) -> String {
+fn excluded_artefact_id_queries(
+    repo_id: &str,
+    paths: &BTreeSet<String>,
+) -> Vec<(RelationalStorageRole, String)> {
     let repo_id = esc_pg(repo_id);
     let paths = quoted_sql_list(paths).unwrap_or_default();
-    format!(
-        "SELECT DISTINCT artefact_id FROM artefact_snapshots WHERE repo_id = '{repo_id}' AND path IN ({paths}) \
-UNION \
-SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id}' AND path IN ({paths})"
-    )
+    vec![
+        (
+            RelationalStorageRole::CurrentProjection,
+            format!(
+                "SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id}' AND path IN ({paths})"
+            ),
+        ),
+        (
+            RelationalStorageRole::SharedRelational,
+            format!(
+                "SELECT DISTINCT artefact_id FROM artefact_snapshots WHERE repo_id = '{repo_id}' AND path IN ({paths})"
+            ),
+        ),
+    ]
 }
 
-fn excluded_blob_shas_sql(repo_id: &str, paths: &BTreeSet<String>) -> String {
+fn excluded_blob_sha_queries(
+    repo_id: &str,
+    paths: &BTreeSet<String>,
+) -> Vec<(RelationalStorageRole, String)> {
     let repo_id = esc_pg(repo_id);
     let paths = quoted_sql_list(paths).unwrap_or_default();
-    format!(
-        "SELECT DISTINCT blob_sha FROM file_state WHERE repo_id = '{repo_id}' AND path IN ({paths}) \
+    vec![(
+        RelationalStorageRole::SharedRelational,
+        format!(
+            "SELECT DISTINCT blob_sha FROM file_state WHERE repo_id = '{repo_id}' AND path IN ({paths}) \
 UNION \
 SELECT DISTINCT blob_sha FROM artefact_snapshots WHERE repo_id = '{repo_id}' AND path IN ({paths}) \
 UNION \
@@ -267,38 +310,61 @@ UNION \
 SELECT DISTINCT blob_sha_after AS blob_sha FROM checkpoint_files WHERE repo_id = '{repo_id}' AND path_after IN ({paths}) AND blob_sha_after IS NOT NULL \
 UNION \
 SELECT DISTINCT copy_source_blob_sha AS blob_sha FROM checkpoint_files WHERE repo_id = '{repo_id}' AND copy_source_path IN ({paths}) AND copy_source_blob_sha IS NOT NULL"
-    )
+        ),
+    )]
 }
 
-fn excluded_content_ids_sql(repo_id: &str, paths: &BTreeSet<String>) -> String {
+fn excluded_content_id_queries(
+    repo_id: &str,
+    paths: &BTreeSet<String>,
+) -> Vec<(RelationalStorageRole, String)> {
     let repo_id = esc_pg(repo_id);
     let paths = quoted_sql_list(paths).unwrap_or_default();
-    format!(
-        "SELECT DISTINCT head_content_id AS content_id FROM current_file_state WHERE repo_id = '{repo_id}' AND path IN ({paths}) AND head_content_id IS NOT NULL \
+    vec![(
+        RelationalStorageRole::CurrentProjection,
+        format!(
+            "SELECT DISTINCT head_content_id AS content_id FROM current_file_state WHERE repo_id = '{repo_id}' AND path IN ({paths}) AND head_content_id IS NOT NULL \
 UNION \
 SELECT DISTINCT index_content_id AS content_id FROM current_file_state WHERE repo_id = '{repo_id}' AND path IN ({paths}) AND index_content_id IS NOT NULL \
 UNION \
 SELECT DISTINCT worktree_content_id AS content_id FROM current_file_state WHERE repo_id = '{repo_id}' AND path IN ({paths}) AND worktree_content_id IS NOT NULL \
 UNION \
 SELECT DISTINCT effective_content_id AS content_id FROM current_file_state WHERE repo_id = '{repo_id}' AND path IN ({paths}) AND effective_content_id IS NOT NULL"
-    )
+        ),
+    )]
 }
 
-fn build_purge_statements(
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PurgeStatementsByRole {
+    current_projection: Vec<String>,
+    shared_relational: Vec<String>,
+}
+
+impl PurgeStatementsByRole {
+    fn is_empty(&self) -> bool {
+        self.current_projection.is_empty() && self.shared_relational.is_empty()
+    }
+
+    fn statements_for(&self, role: RelationalStorageRole) -> &[String] {
+        match role {
+            RelationalStorageRole::CurrentProjection => &self.current_projection,
+            RelationalStorageRole::SharedRelational => &self.shared_relational,
+        }
+    }
+}
+
+fn build_purge_statements_by_role(
     repo_id: &str,
     paths: &BTreeSet<String>,
     artefact_ids: &BTreeSet<String>,
     blob_shas: &BTreeSet<String>,
     content_ids: &BTreeSet<String>,
-) -> Vec<String> {
+) -> PurgeStatementsByRole {
     let Some(paths_sql) = quoted_sql_list(paths) else {
-        return Vec::new();
+        return PurgeStatementsByRole::default();
     };
     let repo_id = esc_pg(repo_id);
-    let mut statements = vec![
-        format!(
-            "DELETE FROM checkpoint_files WHERE repo_id = '{repo_id}' AND (path_before IN ({paths_sql}) OR path_after IN ({paths_sql}) OR copy_source_path IN ({paths_sql}))"
-        ),
+    let mut current_projection = vec![
         format!(
             "DELETE FROM current_file_state WHERE repo_id = '{repo_id}' AND path IN ({paths_sql})"
         ),
@@ -308,10 +374,6 @@ fn build_purge_statements(
         format!(
             "DELETE FROM artefact_edges_current WHERE repo_id = '{repo_id}' AND path IN ({paths_sql})"
         ),
-        format!("DELETE FROM file_state WHERE repo_id = '{repo_id}' AND path IN ({paths_sql})"),
-        format!(
-            "DELETE FROM artefact_snapshots WHERE repo_id = '{repo_id}' AND path IN ({paths_sql})"
-        ),
         format!(
             "DELETE FROM symbol_semantics_current WHERE repo_id = '{repo_id}' AND path IN ({paths_sql})"
         ),
@@ -320,6 +382,15 @@ fn build_purge_statements(
         ),
         format!(
             "DELETE FROM symbol_embeddings_current WHERE repo_id = '{repo_id}' AND path IN ({paths_sql})"
+        ),
+    ];
+    let mut shared_relational = vec![
+        format!(
+            "DELETE FROM checkpoint_files WHERE repo_id = '{repo_id}' AND (path_before IN ({paths_sql}) OR path_after IN ({paths_sql}) OR copy_source_path IN ({paths_sql}))"
+        ),
+        format!("DELETE FROM file_state WHERE repo_id = '{repo_id}' AND path IN ({paths_sql})"),
+        format!(
+            "DELETE FROM artefact_snapshots WHERE repo_id = '{repo_id}' AND path IN ({paths_sql})"
         ),
     ];
 
@@ -338,19 +409,19 @@ fn build_purge_statements(
             .map(|ids| format!("blob_sha IN ({ids})")),
     ]);
     if let Some(conditions) = historical_edge_conditions {
-        statements.push(format!(
+        shared_relational.push(format!(
             "DELETE FROM artefact_edges WHERE repo_id = '{repo_id}' AND ({conditions})"
         ));
     }
 
     if let Some(ids) = artefact_ids_sql.as_ref() {
-        statements.push(format!(
+        shared_relational.push(format!(
             "DELETE FROM checkpoint_artefacts WHERE repo_id = '{repo_id}' AND (before_artefact_id IN ({ids}) OR after_artefact_id IN ({ids}))"
         ));
-        statements.push(format!(
+        shared_relational.push(format!(
             "DELETE FROM checkpoint_artefact_lineage WHERE repo_id = '{repo_id}' AND (source_artefact_id IN ({ids}) OR dest_artefact_id IN ({ids}))"
         ));
-        statements.push(format!(
+        shared_relational.push(format!(
             "DELETE FROM artefacts WHERE repo_id = '{repo_id}' AND artefact_id IN ({ids})"
         ));
     }
@@ -359,13 +430,13 @@ fn build_purge_statements(
         .as_ref()
         .map(|ids| format!("artefact_id IN ({ids})"))]);
     if let Some(conditions) = historical_semantic_conditions {
-        statements.push(format!(
+        shared_relational.push(format!(
             "DELETE FROM symbol_semantics WHERE repo_id = '{repo_id}' AND ({conditions})"
         ));
-        statements.push(format!(
+        shared_relational.push(format!(
             "DELETE FROM symbol_features WHERE repo_id = '{repo_id}' AND ({conditions})"
         ));
-        statements.push(format!(
+        shared_relational.push(format!(
             "DELETE FROM symbol_embeddings WHERE repo_id = '{repo_id}' AND ({conditions})"
         ));
     }
@@ -392,18 +463,21 @@ OR c.index_content_id = content_cache_edges.content_id \
 OR c.worktree_content_id = content_cache_edges.content_id \
 OR c.effective_content_id = content_cache_edges.content_id))"
         );
-        statements.push(format!(
+        current_projection.push(format!(
             "DELETE FROM content_cache_artefacts WHERE content_id IN ({content_ids_sql}) AND {artefacts_unreferenced}"
         ));
-        statements.push(format!(
+        current_projection.push(format!(
             "DELETE FROM content_cache_edges WHERE content_id IN ({content_ids_sql}) AND {edges_unreferenced}"
         ));
-        statements.push(format!(
+        current_projection.push(format!(
             "DELETE FROM content_cache WHERE content_id IN ({content_ids_sql}) AND {content_unreferenced}"
         ));
     }
 
-    statements
+    PurgeStatementsByRole {
+        current_projection,
+        shared_relational,
+    }
 }
 
 fn quoted_sql_list(values: &BTreeSet<String>) -> Option<String> {
@@ -433,6 +507,7 @@ fn join_or_conditions<const N: usize>(conditions: [Option<String>; N]) -> Option
 mod tests {
     use super::*;
     use crate::config::REPO_POLICY_FILE_NAME;
+    use crate::host::devql::RelationalStorageRole;
 
     #[test]
     fn scope_exclusion_fingerprint_changes_when_exclude_file_content_changes() {
@@ -462,6 +537,51 @@ mod tests {
         assert_ne!(
             first, second,
             "exclude file content should change fingerprint"
+        );
+    }
+
+    #[test]
+    fn purge_statements_are_split_by_storage_role() {
+        let paths = BTreeSet::from(["src/lib.rs".to_string()]);
+        let artefact_ids = BTreeSet::from(["artefact-1".to_string()]);
+        let blob_shas = BTreeSet::from(["blob-1".to_string()]);
+        let content_ids = BTreeSet::from(["content-1".to_string()]);
+
+        let statements = build_purge_statements_by_role(
+            "repo-1",
+            &paths,
+            &artefact_ids,
+            &blob_shas,
+            &content_ids,
+        );
+
+        assert!(
+            statements
+                .statements_for(RelationalStorageRole::CurrentProjection)
+                .iter()
+                .any(|sql| sql.contains("DELETE FROM artefacts_current")),
+            "current-projection deletes should stay on the current-projection role"
+        );
+        assert!(
+            statements
+                .statements_for(RelationalStorageRole::CurrentProjection)
+                .iter()
+                .all(|sql| !sql.contains("DELETE FROM artefacts ")),
+            "shared relational deletes should not be mixed into current-projection writes"
+        );
+        assert!(
+            statements
+                .statements_for(RelationalStorageRole::SharedRelational)
+                .iter()
+                .any(|sql| sql.contains("DELETE FROM artefacts ")),
+            "shared relational deletes should be routed separately"
+        );
+        assert!(
+            statements
+                .statements_for(RelationalStorageRole::SharedRelational)
+                .iter()
+                .all(|sql| !sql.contains("DELETE FROM artefacts_current")),
+            "current-projection deletes should not be mirrored into shared relational writes"
         );
     }
 }

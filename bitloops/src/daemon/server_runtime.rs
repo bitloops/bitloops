@@ -314,7 +314,7 @@ pub(super) fn ensure_can_start(repo_root: &Path, allow_stopped_service: bool) ->
         && supervisor_running
     {
         bail!(
-            "Bitloops daemon is already running as an always-on service ({}) for this repository.",
+            "Bitloops daemon is managed by the always-on service ({}), but no daemon runtime is currently attached. Start it with `bitloops start` or stop/uninstall the service before starting a detached daemon.",
             metadata.service_name
         );
     }

@@ -24,7 +24,9 @@ use crate::capability_packs::semantic_clones::{
     parse_semantic_index_state_rows,
 };
 use crate::config::resolve_store_backend_config_for_repo;
-use crate::host::devql::{DevqlConfig, RelationalStorage, build_capability_host, esc_pg};
+use crate::host::devql::{
+    DevqlConfig, RelationalStorage, RelationalStorageRole, build_capability_host, esc_pg,
+};
 use crate::host::runtime_store::{
     SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind, SemanticSummaryMailboxItemInsert,
 };
@@ -203,6 +205,17 @@ where
     dedupe_inputs_by_artefact_id(&mut expanded_inputs);
 
     let mut semantic_statements = Vec::new();
+    let mut remote_semantic_statements = Vec::new();
+    let shared_dialect = relational.dialect_for_role(RelationalStorageRole::SharedRelational);
+    let shared_writes_remote = relational.has_remote_shared_relational_authority();
+    let push_shared_statement =
+        |local: &mut Vec<String>, remote: &mut Vec<String>, statement: String| {
+            if shared_writes_remote {
+                remote.push(statement);
+            } else {
+                local.push(statement);
+            }
+        };
     let mut embedding_follow_ups = Vec::new();
     for input in &expanded_inputs {
         let persist_summaries = summary_provider.provider.persists_summaries_for(input);
@@ -210,7 +223,10 @@ where
             build_semantic_feature_input_hash(input, summary_provider.provider.as_ref());
         let state = parse_semantic_index_state_rows(
             &relational
-                .query_rows(&build_semantic_get_index_state_sql(&input.artefact_id))
+                .query_rows_for_role(
+                    RelationalStorageRole::SharedRelational,
+                    &build_semantic_get_index_state_sql(&input.artefact_id),
+                )
                 .await?,
         );
         if !semantic_features_require_reindex(
@@ -219,13 +235,15 @@ where
             summary_provider.provider.requires_model_output(),
             persist_summaries,
         ) {
-            semantic_statements.push(
-                build_repair_current_semantic_projection_from_historical_sql(
-                    &input.repo_id,
-                    std::slice::from_ref(&input.artefact_id),
-                    relational.dialect(),
-                ),
-            );
+            if !shared_writes_remote {
+                semantic_statements.push(
+                    build_repair_current_semantic_projection_from_historical_sql(
+                        &input.repo_id,
+                        std::slice::from_ref(&input.artefact_id),
+                        relational.dialect(),
+                    ),
+                );
+            }
             if !persist_summaries {
                 semantic_statements.push(build_delete_current_symbol_semantics_for_artefact_sql(
                     &input.repo_id,
@@ -250,10 +268,11 @@ where
         .context("building semantic summary rows on blocking worker")?;
         ensure_required_llm_summary_output(&rows, summary_provider.provider.as_ref())?;
         if persist_summaries {
-            semantic_statements.push(build_semantic_persist_rows_sql(
-                &rows,
-                relational.dialect(),
-            )?);
+            push_shared_statement(
+                &mut semantic_statements,
+                &mut remote_semantic_statements,
+                build_semantic_persist_rows_sql(&rows, shared_dialect)?,
+            );
             semantic_statements.push(build_conditional_current_semantic_persist_rows_sql(
                 &rows,
                 input,
@@ -263,10 +282,11 @@ where
                 embedding_follow_ups.push(summary_embedding_follow_up_for(input));
             }
         } else {
-            semantic_statements.push(build_symbol_feature_persist_rows_sql(
-                &rows,
-                relational.dialect(),
-            )?);
+            push_shared_statement(
+                &mut semantic_statements,
+                &mut remote_semantic_statements,
+                build_symbol_feature_persist_rows_sql(&rows, shared_dialect)?,
+            );
             semantic_statements.push(build_conditional_current_symbol_feature_persist_rows_sql(
                 &rows,
                 input,
@@ -291,6 +311,7 @@ where
             },
             lease_token: batch.lease_token.clone(),
             semantic_statements,
+            remote_semantic_statements,
             embedding_follow_ups,
             replacement_backfill_item,
             acked_item_ids: batch

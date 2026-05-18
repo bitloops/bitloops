@@ -23,7 +23,9 @@ pub(crate) use self::queries::{
     build_semantic_get_dependencies_sql, build_semantic_get_summary_sql,
     parse_semantic_artefact_rows, parse_semantic_dependency_rows,
 };
+#[cfg(test)]
+pub(crate) use self::schema_sql::semantic_features_postgres_schema_sql;
 pub(crate) use self::schema_sql::{
-    semantic_features_postgres_schema_sql, semantic_features_postgres_upgrade_sql,
-    semantic_features_sqlite_schema_sql, upgrade_sqlite_semantic_features_schema,
+    semantic_features_postgres_upgrade_sql, semantic_features_sqlite_schema_sql,
+    upgrade_sqlite_semantic_features_schema,
 };

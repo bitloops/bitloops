@@ -101,8 +101,8 @@ pub(crate) async fn execute_checkpoint_file_snapshot_backfill_with_relational(
         .collect::<Vec<_>>();
     let commit_map = collect_checkpoint_commit_map(&cfg.repo_root)?;
     let mut sqlite_statements = Vec::new();
-    let mut postgres_statements = Vec::new();
     let mut checkpoints_in_batch = 0usize;
+    let shared_dialect = relational.dialect_for_role(RelationalStorageRole::SharedRelational);
 
     for checkpoint in checkpoints {
         summary.checkpoints_scanned += 1;
@@ -185,81 +185,35 @@ pub(crate) async fn execute_checkpoint_file_snapshot_backfill_with_relational(
                     &checkpoint.checkpoint_id,
                 ),
             );
-            if relational.remote.is_some() {
-                postgres_statements.push(
-                    crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_lineage_rows_sql(
-                        &cfg.repo.repo_id,
-                        &checkpoint.checkpoint_id,
-                    ),
-                );
-                postgres_statements.push(
-                    crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_rows_sql(
-                        &cfg.repo.repo_id,
-                        &checkpoint.checkpoint_id,
-                    ),
-                );
-                postgres_statements.push(
-                    crate::host::devql::checkpoint_provenance::delete_checkpoint_file_rows_sql(
-                        &cfg.repo.repo_id,
-                        &checkpoint.checkpoint_id,
-                    ),
-                );
-            }
-
             for row in &file_rows {
                 sqlite_statements.push(
                     crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_file_row_sql(
                         row,
-                        RelationalDialect::Sqlite,
+                        shared_dialect,
                     ),
                 );
-                if relational.remote.is_some() {
-                    postgres_statements.push(
-                        crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_file_row_sql(
-                            row,
-                            RelationalDialect::Postgres,
-                        ),
-                    );
-                }
             }
             for row in &artefact_provenance.semantic_rows {
                 sqlite_statements.push(
                     crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
                         row,
-                        RelationalDialect::Sqlite,
+                        shared_dialect,
                     ),
                 );
-                if relational.remote.is_some() {
-                    postgres_statements.push(
-                        crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
-                            row,
-                            RelationalDialect::Postgres,
-                        ),
-                    );
-                }
             }
             for row in &artefact_provenance.lineage_rows {
                 sqlite_statements.push(
                     crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
                         row,
-                        RelationalDialect::Sqlite,
+                        shared_dialect,
                     ),
                 );
-                if relational.remote.is_some() {
-                    postgres_statements.push(
-                        crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
-                            row,
-                            RelationalDialect::Postgres,
-                        ),
-                    );
-                }
             }
             summary.stale_rows_deleted += stale_rows;
         }
 
         if checkpoints_in_batch >= options.batch_size {
-            flush_projection_batch(relational, &mut sqlite_statements, &mut postgres_statements)
-                .await?;
+            flush_projection_batch(relational, &mut sqlite_statements).await?;
             checkpoints_in_batch = 0;
             if options.emit_progress {
                 println!(
@@ -276,7 +230,7 @@ pub(crate) async fn execute_checkpoint_file_snapshot_backfill_with_relational(
         }
     }
 
-    flush_projection_batch(relational, &mut sqlite_statements, &mut postgres_statements).await?;
+    flush_projection_batch(relational, &mut sqlite_statements).await?;
     summary.success = true;
     Ok(summary)
 }
@@ -334,7 +288,9 @@ async fn load_existing_checkpoint_file_relation_ids(
         esc_pg(repo_id),
         esc_pg(checkpoint_id),
     );
-    let rows = relational.query_rows(&sql).await?;
+    let rows = relational
+        .query_rows_for_role(RelationalStorageRole::SharedRelational, &sql)
+        .await?;
     Ok(rows
         .into_iter()
         .filter_map(|row| {
@@ -348,19 +304,15 @@ async fn load_existing_checkpoint_file_relation_ids(
 async fn flush_projection_batch(
     relational: &RelationalStorage,
     sqlite_statements: &mut Vec<String>,
-    postgres_statements: &mut Vec<String>,
 ) -> Result<()> {
     if !sqlite_statements.is_empty() {
         relational
-            .exec_batch_transactional(sqlite_statements)
+            .exec_batch_transactional_for_role(
+                RelationalStorageRole::SharedRelational,
+                sqlite_statements,
+            )
             .await?;
         sqlite_statements.clear();
-    }
-    if relational.remote.is_some() && !postgres_statements.is_empty() {
-        relational
-            .exec_remote_batch_transactional(postgres_statements)
-            .await?;
-        postgres_statements.clear();
     }
     Ok(())
 }

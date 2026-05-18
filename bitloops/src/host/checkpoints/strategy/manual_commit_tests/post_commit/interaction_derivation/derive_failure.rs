@@ -68,7 +68,7 @@ pub(crate) fn derive_post_commit_errors_when_overlapping_turn_is_missing_transcr
 }
 
 #[test]
-pub(crate) fn derive_post_commit_returns_none_when_spool_flush_fails_without_local_turn_data() {
+pub(crate) fn derive_post_commit_errors_when_spool_flush_fails_without_local_turn_data() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     init_devql_schema(dir.path());
@@ -82,7 +82,7 @@ pub(crate) fn derive_post_commit_returns_none_when_spool_flush_fails_without_loc
         .with_flush_error("forced flush failure");
 
     let strategy = ManualCommitStrategy::new(dir.path());
-    let checkpoint_id = strategy
+    let err = strategy
         .derive_post_commit_from_interaction_sources(
             "deadbeef",
             &HashSet::new(),
@@ -90,10 +90,10 @@ pub(crate) fn derive_post_commit_returns_none_when_spool_flush_fails_without_loc
             &repository,
             Some(&spool),
         )
-        .expect("empty local spool fallback should not error");
+        .expect_err("flush failure should not degrade to local spool authority even without local turn rows");
     assert!(
-        checkpoint_id.is_none(),
-        "flush fallback should return no checkpoint when the local spool has no usable turns"
+        format!("{err:#}").contains("flushing interaction spool before post_commit derivation"),
+        "unexpected error: {err:#}"
     );
 }
 

@@ -77,7 +77,7 @@ fn semantic_feature_persistence_builds_get_artefacts_by_ids_sql_with_escaped_val
 fn semantic_feature_persistence_builds_current_repo_artefacts_sql_without_id_in_clause() {
     let sql = build_current_repo_artefacts_sql("repo'1");
     assert!(sql.contains("FROM artefacts_current current"));
-    assert!(sql.contains("LEFT JOIN artefacts a ON a.repo_id = current.repo_id"));
+    assert!(sql.contains("current.content_id AS content_hash"));
     assert!(sql.contains("WHERE current.repo_id = 'repo''1'"));
     assert!(!sql.contains("WHERE artefact_id IN"));
 }

@@ -1382,6 +1382,7 @@ type HealthStatus {
 	relational: HealthBackendStatus!
 	events: HealthBackendStatus!
 	blob: HealthBackendStatus!
+	storageAuthorities: [StorageAuthorityStatus!]!
 }
 
 type HttpBundle {
@@ -2115,6 +2116,12 @@ type RevokeArchitectureGraphAssertionResult {
 
 enum SaveSelector {
 	CURRENT
+}
+
+type StorageAuthorityStatus {
+	family: String!
+	authority: String!
+	backend: String!
 }
 
 type SubscriptionRoot {

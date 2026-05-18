@@ -549,7 +549,7 @@ fn runtime_exposes_repo_repo_root_and_config_view() {
 }
 
 #[test]
-fn apply_devql_sqlite_ddl_noops_when_postgres_configured() {
+fn apply_devql_sqlite_ddl_uses_local_projection_when_postgres_is_configured() {
     let temp = tempdir().expect("tempdir");
     let repo_root = temp.path();
     let repo = test_repo_identity(repo_root);
@@ -598,10 +598,20 @@ fn apply_devql_sqlite_ddl_noops_when_postgres_configured() {
     assert!(!sqlite_path.exists());
 
     runtime
-        .apply_devql_sqlite_ddl("CREATE TABLE should_not_exist (id INTEGER PRIMARY KEY);")
+        .apply_devql_sqlite_ddl("CREATE TABLE should_exist (id INTEGER PRIMARY KEY);")
         .expect("postgres mode should not error");
 
-    assert!(!sqlite_path.exists());
+    assert!(sqlite_path.exists());
+
+    let conn = rusqlite::Connection::open(sqlite_path).expect("open devql sqlite");
+    let table_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'should_exist'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count created tables");
+    assert_eq!(table_count, 1);
 }
 
 #[test]

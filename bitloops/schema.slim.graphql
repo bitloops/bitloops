@@ -1534,6 +1534,7 @@ type HealthStatus {
 	relational: HealthBackendStatus!
 	events: HealthBackendStatus!
 	blob: HealthBackendStatus!
+	storageAuthorities: [StorageAuthorityStatus!]!
 }
 
 type HistoricalContextItem {
@@ -2329,6 +2330,12 @@ type SlimQueryRoot {
 type SlimSubscriptionRoot {
 	checkpointIngested: Checkpoint!
 	taskProgress(taskId: String!): TaskProgressEvent!
+}
+
+type StorageAuthorityStatus {
+	family: String!
+	authority: String!
+	backend: String!
 }
 
 type SummaryBootstrapProgress {
