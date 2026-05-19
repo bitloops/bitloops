@@ -466,6 +466,109 @@ fn daemon_runtime_store_mutations_wait_for_shared_sqlite_write_lock() {
 }
 
 #[test]
+fn repo_runtime_store_reopen_does_not_wait_for_existing_schema_write_lock() {
+    let dir = TempDir::new().expect("tempdir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+
+    let store =
+        RepoSqliteRuntimeStore::open_for_roots_with_repo_id(&config_root, &repo_root, "repo-known")
+            .expect("open repo runtime store");
+    let db_path = store.db_path().to_path_buf();
+    let held_lock = crate::storage::sqlite::hold_sqlite_write_lock_until_release(db_path)
+        .expect("hold sqlite write lock");
+    let config_root_for_worker = config_root.clone();
+    let repo_root_for_worker = repo_root.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal reopen started");
+        done_tx
+            .send(
+                RepoSqliteRuntimeStore::open_for_roots_with_repo_id(
+                    &config_root_for_worker,
+                    &repo_root_for_worker,
+                    "repo-known",
+                )
+                .map(|_| ()),
+            )
+            .expect("send reopen result");
+    });
+    started_rx.recv().expect("wait for reopen start");
+    let completed_while_locked = match done_rx.recv_timeout(Duration::from_millis(200)) {
+        Ok(result) => {
+            result.expect("reopen repo runtime store");
+            true
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("reopen worker disconnected before reporting result");
+        }
+    };
+    held_lock.release().expect("release sqlite write lock");
+    if !completed_while_locked {
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("wait for reopen result after releasing lock")
+            .expect("reopen repo runtime store after releasing lock");
+    }
+    worker.join().expect("join reopen worker");
+    assert!(
+        completed_while_locked,
+        "re-opening a repo runtime store with an existing schema should not wait for the shared SQLite write lock"
+    );
+}
+
+#[test]
+fn daemon_runtime_store_read_does_not_wait_for_existing_schema_write_lock() {
+    let state_dir = TempDir::new().expect("tempdir");
+    with_env_var(
+        "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+        Some(state_dir.path().to_string_lossy().as_ref()),
+        || {
+            let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
+            let db_path = store.db_path().to_path_buf();
+            let held_lock = crate::storage::sqlite::hold_sqlite_write_lock_until_release(db_path)
+                .expect("hold sqlite write lock");
+            let store_for_read = store.clone();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                started_tx.send(()).expect("signal read started");
+                done_tx
+                    .send(store_for_read.runtime_state_exists())
+                    .expect("send read result");
+            });
+            started_rx.recv().expect("wait for read start");
+            let completed_while_locked = match done_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(result) => {
+                    result.expect("read daemon runtime state exists");
+                    true
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("read worker disconnected before reporting result");
+                }
+            };
+            held_lock.release().expect("release sqlite write lock");
+            if !completed_while_locked {
+                done_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("wait for read result after releasing lock")
+                    .expect("read daemon runtime state exists after releasing lock");
+            }
+            worker.join().expect("join read worker");
+            assert!(
+                completed_while_locked,
+                "read-only daemon runtime-store access should not wait for the shared SQLite write lock once schema exists"
+            );
+        },
+    );
+}
+
+#[test]
 fn persisted_capability_event_queue_state_default_preserves_legacy_values() {
     let default = PersistedCapabilityEventQueueState::default();
     assert_eq!(default.version, 1);

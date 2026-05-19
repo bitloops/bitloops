@@ -4,6 +4,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result, anyhow};
 
+#[path = "embeddings_bootstrap/config_path.rs"]
+mod config_path;
+
 use crate::cli::embeddings::{
     PulledEmbeddingProfileOutcome, embedding_capability_for_config_path,
     ensure_managed_embeddings_runtime_with_progress,
@@ -28,6 +31,7 @@ use crate::host::inference::{
     BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID,
 };
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
+use config_path::{canonical_config_path, config_path_key};
 
 const DEFAULT_PLATFORM_GATEWAY_API_KEY_ENV: &str = "BITLOOPS_PLATFORM_GATEWAY_TOKEN";
 
@@ -239,6 +243,25 @@ pub(crate) fn gate_status_for_config_path(
             blocked: false,
             readiness: Some(EmbeddingsBootstrapReadiness::Ready),
             reason: Some(format!("Managed embeddings runtime {version} is ready")),
+            active_task_id: None,
+            profile_name: Some(profile_name),
+            config_path: Some(config_path),
+            last_error: None,
+            last_updated_unix,
+        });
+    }
+
+    if !matches!(
+        persisted_entry.map(|entry| entry.readiness),
+        Some(EmbeddingsBootstrapReadiness::Failed)
+    ) {
+        return Ok(EmbeddingsBootstrapGateStatus {
+            blocked: false,
+            readiness: Some(EmbeddingsBootstrapReadiness::Ready),
+            reason: Some(
+                "Embeddings runtime command is configured and no active bootstrap task is pending"
+                    .to_string(),
+            ),
             active_task_id: None,
             profile_name: Some(profile_name),
             config_path: Some(config_path),
@@ -756,15 +779,9 @@ fn config_lock_for(config_key: &str) -> Arc<Mutex<()>> {
     )
 }
 
-fn canonical_config_path(config_path: &Path) -> PathBuf {
-    config_path
-        .canonicalize()
-        .unwrap_or_else(|_| config_path.to_path_buf())
-}
-
-fn config_path_key(config_path: &Path) -> String {
-    canonical_config_path(config_path).display().to_string()
-}
+#[cfg(test)]
+#[path = "embeddings_bootstrap/alias_tests.rs"]
+mod alias_tests;
 
 #[cfg(test)]
 mod tests {
