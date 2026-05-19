@@ -6,6 +6,7 @@ const ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_QAT: &str =
     "architecture_graph.role_adjudication";
 const ARCHITECTURE_ROLE_ADJUDICATION_MAILBOX_QAT: &str =
     "architecture_graph.roles.adjudication";
+const ARCHITECTURE_ROLE_SEED_REQUEST_LOG_QAT: &str = "architecture-role-seed-requests.log";
 
 pub fn create_architecture_role_intelligence_fixture_modules(
     world: &mut QatWorld,
@@ -109,6 +110,39 @@ pub fn run_architecture_role_seed(world: &mut QatWorld, repo_name: &str) -> Resu
         "bitloops devql architecture roles seed",
     )
     .map(|_| ())
+}
+
+pub fn assert_architecture_role_seed_inference_requests_below_bytes(
+    world: &QatWorld,
+    max_bytes: usize,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let log_path = architecture_role_seed_request_log_path(world);
+    let contents = fs::read_to_string(&log_path)
+        .with_context(|| format!("reading {}", log_path.display()))?;
+    let mut request_count = 0usize;
+    for (line_index, line) in contents.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        request_count += 1;
+        let byte_len = line.as_bytes().len();
+        ensure!(
+            byte_len < max_bytes,
+            "architecture role seed infer request line {} is {} bytes, expected below {} bytes in {}",
+            line_index + 1,
+            byte_len,
+            max_bytes,
+            log_path.display()
+        );
+    }
+    ensure!(
+        request_count > 0,
+        "expected at least one architecture role seed infer request in {}",
+        log_path.display()
+    );
+    Ok(())
 }
 
 pub fn run_architecture_roles_bootstrap(world: &mut QatWorld, repo_name: &str) -> Result<()> {
@@ -1499,6 +1533,13 @@ fn deterministic_architecture_role_adjudication_payload(role_id: &str) -> serde_
     })
 }
 
+fn architecture_role_seed_request_log_path(world: &QatWorld) -> std::path::PathBuf {
+    world
+        .run_dir()
+        .join("capability-runtime")
+        .join(ARCHITECTURE_ROLE_SEED_REQUEST_LOG_QAT)
+}
+
 #[cfg(unix)]
 fn fake_architecture_structured_runtime_command_and_args(
     world: &QatWorld,
@@ -1513,6 +1554,13 @@ fn fake_architecture_structured_runtime_command_and_args(
         .run_dir()
         .join("capability-runtime")
         .join(format!("fake-{script_name}-runtime.sh"));
+    let request_log_path = if script_name == "architecture-role-seed" {
+        architecture_role_seed_request_log_path(world)
+            .display()
+            .to_string()
+    } else {
+        String::new()
+    };
     let payload_json = serde_json::to_string(payload)?;
     let role_payload_json = serde_json::to_string(&serde_json::json!({
         "roles": payload
@@ -1539,6 +1587,7 @@ rule_payload=$(cat <<'JSON'
 __RULE_PAYLOAD_JSON__
 JSON
 )
+request_log_path="__REQUEST_LOG_PATH__"
 while IFS= read -r line; do
   request_id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
   case "$line" in
@@ -1550,6 +1599,9 @@ while IFS= read -r line; do
       exit 0
       ;;
     *'"type":"infer"'*)
+      if [ -n "$request_log_path" ]; then
+        printf '%s\n' "$line" >> "$request_log_path"
+      fi
       case "$line" in
         *'"seed_phase":"roles"'*) selected_payload="$role_payload" ;;
         *'"seed_phase":"rules"'*) selected_payload="$rule_payload" ;;
@@ -1563,6 +1615,7 @@ done
     .replace("__PAYLOAD_JSON__", &payload_json)
     .replace("__ROLE_PAYLOAD_JSON__", &role_payload_json)
     .replace("__RULE_PAYLOAD_JSON__", &rule_payload_json)
+    .replace("__REQUEST_LOG_PATH__", &request_log_path)
     .replace("__PROFILE_NAME__", profile_name)
     .replace("__MODEL_NAME__", model_name);
 
@@ -1594,6 +1647,14 @@ fn fake_architecture_structured_runtime_command_and_args(
         .run_dir()
         .join("capability-runtime")
         .join(format!("fake-{script_name}-runtime.ps1"));
+    let request_log_path = if script_name == "architecture-role-seed" {
+        architecture_role_seed_request_log_path(world)
+            .display()
+            .to_string()
+            .replace('\'', "''")
+    } else {
+        String::new()
+    };
     let payload_json = serde_json::to_string(payload)?;
     let role_payload_json = serde_json::to_string(&serde_json::json!({
         "roles": payload
@@ -1617,6 +1678,7 @@ __ROLE_PAYLOAD_JSON__
 $rulePayload = @'
 __RULE_PAYLOAD_JSON__
 '@
+$requestLogPath = '__REQUEST_LOG_PATH__'
 while (($line = [Console]::In.ReadLine()) -ne $null) {
   if ([string]::IsNullOrWhiteSpace($line)) { continue }
   $requestId = [regex]::Match($line, '"request_id":"([^"]+)"').Groups[1].Value
@@ -1626,6 +1688,9 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     Write-Output '{"type":"shutdown","request_id":"'"$requestId"'"}'
     exit 0
   } elseif ($line -like '*"type":"infer"*') {
+    if (-not [string]::IsNullOrWhiteSpace($requestLogPath)) {
+      Add-Content -LiteralPath $requestLogPath -Value $line
+    }
     if ($line -like '*"seed_phase":"roles"*') {
       $selectedPayload = $rolePayload
     } elseif ($line -like '*"seed_phase":"rules"*') {
@@ -1640,6 +1705,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     .replace("__PAYLOAD_JSON__", &payload_json)
     .replace("__ROLE_PAYLOAD_JSON__", &role_payload_json)
     .replace("__RULE_PAYLOAD_JSON__", &rule_payload_json)
+    .replace("__REQUEST_LOG_PATH__", &request_log_path)
     .replace("__PROFILE_NAME__", profile_name)
     .replace("__MODEL_NAME__", model_name);
 

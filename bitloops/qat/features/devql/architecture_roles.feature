@@ -12,10 +12,11 @@ Feature: Architecture role intelligence
     And I configure deterministic architecture role inference in bitloops
     And I enqueue DevQL sync task with status in bitloops
 
-  @devql @architecture_roles
+  @devql @architecture_roles @architecture_roles_seed_budget
   Scenario: Seeded taxonomy and deterministic rules classify canonical artefacts
     When I bootstrap architecture roles in bitloops
-    Then architecture roles include canonical keys "process_entrypoint,runtime_bootstrapper,cli_command_grammar,command_dispatcher,storage_adapter,current_state_consumer,capability_registration,provider_adapter" in bitloops
+    Then architecture role seed inference requests are below 100000 bytes in bitloops
+    And architecture roles include canonical keys "process_entrypoint,runtime_bootstrapper,cli_command_grammar,command_dispatcher,storage_adapter,current_state_consumer,capability_registration,provider_adapter" in bitloops
     And architecture role facts include path "crates/bitloops-inference/src/main.rs" in bitloops
     And architecture role facts include path "crates/bitloops-inference/src/runtime.rs" in bitloops
     And architecture role facts include path "crates/bitloops-inference/src/cli.rs" in bitloops

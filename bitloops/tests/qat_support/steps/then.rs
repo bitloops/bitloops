@@ -375,6 +375,28 @@ pub(super) fn then_architecture_role_classification_output_wrote_at_least_role_a
     })
 }
 
+pub(super) fn then_architecture_role_seed_inference_requests_below_bytes(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let max_bytes_raw = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        let result = max_bytes_raw
+            .parse::<usize>()
+            .with_context(|| format!("parsing seed inference byte limit `{max_bytes_raw}`"))
+            .and_then(|max_bytes| {
+                helpers::assert_architecture_role_seed_inference_requests_below_bytes(
+                    world, max_bytes, &repo_name,
+                )
+            });
+        run_step(
+            "architecture role seed inference requests are below byte limit",
+            result,
+        );
+    })
+}
+
 pub(super) fn then_architecture_role_adjudication_queue_has_no_job_for_path(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

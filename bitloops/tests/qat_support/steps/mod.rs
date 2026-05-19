@@ -961,6 +961,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^architecture role seed inference requests are below ([0-9]+) bytes in (\S+)$"),
+            step_fn(then_architecture_role_seed_inference_requests_below_bytes),
+        )
+        .then(
+            None,
             regex(r#"^architecture role adjudication queue has no job for path \"([^\"]+)\" in (\S+)$"#),
             step_fn(then_architecture_role_adjudication_queue_has_no_job_for_path),
         )
