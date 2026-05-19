@@ -1129,7 +1129,7 @@ fn cpp_canonical_mapping_covers_supported_kind_table() {
             LanguageKind::cpp(CppKind::UsingDeclaration),
             false,
             true,
-            Some("import"),
+            None,
         ),
         (
             LanguageKind::cpp(CppKind::ClassSpecifier),

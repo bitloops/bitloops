@@ -391,4 +391,151 @@ int main() { return 0; }
                 && artefact.name == "main"
         }));
     }
+
+    #[test]
+    fn extract_cpp_artefacts_collect_every_supported_cpp_artefact_kind() {
+        let content = r#"#include <vector>
+namespace app {
+class Namespaced {};
+}
+
+typedef int Count;
+
+enum class Status {
+    Ready,
+};
+
+struct Helper {
+    Count value;
+};
+
+template <typename T>
+class Box {
+public:
+    T item;
+};
+
+class UserService {
+public:
+    Helper helper;
+    Status run(Helper input);
+};
+
+Status UserService::run(Helper input) {
+    return Status::Ready;
+}
+
+int make_count(Count value) {
+    return value;
+}
+"#;
+        let path = "src/main.cpp";
+        let artefacts = extract_cpp_artefacts(content, path).expect("extracts cpp");
+
+        let include = artefacts
+            .iter()
+            .find(|artefact| artefact.language_kind == LanguageKind::cpp(CppKind::PreprocInclude))
+            .expect("expected include artefact");
+        assert_eq!(include.name, "include@1");
+        assert_eq!(include.canonical_kind.as_deref(), Some("import"));
+
+        let namespace = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::cpp(CppKind::NamespaceDefinition)
+                    && artefact.name == "app"
+            })
+            .expect("expected namespace artefact");
+        assert_eq!(namespace.canonical_kind.as_deref(), Some("namespace"));
+        assert_eq!(namespace.symbol_fqn, "src/main.cpp::app");
+
+        let typedef = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::cpp(CppKind::TypeDefinition)
+                    && artefact.name == "Count"
+            })
+            .expect("expected typedef artefact");
+        assert_eq!(typedef.canonical_kind.as_deref(), Some("type"));
+        assert_eq!(typedef.symbol_fqn, "src/main.cpp::Count");
+
+        let enum_artefact = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::cpp(CppKind::EnumSpecifier)
+                    && artefact.name == "Status"
+            })
+            .expect("expected enum artefact");
+        assert_eq!(enum_artefact.canonical_kind.as_deref(), Some("enum"));
+        assert_eq!(enum_artefact.symbol_fqn, "src/main.cpp::Status");
+
+        let struct_artefact = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::cpp(CppKind::StructSpecifier)
+                    && artefact.name == "Helper"
+            })
+            .expect("expected struct artefact");
+        assert_eq!(struct_artefact.canonical_kind.as_deref(), Some("type"));
+        assert_eq!(struct_artefact.symbol_fqn, "src/main.cpp::Helper");
+
+        let template = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::cpp(CppKind::TemplateDeclaration)
+            })
+            .expect("expected template artefact");
+        assert_eq!(template.canonical_kind, None);
+        assert!(template.name.starts_with("template@"));
+        assert!(template.symbol_fqn.starts_with("src/main.cpp::template@"));
+
+        let class_artefact = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::cpp(CppKind::ClassSpecifier)
+                    && artefact.name == "UserService"
+            })
+            .expect("expected class artefact");
+        assert_eq!(class_artefact.canonical_kind.as_deref(), Some("type"));
+        assert_eq!(class_artefact.symbol_fqn, "src/main.cpp::UserService");
+
+        let field = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::cpp(CppKind::FieldDeclaration)
+                    && artefact.name == "helper"
+            })
+            .expect("expected field artefact");
+        assert_eq!(field.canonical_kind.as_deref(), Some("variable"));
+        assert_eq!(
+            field.parent_symbol_fqn.as_deref(),
+            Some("src/main.cpp::UserService")
+        );
+        assert_eq!(field.symbol_fqn, "src/main.cpp::UserService::helper");
+
+        let method = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::cpp(CppKind::FunctionDefinition)
+                    && artefact.name == "run"
+            })
+            .expect("expected method artefact");
+        assert_eq!(method.canonical_kind.as_deref(), Some("method"));
+        assert_eq!(
+            method.parent_symbol_fqn.as_deref(),
+            Some("src/main.cpp::UserService")
+        );
+        assert_eq!(method.symbol_fqn, "src/main.cpp::UserService::run");
+
+        let function = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::cpp(CppKind::FunctionDefinition)
+                    && artefact.name == "make_count"
+            })
+            .expect("expected free function artefact");
+        assert_eq!(function.canonical_kind.as_deref(), Some("function"));
+        assert_eq!(function.parent_symbol_fqn, None);
+        assert_eq!(function.symbol_fqn, "src/main.cpp::make_count");
+    }
 }

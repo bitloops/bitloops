@@ -347,4 +347,89 @@ public:
         assert!(edges.iter().any(|edge| edge.edge_kind == EdgeKind::Imports));
         assert!(edges.iter().any(|edge| edge.edge_kind == EdgeKind::Calls));
     }
+
+    #[test]
+    fn extract_cpp_dependency_edges_emit_extends_and_reference_edges() {
+        let content = r#"#include <vector>
+
+class Base {};
+
+template <typename T>
+class Box {};
+
+class Helper {
+public:
+    int adjust(int value) { return value + 1; }
+};
+
+class UserService : public Base, public Box<Helper> {
+public:
+    Helper helper;
+
+    int local_helper(int value) { return value + 1; }
+
+    int run() {
+        return local_helper(1) + external::lookup();
+    }
+};
+"#;
+        let path = "src/main.cpp";
+        let artefacts = extract_cpp_artefacts(content, path).expect("extract cpp artefacts");
+        let edges = extract_cpp_dependency_edges(content, path, &artefacts).expect("extract edges");
+
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Imports
+                && edge.to_symbol_ref.as_deref() == Some("#include <vector>")
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Calls
+                && edge.from_symbol_fqn == "src/main.cpp::UserService::run"
+                && edge.to_target_symbol_fqn.as_deref()
+                    == Some("src/main.cpp::UserService::local_helper")
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Calls
+                && edge.from_symbol_fqn == "src/main.cpp::UserService::run"
+                && edge.to_symbol_ref.as_deref() == Some("src/main.cpp::external::lookup")
+                && edge.to_target_symbol_fqn.is_none()
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Extends
+                && edge.from_symbol_fqn == "src/main.cpp::UserService"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/main.cpp::Base")
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Extends
+                && edge.from_symbol_fqn == "src/main.cpp::UserService"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/main.cpp::Box")
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::References
+                && edge.from_symbol_fqn == "src/main.cpp::UserService::helper"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/main.cpp::Helper")
+        }));
+    }
+
+    #[test]
+    fn extract_cpp_dependency_edges_deduplicates_repeated_imports_in_one_file() {
+        let content = r#"#include <vector>
+#include <vector>
+
+class UserService {};
+"#;
+
+        let path = "src/main.cpp";
+        let artefacts = extract_cpp_artefacts(content, path).expect("extract cpp artefacts");
+        let edges = extract_cpp_dependency_edges(content, path, &artefacts).expect("extract edges");
+
+        let import_edges = edges
+            .iter()
+            .filter(|edge| {
+                edge.edge_kind == EdgeKind::Imports
+                    && edge.to_symbol_ref.as_deref() == Some("#include <vector>")
+            })
+            .count();
+
+        assert_eq!(import_edges, 1);
+    }
 }

@@ -8,11 +8,6 @@ pub(crate) static CPP_CANONICAL_MAPPINGS: &[CanonicalMapping] = &[
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: LanguageKind::cpp(CppKind::UsingDeclaration),
-        projection: CanonicalKindProjection::Import,
-        condition: MappingCondition::Always,
-    },
-    CanonicalMapping {
         language_kind: LanguageKind::cpp(CppKind::TypeDefinition),
         projection: CanonicalKindProjection::Type,
         condition: MappingCondition::Always,
