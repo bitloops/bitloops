@@ -23,8 +23,9 @@ use crate::capability_packs::semantic_clones::stage_embeddings::{
 };
 use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX;
 use crate::capability_packs::semantic_clones::vector_backend::{
-    build_postgres_pgvector_partial_index_sql, build_sqlite_current_vec_table_init_statements,
-    build_sqlite_current_vec_upsert_statements,
+    SqliteCurrentVecUpsertRow, build_postgres_pgvector_partial_index_sql,
+    build_sqlite_current_vec_batch_upsert_statements,
+    build_sqlite_current_vec_table_init_statements,
     build_sqlite_stale_current_rows_for_path_delete_statements,
 };
 use crate::capability_packs::semantic_clones::{
@@ -481,9 +482,10 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         embedding_ms = elapsed_ms(embedding_started);
         let sql_started = Instant::now();
         let mut sqlite_vec_dimensions = BTreeSet::new();
-        let mut sqlite_vec_upsert_statements = Vec::new();
+        let mut sqlite_vec_upsert_rows = Vec::new();
         let mut postgres_index_dimensions = BTreeSet::new();
         for row in rows {
+            let row_dimension = row.dimension;
             let shared_sql = match shared_dialect {
                 RelationalDialect::Sqlite => build_sqlite_symbol_embedding_persist_sql(&row)?,
                 RelationalDialect::Postgres => build_postgres_symbol_embedding_persist_sql(&row)?,
@@ -500,14 +502,14 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
                     &current_input.blob_sha,
                     &row,
                 )?);
-                sqlite_vec_dimensions.insert(row.dimension);
-                sqlite_vec_upsert_statements.extend(build_sqlite_current_vec_upsert_statements(
-                    &current_input.path,
-                    &row,
-                )?);
+                sqlite_vec_dimensions.insert(row_dimension);
+                sqlite_vec_upsert_rows.push(SqliteCurrentVecUpsertRow {
+                    path: current_input.path.clone(),
+                    row,
+                });
             }
             if shared_writes_remote {
-                postgres_index_dimensions.insert(row.dimension);
+                postgres_index_dimensions.insert(row_dimension);
             }
         }
         for dimension in sqlite_vec_dimensions {
@@ -515,7 +517,9 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
                 build_sqlite_current_vec_table_init_statements(&relational, dimension).await?,
             );
         }
-        embedding_statements.extend(sqlite_vec_upsert_statements);
+        embedding_statements.extend(build_sqlite_current_vec_batch_upsert_statements(
+            &sqlite_vec_upsert_rows,
+        )?);
         if shared_writes_remote {
             for dimension in postgres_index_dimensions {
                 remote_embedding_statements.push(build_postgres_pgvector_partial_index_sql(
@@ -538,7 +542,13 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     }
     let setup_ms = elapsed_ms(setup_started);
 
-    let clone_rebuild_signal = if (upserted_any || repaired_feature_projection)
+    let repo_backfill_has_remaining_follow_up = replacement_backfill_item.is_some()
+        && batch
+            .items
+            .iter()
+            .any(|item| item.item_kind == SemanticMailboxItemKind::RepoBackfill);
+    let clone_rebuild_signal = if !repo_backfill_has_remaining_follow_up
+        && (upserted_any || repaired_feature_projection)
         && matches!(
             batch.representation_kind,
             EmbeddingRepresentationKind::Code | EmbeddingRepresentationKind::Summary

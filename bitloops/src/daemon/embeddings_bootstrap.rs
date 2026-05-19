@@ -4,12 +4,15 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result, anyhow};
 
+#[path = "embeddings_bootstrap/config_path.rs"]
+mod config_path;
+#[path = "embeddings_bootstrap/runtime_command.rs"]
+mod runtime_command;
+
 use crate::cli::embeddings::{
     PulledEmbeddingProfileOutcome, embedding_capability_for_config_path,
     ensure_managed_embeddings_runtime_with_progress,
-    install_managed_platform_embeddings_binary_with_progress,
-    managed_platform_runtime_command_is_eligible, managed_platform_runtime_version_for_command,
-    managed_runtime_command_is_eligible, managed_runtime_version_for_command,
+    install_managed_platform_embeddings_binary_with_progress, managed_runtime_command_is_eligible,
     pull_profile_with_config_path_and_progress, selected_inference_profile_name,
 };
 use crate::config::{
@@ -28,14 +31,13 @@ use crate::host::inference::{
     BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID,
 };
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
+use config_path::{canonical_config_path, config_path_key};
+use runtime_command::{
+    managed_runtime_command_is_available, managed_runtime_command_is_eligible_for_kind,
+    managed_runtime_kind_for_profile, managed_runtime_version_for_kind,
+};
 
 const DEFAULT_PLATFORM_GATEWAY_API_KEY_ENV: &str = "BITLOOPS_PLATFORM_GATEWAY_TOKEN";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ManagedEmbeddingsRuntimeKind {
-    Local,
-    Platform,
-}
 
 pub(crate) fn execute_task_with_progress<R>(
     runtime_store: &DaemonSqliteRuntimeStore,
@@ -89,46 +91,6 @@ where
                 &err,
             )?;
             Err(err)
-        }
-    }
-}
-
-fn managed_runtime_kind_for_profile(
-    profile: &crate::config::InferenceProfileConfig,
-) -> Option<ManagedEmbeddingsRuntimeKind> {
-    if profile.driver != BITLOOPS_EMBEDDINGS_IPC_DRIVER {
-        return None;
-    }
-
-    match profile.runtime.as_deref() {
-        Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID) => Some(ManagedEmbeddingsRuntimeKind::Local),
-        Some(BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID) => {
-            Some(ManagedEmbeddingsRuntimeKind::Platform)
-        }
-        _ => None,
-    }
-}
-
-fn managed_runtime_command_is_eligible_for_kind(
-    kind: ManagedEmbeddingsRuntimeKind,
-    config_path: &Path,
-) -> Result<bool> {
-    match kind {
-        ManagedEmbeddingsRuntimeKind::Local => managed_runtime_command_is_eligible(config_path),
-        ManagedEmbeddingsRuntimeKind::Platform => {
-            managed_platform_runtime_command_is_eligible(config_path)
-        }
-    }
-}
-
-fn managed_runtime_version_for_kind(
-    kind: ManagedEmbeddingsRuntimeKind,
-    command: &str,
-) -> Result<Option<String>> {
-    match kind {
-        ManagedEmbeddingsRuntimeKind::Local => managed_runtime_version_for_command(command),
-        ManagedEmbeddingsRuntimeKind::Platform => {
-            managed_platform_runtime_version_for_command(command)
         }
     }
 }
@@ -239,6 +201,25 @@ pub(crate) fn gate_status_for_config_path(
             blocked: false,
             readiness: Some(EmbeddingsBootstrapReadiness::Ready),
             reason: Some(format!("Managed embeddings runtime {version} is ready")),
+            active_task_id: None,
+            profile_name: Some(profile_name),
+            config_path: Some(config_path),
+            last_error: None,
+            last_updated_unix,
+        });
+    }
+
+    if let Some(runtime_name) = profile.runtime.as_deref()
+        && let Some(runtime) = capability.inference.runtimes.get(runtime_name)
+        && managed_runtime_command_is_available(&runtime.command)
+    {
+        return Ok(EmbeddingsBootstrapGateStatus {
+            blocked: false,
+            readiness: Some(EmbeddingsBootstrapReadiness::Ready),
+            reason: Some(format!(
+                "Managed embeddings runtime command `{}` is available",
+                runtime.command
+            )),
             active_task_id: None,
             profile_name: Some(profile_name),
             config_path: Some(config_path),
@@ -756,15 +737,9 @@ fn config_lock_for(config_key: &str) -> Arc<Mutex<()>> {
     )
 }
 
-fn canonical_config_path(config_path: &Path) -> PathBuf {
-    config_path
-        .canonicalize()
-        .unwrap_or_else(|_| config_path.to_path_buf())
-}
-
-fn config_path_key(config_path: &Path) -> String {
-    canonical_config_path(config_path).display().to_string()
-}
+#[cfg(test)]
+#[path = "embeddings_bootstrap/alias_tests.rs"]
+mod alias_tests;
 
 #[cfg(test)]
 mod tests {
