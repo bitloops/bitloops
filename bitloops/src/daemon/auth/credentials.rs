@@ -107,21 +107,21 @@ impl FileCredentialStore {
             {
                 options.mode(0o600);
             }
-            let mut file = options.open(&tmp_path).with_context(|| {
-                format!("creating temporary credential file {}", tmp_path.display())
-            })?;
-            serde_json::to_writer(&mut file, record)
-                .context("serialising fallback credential payload")?;
-            file.write_all(b"\n")
-                .context("finalising fallback credential payload")?;
-            file.flush()
-                .context("flushing fallback credential payload")?;
-            file.sync_all()
-                .context("syncing fallback credential payload")?;
+            {
+                let mut file = options.open(&tmp_path).with_context(|| {
+                    format!("creating temporary credential file {}", tmp_path.display())
+                })?;
+                serde_json::to_writer(&mut file, record)
+                    .context("serialising fallback credential payload")?;
+                file.write_all(b"\n")
+                    .context("finalising fallback credential payload")?;
+                file.flush()
+                    .context("flushing fallback credential payload")?;
+                file.sync_all()
+                    .context("syncing fallback credential payload")?;
+            }
             set_file_private(&tmp_path)?;
-            fs::rename(&tmp_path, path).with_context(|| {
-                format!("installing fallback credential file {}", path.display())
-            })?;
+            replace_file_atomically(&tmp_path, path)?;
             Ok(())
         })();
 
@@ -190,6 +190,56 @@ fn credential_key_hash(key: &WorkosCredentialKey) -> String {
     hasher.update([0]);
     hasher.update(key.account.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+fn replace_file_atomically(temp_path: &Path, final_path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        if !final_path.exists() {
+            return fs::rename(temp_path, final_path).with_context(|| {
+                format!(
+                    "installing fallback credential file {}",
+                    final_path.display()
+                )
+            });
+        }
+
+        let counter = FALLBACK_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let backup_path =
+            final_path.with_extension(format!("json.bak.{}.{}", std::process::id(), counter));
+        fs::rename(final_path, &backup_path).with_context(|| {
+            format!(
+                "moving existing fallback credential file {} aside",
+                final_path.display()
+            )
+        })?;
+        match fs::rename(temp_path, final_path) {
+            Ok(()) => {
+                let _ = fs::remove_file(&backup_path);
+                Ok(())
+            }
+            Err(err) => {
+                let _ = fs::rename(&backup_path, final_path);
+                let _ = fs::remove_file(temp_path);
+                Err(err).with_context(|| {
+                    format!(
+                        "installing fallback credential file {}",
+                        final_path.display()
+                    )
+                })
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        fs::rename(temp_path, final_path).with_context(|| {
+            format!(
+                "installing fallback credential file {}",
+                final_path.display()
+            )
+        })
+    }
 }
 
 fn set_dir_private(path: &Path) -> Result<()> {
