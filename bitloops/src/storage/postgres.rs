@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use serde_json::Value;
 use tokio::runtime::{Builder, Runtime};
 use tokio_postgres::NoTls;
 
@@ -46,6 +47,27 @@ impl PostgresSyncConnection {
         })
     }
 
+    pub fn execute_batch_transactional(&self, statements: &[String]) -> Result<()> {
+        if statements.is_empty() {
+            return Ok(());
+        }
+
+        let mut sql = String::from("BEGIN;");
+        for statement in statements {
+            let trimmed = statement.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            sql.push_str(trimmed);
+            if !trimmed.ends_with(';') {
+                sql.push(';');
+            }
+        }
+        sql.push_str("COMMIT;");
+
+        self.execute_batch(&sql)
+    }
+
     pub fn ping(&self) -> Result<()> {
         self.block_on(async {
             let client = connect_postgres_client(&self.dsn).await?;
@@ -62,6 +84,31 @@ impl PostgresSyncConnection {
             }
 
             Ok(())
+        })
+    }
+
+    pub fn query_rows(&self, sql: &str) -> Result<Vec<Value>> {
+        let sql = sql.trim().trim_end_matches(';').to_string();
+        self.with_client_timeout(Duration::from_secs(30), move |client| {
+            Box::pin(async move {
+                let wrapped =
+                    format!("SELECT coalesce(json_agg(t), '[]'::json)::text FROM ({sql}) t");
+                let row = client
+                    .query_one(&wrapped, &[])
+                    .await
+                    .context("executing Postgres query")?;
+                let raw: String = row
+                    .try_get(0)
+                    .context("reading Postgres scalar text result")?;
+                let parsed: Value = serde_json::from_str(raw.trim())
+                    .with_context(|| format!("parsing Postgres JSON payload failed: {raw}"))?;
+                match parsed {
+                    Value::Array(rows) => Ok(rows),
+                    Value::Object(_) => Ok(vec![parsed]),
+                    Value::Null => Ok(vec![]),
+                    other => bail!("unexpected Postgres JSON payload type: {other}"),
+                }
+            })
         })
     }
 
@@ -96,6 +143,10 @@ impl PostgresSyncConnection {
     }
 
     fn block_on<T>(&self, future: impl Future<Output = Result<T>>) -> Result<T> {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            return tokio::task::block_in_place(|| handle.block_on(future));
+        }
+
         with_postgres_runtime(|runtime| runtime.block_on(future))
     }
 }
@@ -179,5 +230,21 @@ mod tests {
             err.to_string()
                 .contains("test Postgres operation timeout after 10ms")
         );
+    }
+
+    #[test]
+    fn postgres_sync_connection_block_on_reuses_outer_tokio_runtime() {
+        let runtime = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("create tokio runtime");
+        let connection =
+            PostgresSyncConnection::connect("postgres://bitloops:bitloops@localhost:5432/bitloops")
+                .expect("valid dsn");
+
+        let result = runtime
+            .block_on(async { connection.block_on(async { Ok::<_, anyhow::Error>(41 + 1) }) });
+
+        assert_eq!(result.expect("nested runtime bridge"), 42);
     }
 }

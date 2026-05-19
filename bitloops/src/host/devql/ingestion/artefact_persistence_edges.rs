@@ -206,7 +206,9 @@ pub(super) async fn persist_historical_edge(
     record: &PersistedEdgeRecord,
 ) -> Result<()> {
     let sql = build_upsert_historical_edge_sql(cfg, relational, blob_sha, record);
-    relational.exec(&sql).await
+    relational
+        .exec_for_role(RelationalStorageRole::SharedRelational, &sql)
+        .await
 }
 
 pub(super) fn build_upsert_historical_edge_sql(
@@ -215,6 +217,7 @@ pub(super) fn build_upsert_historical_edge_sql(
     blob_sha: &str,
     record: &PersistedEdgeRecord,
 ) -> String {
+    let shared_dialect = relational.dialect_for_role(RelationalStorageRole::SharedRelational);
     let to_artefact_sql = sql_nullable_text(record.to_artefact_id.as_deref());
     let to_symbol_sql = sql_nullable_text(record.to_symbol_ref.as_deref());
     let start_line_sql = record
@@ -225,7 +228,7 @@ pub(super) fn build_upsert_historical_edge_sql(
         .end_line
         .map(|value| value.to_string())
         .unwrap_or_else(|| "NULL".to_string());
-    let metadata_sql = sql_json_value(relational, &record.metadata);
+    let metadata_sql = sql_json_value_for_dialect(shared_dialect, &record.metadata);
 
     format!(
         "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata) \
@@ -248,6 +251,7 @@ ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLU
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::devql::RelationalPrimaryBackend;
 
     fn sample_repo_root() -> PathBuf {
         std::env::temp_dir().join("bitloops-artefact-persistence-edges")
@@ -302,6 +306,21 @@ mod tests {
         assert!(
             sql.contains("ON CONFLICT (edge_id) DO UPDATE"),
             "historical edge builder should upsert by edge_id"
+        );
+    }
+
+    #[test]
+    fn build_upsert_historical_edge_sql_uses_shared_relational_dialect() {
+        let cfg = sample_cfg();
+        let relational = RelationalStorage::primary_backend_for_tests(
+            PathBuf::from("devql.sqlite"),
+            RelationalPrimaryBackend::Postgres,
+        );
+        let sql =
+            build_upsert_historical_edge_sql(&cfg, &relational, "blob-sha", &sample_edge_record());
+        assert!(
+            sql.contains("::jsonb"),
+            "historical edge SQL should use shared Postgres jsonb when remote shared authority is active"
         );
     }
 }

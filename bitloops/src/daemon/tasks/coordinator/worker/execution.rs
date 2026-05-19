@@ -448,6 +448,7 @@ fn prepared_summary_setup_plan_from_request(
         },
         SummaryBootstrapAction::ConfigureCloud => PreparedSummarySetupAction::ConfigureCloud {
             gateway_url_override: request.gateway_url_override.clone(),
+            api_key_env: request.api_key_env.clone(),
         },
     })
 }
@@ -559,6 +560,7 @@ mod tests {
                 workplane_store: DaemonSqliteRuntimeStore::open_at(runtime_db_path)
                     .expect("open test workplane store"),
                 daemon_config_root: config_root.clone(),
+                self_ref: std::sync::OnceLock::new(),
                 lock: Mutex::new(()),
                 notify: Notify::new(),
                 state_initialised: AtomicBool::new(false),

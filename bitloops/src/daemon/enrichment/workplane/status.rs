@@ -5,7 +5,8 @@ use anyhow::Result;
 use rusqlite::{OptionalExtension, params};
 
 use crate::capability_packs::semantic_clones::types::{
-    SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::capability_packs::semantic_clones::workplane::payload_work_item_count;
@@ -159,6 +160,42 @@ pub(crate) fn iter_workplane_job_config_roots(
     })
 }
 
+pub(crate) fn iter_workplane_job_repo_roots(
+    workplane_store: &DaemonSqliteRuntimeStore,
+) -> Result<Vec<PathBuf>> {
+    workplane_store.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT repo_root
+             FROM capability_workplane_jobs
+             WHERE status IN (?1, ?2)
+             UNION
+             SELECT DISTINCT repo_root
+             FROM semantic_summary_mailbox_items
+             WHERE status IN (?3, ?4)
+             UNION
+             SELECT DISTINCT repo_root
+             FROM semantic_embedding_mailbox_items
+             WHERE status IN (?5, ?6)",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                WorkplaneJobStatus::Pending.as_str(),
+                WorkplaneJobStatus::Running.as_str(),
+                SemanticMailboxItemStatus::Pending.as_str(),
+                SemanticMailboxItemStatus::Leased.as_str(),
+                SemanticMailboxItemStatus::Pending.as_str(),
+                SemanticMailboxItemStatus::Leased.as_str(),
+            ],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut values = Vec::new();
+        for row in rows {
+            values.push(PathBuf::from(row?));
+        }
+        Ok(values)
+    })
+}
+
 pub(crate) fn last_failed_embedding_job_from_workplane(
     workplane_store: &DaemonSqliteRuntimeStore,
 ) -> Result<Option<FailedEmbeddingJobSummary>> {
@@ -168,12 +205,14 @@ pub(crate) fn last_failed_embedding_job_from_workplane(
             "SELECT job_id, repo_id, mailbox_name, payload, attempts, last_error, updated_at_unix
              FROM capability_workplane_jobs
              WHERE status = ?1
-               AND mailbox_name IN (?2, ?3)
+               AND mailbox_name IN (?2, ?3, ?4, ?5)
              ORDER BY updated_at_unix DESC
              LIMIT 1",
             params![
                 WorkplaneJobStatus::Failed.as_str(),
                 SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+                SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX,
                 SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
             ],
                 |row| {
@@ -185,13 +224,8 @@ pub(crate) fn last_failed_embedding_job_from_workplane(
                         job_id: row.get(0)?,
                         repo_id: row.get(1)?,
                         branch: "unknown".to_string(),
-                        representation_kind: if mailbox_name
-                            == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
-                        {
-                            "code".to_string()
-                        } else {
-                            "summary".to_string()
-                        },
+                        representation_kind: legacy_embedding_representation_kind(&mailbox_name)
+                            .to_string(),
                         artefact_count: payload_work_item_count(&payload, &mailbox_name),
                         attempts: row.get(4)?,
                         error: row.get(5)?,
@@ -296,7 +330,10 @@ fn count_embedding_bucket_counts(
     for job in load_workplane_jobs_by_status(conn, status)? {
         if matches!(
             job.mailbox_name.as_str(),
-            SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+            SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                | SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+                | SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
+                | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
         ) {
             counts.jobs += 1;
             counts.work_items += payload_work_item_count(&job.payload, &job.mailbox_name);
@@ -314,6 +351,15 @@ fn count_embedding_bucket_counts(
         })
         .sum::<u64>();
     Ok(counts)
+}
+
+fn legacy_embedding_representation_kind(mailbox_name: &str) -> &'static str {
+    match mailbox_name {
+        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX => "identity",
+        SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX => "architecture",
+        SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => "summary",
+        _ => "code",
+    }
 }
 
 fn count_clone_rebuild_bucket_counts(

@@ -54,49 +54,41 @@ pub(crate) fn read_committed_from_db(
     storage: &CheckpointStorageContext,
     checkpoint_id: &str,
 ) -> Result<Option<CheckpointSummaryView>> {
-    use rusqlite::OptionalExtension;
-
-    let checkpoint_row = storage.sqlite.with_connection(|conn| {
-        conn.query_row(
-            "SELECT strategy, branch, cli_version, checkpoints_count, token_usage
-             FROM checkpoints
-             WHERE checkpoint_id = ?1 AND repo_id = ?2
-             LIMIT 1",
-            rusqlite::params![checkpoint_id, storage.repo_id.as_str()],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                ))
-            },
-        )
-        .optional()
-        .map_err(anyhow::Error::from)
-    })?;
-    let Some((strategy, branch, cli_version, checkpoints_count, token_usage_raw)) = checkpoint_row
+    let checkpoint_sql = format!(
+        "SELECT strategy, branch, cli_version, checkpoints_count, token_usage
+         FROM checkpoints
+         WHERE checkpoint_id = '{}' AND repo_id = '{}'
+         LIMIT 1",
+        crate::host::devql::esc_pg(checkpoint_id),
+        crate::host::devql::esc_pg(&storage.repo_id),
+    );
+    let Some(checkpoint_row) =
+        query_checkpoint_metadata_rows(&storage.relational, &checkpoint_sql)?
+            .into_iter()
+            .next()
     else {
         return Ok(None);
     };
-    let files_touched =
-        load_checkpoint_files_touched_from_db(&storage.sqlite, &storage.repo_id, checkpoint_id)?;
+    let strategy = checkpoint_row_text(&checkpoint_row, "strategy").unwrap_or_default();
+    let branch = checkpoint_row_text(&checkpoint_row, "branch").unwrap_or_default();
+    let cli_version = checkpoint_row_text(&checkpoint_row, "cli_version").unwrap_or_default();
+    let checkpoints_count =
+        checkpoint_row_i64(&checkpoint_row, "checkpoints_count").unwrap_or_default();
+    let token_usage_raw = checkpoint_row_optional_text(&checkpoint_row, "token_usage");
+    let files_touched = load_checkpoint_files_touched_from_db(storage, checkpoint_id)?;
 
-    let session_indexes = storage.sqlite.with_connection(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT session_index
-             FROM checkpoint_sessions
-             WHERE checkpoint_id = ?1
-             ORDER BY session_index ASC",
-        )?;
-        let mut rows = stmt.query(rusqlite::params![checkpoint_id])?;
-        let mut indexes: Vec<i64> = Vec::new();
-        while let Some(row) = rows.next()? {
-            indexes.push(row.get::<_, i64>(0)?);
-        }
-        Ok(indexes)
-    })?;
+    let session_indexes_sql = format!(
+        "SELECT session_index
+         FROM checkpoint_sessions
+         WHERE checkpoint_id = '{}'
+         ORDER BY session_index ASC",
+        crate::host::devql::esc_pg(checkpoint_id),
+    );
+    let session_indexes =
+        query_checkpoint_metadata_rows(&storage.relational, &session_indexes_sql)?
+            .into_iter()
+            .filter_map(|row| checkpoint_row_i64(&row, "session_index"))
+            .collect::<Vec<_>>();
 
     let sessions = session_indexes
         .into_iter()
@@ -138,28 +130,26 @@ pub(crate) fn to_committed_info_from_db(
         return Ok(info);
     }
 
-    let session_rows = storage.sqlite.with_connection(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT session_id, agent, created_at, is_task, tool_use_id, session_index
-             FROM checkpoint_sessions
-             WHERE checkpoint_id = ?1
-             ORDER BY session_index ASC",
-        )?;
-        let mut rows = stmt.query(rusqlite::params![summary.checkpoint_id])?;
-        let mut sessions: Vec<(String, String, String, bool, String, i64)> = Vec::new();
-        while let Some(row) = rows.next()? {
-            let is_task = row.get::<_, i64>(3)? != 0;
-            sessions.push((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                is_task,
-                row.get::<_, String>(4)?,
-                row.get::<_, i64>(5)?,
-            ));
-        }
-        Ok(sessions)
-    })?;
+    let session_rows_sql = format!(
+        "SELECT session_id, agent, created_at, is_task, tool_use_id, session_index
+         FROM checkpoint_sessions
+         WHERE checkpoint_id = '{}'
+         ORDER BY session_index ASC",
+        crate::host::devql::esc_pg(&summary.checkpoint_id),
+    );
+    let session_rows = query_checkpoint_metadata_rows(&storage.relational, &session_rows_sql)?
+        .into_iter()
+        .filter_map(|row| {
+            Some((
+                checkpoint_row_text(&row, "session_id")?,
+                checkpoint_row_text(&row, "agent").unwrap_or_default(),
+                checkpoint_row_text(&row, "created_at").unwrap_or_default(),
+                checkpoint_row_i64(&row, "is_task").unwrap_or_default() != 0,
+                checkpoint_row_text(&row, "tool_use_id").unwrap_or_default(),
+                checkpoint_row_i64(&row, "session_index").unwrap_or_default(),
+            ))
+        })
+        .collect::<Vec<_>>();
 
     for (_, agent, _, _, _, _) in &session_rows {
         push_unique_agent(&mut info.agents, agent);
@@ -195,72 +185,46 @@ pub(crate) fn read_session_content_from_db(
     checkpoint_id: &str,
     session_index: usize,
 ) -> Result<Option<SessionContentView>> {
-    use rusqlite::OptionalExtension;
-
-    let session_row = storage.sqlite.with_connection(|conn| {
-        conn.query_row(
-            "SELECT c.strategy, c.branch, c.cli_version,
-                    s.session_id, s.agent, s.created_at, s.turn_id, s.checkpoints_count,
-                    s.is_task, s.tool_use_id,
-                    s.transcript_identifier_at_start, s.checkpoint_transcript_start,
-                    s.initial_attribution, s.token_usage, s.summary,
-                    s.transcript_path
-             FROM checkpoint_sessions s
-             JOIN checkpoints c ON c.checkpoint_id = s.checkpoint_id
-             WHERE s.checkpoint_id = ?1
-               AND s.session_index = ?2
-               AND c.repo_id = ?3
-             LIMIT 1",
-            rusqlite::params![
-                checkpoint_id,
-                session_index as i64,
-                storage.repo_id.as_str()
-            ],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
-                    row.get::<_, i64>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, String>(10)?,
-                    row.get::<_, i64>(11)?,
-                    row.get::<_, Option<String>>(12)?,
-                    row.get::<_, Option<String>>(13)?,
-                    row.get::<_, Option<String>>(14)?,
-                    row.get::<_, String>(15)?,
-                ))
-            },
-        )
-        .optional()
-        .map_err(anyhow::Error::from)
-    })?;
-    let Some((
-        strategy,
-        branch,
-        cli_version,
-        session_id,
-        agent,
-        created_at,
-        turn_id,
-        checkpoints_count,
-        is_task,
-        tool_use_id,
-        transcript_identifier_at_start,
-        checkpoint_transcript_start,
-        initial_attribution_raw,
-        token_usage_raw,
-        summary_raw,
-        transcript_path,
-    )) = session_row
+    let session_sql = format!(
+        "SELECT c.strategy, c.branch, c.cli_version,
+                s.session_id, s.agent, s.created_at, s.turn_id, s.checkpoints_count,
+                s.is_task, s.tool_use_id,
+                s.transcript_identifier_at_start, s.checkpoint_transcript_start,
+                s.initial_attribution, s.token_usage, s.summary,
+                s.transcript_path
+         FROM checkpoint_sessions s
+         JOIN checkpoints c ON c.checkpoint_id = s.checkpoint_id
+         WHERE s.checkpoint_id = '{}' AND s.session_index = {} AND c.repo_id = '{}'
+         LIMIT 1",
+        crate::host::devql::esc_pg(checkpoint_id),
+        session_index,
+        crate::host::devql::esc_pg(&storage.repo_id),
+    );
+    let Some(session_row) = query_checkpoint_metadata_rows(&storage.relational, &session_sql)?
+        .into_iter()
+        .next()
     else {
         return Ok(None);
     };
+    let strategy = checkpoint_row_text(&session_row, "strategy").unwrap_or_default();
+    let branch = checkpoint_row_text(&session_row, "branch").unwrap_or_default();
+    let cli_version = checkpoint_row_text(&session_row, "cli_version").unwrap_or_default();
+    let session_id = checkpoint_row_text(&session_row, "session_id").unwrap_or_default();
+    let agent = checkpoint_row_text(&session_row, "agent").unwrap_or_default();
+    let created_at = checkpoint_row_text(&session_row, "created_at").unwrap_or_default();
+    let turn_id = checkpoint_row_text(&session_row, "turn_id").unwrap_or_default();
+    let checkpoints_count =
+        checkpoint_row_i64(&session_row, "checkpoints_count").unwrap_or_default();
+    let is_task = checkpoint_row_i64(&session_row, "is_task").unwrap_or_default();
+    let tool_use_id = checkpoint_row_text(&session_row, "tool_use_id").unwrap_or_default();
+    let transcript_identifier_at_start =
+        checkpoint_row_text(&session_row, "transcript_identifier_at_start").unwrap_or_default();
+    let checkpoint_transcript_start =
+        checkpoint_row_i64(&session_row, "checkpoint_transcript_start").unwrap_or_default();
+    let initial_attribution_raw = checkpoint_row_optional_text(&session_row, "initial_attribution");
+    let token_usage_raw = checkpoint_row_optional_text(&session_row, "token_usage");
+    let summary_raw = checkpoint_row_optional_text(&session_row, "summary");
+    let transcript_path = checkpoint_row_text(&session_row, "transcript_path").unwrap_or_default();
 
     let metadata = CommittedMetadata {
         checkpoint_id: checkpoint_id.to_string(),
@@ -320,20 +284,17 @@ pub(crate) fn read_session_content_from_db(
 
 pub fn list_committed(repo_root: &Path) -> Result<Vec<CommittedInfo>> {
     let storage = open_checkpoint_storage_context(repo_root)?;
-    let checkpoint_ids = storage.sqlite.with_connection(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT checkpoint_id
-             FROM checkpoints
-             WHERE repo_id = ?1
-             ORDER BY created_at DESC, checkpoint_id DESC",
-        )?;
-        let mut rows = stmt.query(rusqlite::params![storage.repo_id.as_str()])?;
-        let mut ids = Vec::new();
-        while let Some(row) = rows.next()? {
-            ids.push(row.get::<_, String>(0)?);
-        }
-        Ok(ids)
-    })?;
+    let checkpoint_ids_sql = format!(
+        "SELECT checkpoint_id
+         FROM checkpoints
+         WHERE repo_id = '{}'
+         ORDER BY created_at DESC, checkpoint_id DESC",
+        crate::host::devql::esc_pg(&storage.repo_id),
+    );
+    let checkpoint_ids = query_checkpoint_metadata_rows(&storage.relational, &checkpoint_ids_sql)?
+        .into_iter()
+        .filter_map(|row| checkpoint_row_text(&row, "checkpoint_id"))
+        .collect::<Vec<_>>();
 
     let mut out: Vec<CommittedInfo> = Vec::new();
     for checkpoint_id in checkpoint_ids {
@@ -345,28 +306,26 @@ pub fn list_committed(repo_root: &Path) -> Result<Vec<CommittedInfo>> {
 }
 
 pub fn get_checkpoint_author(repo_root: &Path, checkpoint_id: &str) -> Result<CheckpointAuthor> {
-    use rusqlite::OptionalExtension;
-
     let storage = open_checkpoint_storage_context(repo_root)?;
-    let db_author = storage.sqlite.with_connection(|conn| {
-        conn.query_row(
-            "SELECT s.author_name, s.author_email
-             FROM checkpoint_sessions s
-             JOIN checkpoints c ON c.checkpoint_id = s.checkpoint_id
-             WHERE s.checkpoint_id = ?1
-               AND c.repo_id = ?2
-             ORDER BY s.session_index ASC
-             LIMIT 1",
-            rusqlite::params![checkpoint_id, storage.repo_id.as_str()],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        )
-        .optional()
-        .map_err(anyhow::Error::from)
-    })?;
-    if let Some((name, email)) = db_author
-        && (!name.trim().is_empty() || !email.trim().is_empty())
+    let author_sql = format!(
+        "SELECT s.author_name, s.author_email
+         FROM checkpoint_sessions s
+         JOIN checkpoints c ON c.checkpoint_id = s.checkpoint_id
+         WHERE s.checkpoint_id = '{}' AND c.repo_id = '{}'
+         ORDER BY s.session_index ASC
+         LIMIT 1",
+        crate::host::devql::esc_pg(checkpoint_id),
+        crate::host::devql::esc_pg(&storage.repo_id),
+    );
+    if let Some(row) = query_checkpoint_metadata_rows(&storage.relational, &author_sql)?
+        .into_iter()
+        .next()
     {
-        return Ok(CheckpointAuthor { name, email });
+        let name = checkpoint_row_text(&row, "author_name").unwrap_or_default();
+        let email = checkpoint_row_text(&row, "author_email").unwrap_or_default();
+        if !name.trim().is_empty() || !email.trim().is_empty() {
+            return Ok(CheckpointAuthor { name, email });
+        }
     }
     Ok(CheckpointAuthor::default())
 }

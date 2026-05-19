@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{Result, anyhow};
 use axum::{
     Json, Router,
     extract::State,
@@ -13,7 +15,10 @@ use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use crate::test_support::process_state::enter_env_vars;
 use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_dir_overrides};
 
-use super::credentials::{MemoryCredentialStore, SecureCredentialStore};
+use super::credentials::{
+    FallbackCredentialStore, FileCredentialStore, MemoryCredentialStore, SecureCredentialStore,
+    SecureStoreUnavailable,
+};
 use super::session::{
     complete_workos_device_login_with_store, credential_key_for_client, load_workos_session_state,
     now_secs, prepare_workos_device_login_with_store_and_env, resolve_workos_auth_settings_with,
@@ -25,6 +30,9 @@ use super::types::{
     WORKOS_REFRESH_GRANT_TYPE, WORKOS_SESSION_STATE_VERSION,
 };
 use super::{WorkosDeviceLoginStart, WorkosLoginStart};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 #[derive(Clone)]
 struct AuthServerState {
@@ -76,6 +84,72 @@ fn localhost_bind_available(test_name: &str) -> bool {
     }
 }
 
+#[derive(Debug, Default)]
+struct AlwaysUnavailableStore;
+
+impl SecureCredentialStore for AlwaysUnavailableStore {
+    fn load_tokens(
+        &self,
+        _key: &super::types::WorkosCredentialKey,
+    ) -> Result<Option<StoredWorkosTokens>> {
+        Err(SecureStoreUnavailable::new(
+            "reading secure credentials",
+            "test secure store unavailable",
+        )
+        .into())
+    }
+
+    fn save_tokens(
+        &self,
+        _key: &super::types::WorkosCredentialKey,
+        _tokens: &StoredWorkosTokens,
+    ) -> Result<()> {
+        Err(SecureStoreUnavailable::new(
+            "writing secure credentials",
+            "test secure store unavailable",
+        )
+        .into())
+    }
+
+    fn delete_tokens(&self, _key: &super::types::WorkosCredentialKey) -> Result<()> {
+        Err(SecureStoreUnavailable::new(
+            "deleting secure credentials",
+            "test secure store unavailable",
+        )
+        .into())
+    }
+}
+
+#[derive(Debug, Default)]
+struct HardFailStore;
+
+impl SecureCredentialStore for HardFailStore {
+    fn load_tokens(
+        &self,
+        _key: &super::types::WorkosCredentialKey,
+    ) -> Result<Option<StoredWorkosTokens>> {
+        Err(anyhow!("hard secure store failure"))
+    }
+
+    fn save_tokens(
+        &self,
+        _key: &super::types::WorkosCredentialKey,
+        _tokens: &StoredWorkosTokens,
+    ) -> Result<()> {
+        Err(anyhow!("hard secure store failure"))
+    }
+
+    fn delete_tokens(&self, _key: &super::types::WorkosCredentialKey) -> Result<()> {
+        Err(anyhow!("hard secure store failure"))
+    }
+}
+
+fn fallback_file_store_at(root: PathBuf) -> Arc<FileCredentialStore> {
+    Arc::new(FileCredentialStore::new(
+        root.join("auth").join("credentials"),
+    ))
+}
+
 #[test]
 fn workos_auth_settings_default_to_built_in_values() {
     let _guard = enter_env_vars(&[(WORKOS_CLIENT_ID_ENV, None), (WORKOS_BASE_URL_ENV, None)]);
@@ -102,6 +176,130 @@ fn workos_auth_settings_allow_base_url_override() {
     });
     assert_eq!(settings.client_id, DEFAULT_WORKOS_CLIENT_ID);
     assert_eq!(settings.base_url, "https://workos.example.test");
+}
+
+#[test]
+fn file_credential_store_round_trips_tokens_with_safe_permissions() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = FileCredentialStore::new(temp.path().join("auth").join("credentials"));
+    let key = credential_key_for_client("client_file");
+    let tokens = StoredWorkosTokens {
+        access_token: "access-file".to_string(),
+        refresh_token: "refresh-file".to_string(),
+    };
+
+    store.save_tokens(&key, &tokens).expect("save file tokens");
+
+    let loaded = store
+        .load_tokens(&key)
+        .expect("load file tokens")
+        .expect("tokens should exist");
+    assert_eq!(loaded, tokens);
+
+    let path = store.credential_file_path_for_test(&key);
+    assert!(path.exists(), "fallback credential file should exist");
+
+    #[cfg(unix)]
+    {
+        let dir_mode = std::fs::metadata(path.parent().expect("credential dir"))
+            .expect("credential dir metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = std::fs::metadata(&path)
+            .expect("credential file metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(dir_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
+    }
+}
+
+#[test]
+fn fallback_credential_store_saves_to_file_when_secure_store_unavailable() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fallback = fallback_file_store_at(temp.path().to_path_buf());
+    let store = FallbackCredentialStore::new(Arc::new(AlwaysUnavailableStore), fallback.clone());
+    let key = credential_key_for_client("client_fallback_save");
+    let tokens = StoredWorkosTokens {
+        access_token: "access-fallback".to_string(),
+        refresh_token: "refresh-fallback".to_string(),
+    };
+
+    store.save_tokens(&key, &tokens).expect("save via fallback");
+
+    assert_eq!(
+        fallback
+            .load_tokens(&key)
+            .expect("load fallback tokens")
+            .expect("fallback tokens should exist"),
+        tokens
+    );
+}
+
+#[test]
+fn fallback_credential_store_loads_file_tokens_when_secure_store_unavailable() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fallback = fallback_file_store_at(temp.path().to_path_buf());
+    let store = FallbackCredentialStore::new(Arc::new(AlwaysUnavailableStore), fallback.clone());
+    let key = credential_key_for_client("client_fallback_load");
+    let tokens = StoredWorkosTokens {
+        access_token: "access-load".to_string(),
+        refresh_token: "refresh-load".to_string(),
+    };
+    fallback
+        .save_tokens(&key, &tokens)
+        .expect("seed fallback tokens");
+
+    let loaded = store
+        .load_tokens(&key)
+        .expect("load via composite")
+        .expect("tokens should load from fallback");
+
+    assert_eq!(loaded, tokens);
+}
+
+#[test]
+fn fallback_credential_store_deletes_file_tokens_when_secure_store_unavailable() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fallback = fallback_file_store_at(temp.path().to_path_buf());
+    let store = FallbackCredentialStore::new(Arc::new(AlwaysUnavailableStore), fallback.clone());
+    let key = credential_key_for_client("client_fallback_delete");
+    let tokens = StoredWorkosTokens {
+        access_token: "access-delete".to_string(),
+        refresh_token: "refresh-delete".to_string(),
+    };
+    fallback
+        .save_tokens(&key, &tokens)
+        .expect("seed fallback tokens");
+
+    store.delete_tokens(&key).expect("delete via composite");
+
+    assert!(
+        fallback
+            .load_tokens(&key)
+            .expect("load fallback tokens")
+            .is_none()
+    );
+}
+
+#[test]
+fn fallback_credential_store_does_not_swallow_hard_secure_store_errors() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fallback = fallback_file_store_at(temp.path().to_path_buf());
+    let store = FallbackCredentialStore::new(Arc::new(HardFailStore), fallback);
+    let key = credential_key_for_client("client_hard_fail");
+    let tokens = StoredWorkosTokens {
+        access_token: "access-hard".to_string(),
+        refresh_token: "refresh-hard".to_string(),
+    };
+
+    let err = store
+        .save_tokens(&key, &tokens)
+        .expect_err("hard primary failures should not fall back");
+
+    assert!(format!("{err:#}").contains("hard secure store failure"));
 }
 
 #[test]
@@ -154,6 +352,64 @@ fn workos_device_login_persists_session_to_runtime_store() {
                 .expect("load tokens")
                 .expect("tokens should exist");
             assert!(tokens.access_token.starts_with("ey"));
+
+            runtime.block_on(server.shutdown());
+        },
+    );
+}
+
+#[test]
+fn workos_device_login_falls_back_to_file_tokens_when_secure_store_unavailable() {
+    if !localhost_bind_available(
+        "workos_device_login_falls_back_to_file_tokens_when_secure_store_unavailable",
+    ) {
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fallback = fallback_file_store_at(temp.path().join("state").join("bitloops"));
+    let store = Arc::new(FallbackCredentialStore::new(
+        Arc::new(AlwaysUnavailableStore),
+        fallback.clone(),
+    ));
+
+    with_test_platform_dir_overrides(
+        TestPlatformDirOverrides {
+            config_root: Some(temp.path().join("config")),
+            data_root: Some(temp.path().join("data")),
+            cache_root: Some(temp.path().join("cache")),
+            state_root: Some(temp.path().join("state")),
+        },
+        || {
+            let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+            let server = runtime.block_on(start_test_auth_server());
+            let base_url = server.base_url.clone();
+            let start = WorkosDeviceLoginStart {
+                verification_url: format!("{base_url}/verify"),
+                verification_url_complete: Some(format!("{base_url}/verify?code=TEST-CODE")),
+                user_code: "TEST-CODE".to_string(),
+                expires_in_secs: 30,
+                poll_interval_secs: 0,
+                client_id: "client_fallback_login".to_string(),
+                base_url: base_url.clone(),
+                device_code: "device_123".to_string(),
+            };
+
+            let session = runtime
+                .block_on(complete_workos_device_login_with_store(
+                    &start,
+                    store.clone(),
+                ))
+                .expect("complete login with file fallback");
+
+            assert_eq!(session.user_email.as_deref(), Some("cli@example.com"));
+            assert!(load_workos_session_state().expect("load state").is_some());
+            assert!(
+                store
+                    .load_tokens(&credential_key_for_client("client_fallback_login"))
+                    .expect("load tokens")
+                    .is_some()
+            );
 
             runtime.block_on(server.shutdown());
         },

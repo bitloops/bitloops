@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::host::devql::{RelationalStorage, esc_pg, sql_string_list_pg};
+use crate::host::devql::{RelationalStorage, RelationalStorageRole, esc_pg, sql_string_list_pg};
 
 use super::types::{SearchDocumentCandidate, SearchFeatureCandidate};
 
@@ -83,18 +83,14 @@ pub(super) async fn query_rows_all_safe(
     relational: &RelationalStorage,
     sql: &str,
 ) -> Result<Vec<Value>> {
-    let mut rows = match relational.query_rows(sql).await {
+    let rows = match relational
+        .query_rows_for_role(RelationalStorageRole::CurrentProjection, sql)
+        .await
+    {
         Ok(rows) => rows,
         Err(err) if is_missing_relation_error(&err) => return Ok(Vec::new()),
         Err(err) => return Err(err),
     };
-    if relational.remote_client().is_some() {
-        match relational.query_rows_remote(sql).await {
-            Ok(remote_rows) => rows.extend(remote_rows),
-            Err(err) if is_missing_relation_error(&err) => {}
-            Err(err) => return Err(err),
-        }
-    }
     Ok(rows)
 }
 

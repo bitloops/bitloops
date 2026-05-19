@@ -34,7 +34,8 @@ available, fall back to targeted repo search or file reads.
 - `search`: use this when you do not yet have an exact seed.
   Use `searchMode: LEXICAL` for identifiers, literals, file-ish strings, and
   snippets. Keep the default `AUTO` mode for approximate or conceptual search.
-  Use `IDENTITY`, `CODE`, or `SUMMARY` only when you need advanced narrowing.
+  Use `IDENTITY`, `ARCHITECTURE`, `CODE`, or `SUMMARY` only when you need
+  advanced narrowing.
 
 ## Process
 
@@ -47,9 +48,9 @@ available, fall back to targeted repo search or file reads.
    and run `search` in the default `AUTO` mode first. Inspect
    `artefacts(first: 10)` and, when useful, `searchBreakdown(first: 3)` to see
    which retrieval mode is carrying the result.
-4. Reserve `searchMode: IDENTITY`, `CODE`, or `SUMMARY` for advanced narrowing
-   when `AUTO` is broad but you already know which representation is likely to
-   matter.
+4. Reserve `searchMode: IDENTITY`, `ARCHITECTURE`, `CODE`, or `SUMMARY` for
+   advanced narrowing when `AUTO` is broad but you already know which
+   representation is likely to matter.
 5. Once you have a concrete file or artefact, run `overview`.
 6. If the response includes `expandHint`, `schema`, or another typed follow-up
    hint, read that hint before composing the next query.

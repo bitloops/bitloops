@@ -5,9 +5,9 @@ title: Foundational Essay
 
 # Evidence-Driven Development: Closing the Loop from Specification to Truth
 
-Spec-Driven Development made software development more explicit by putting intent before implementation. That was the right first move. A team should not begin with a blank editor and hope that structure emerges from code. It should first describe what the system is meant to do, what constraints it must obey, and what outcomes it should produce.
+Spec-Driven Development made software development more explicit by putting intent before implementation. That was a great start. A team should not begin with a blank editor and hope that structure emerges from code. It should first describe what the system is meant to do, what constraints it must obey, and what outcomes it should produce.
 
-But intent is not truth.
+But intent alone does not build trust.
 
 A specification describes what should be true. It does not prove what is true. It does not know whether the implementation actually satisfies it. It does not know whether tests are relevant, whether architecture still conforms, whether production behaviour matches expectation, or whether a later change has invalidated the assumptions under which the spec was written.
 
@@ -17,7 +17,7 @@ That is the central failure mode of Spec-Driven Development: it can confuse spec
 
 Spec-Driven Development solves the blank-page problem. It gives developers and agents a structured starting point. It turns vague intent into something inspectable. It reduces ambiguity before code is written. It makes it possible to discuss requirements, constraints, interfaces, and behaviours before implementation momentum takes over.
 
-This matters. A well-written specification can improve alignment, reduce rework, and make AI-generated code less arbitrary.
+This matters greatly. A well-written specification can improve alignment, reduce rework, and make AI-generated code less arbitrary.
 
 But software does not fail only because teams lacked a starting point.
 
@@ -41,7 +41,7 @@ This deterioration is often invisible because teams mistake artefact existence f
 
 Those assumptions are often false.
 
-The existence of a specification is not evidence that the system satisfies it. The existence of a test is not evidence that the test proves the relevant claim. The existence of a green build is not evidence for behaviours that build did not exercise.
+The existence of a specification is not evidence that the system satisfies it. The existence of a test is not evidence that the test proves the relevant claim. The existence of a green build is not evidence for behaviours that the build did not exercise.
 
 Evidence-Driven Development begins by refusing those shortcuts.
 
@@ -110,8 +110,6 @@ It changes review. Review is not only "does this code look right?" Review become
 
 It changes tooling. A development environment should not merely retrieve files and documents. It should query a maintained graph of claims, code artefacts, evidence items, provenance records, dependencies, invalidation rules, and confidence assessments.
 
-It changes the role of Bitloops. The value is not only capturing what agents did. The value is building an intelligence layer that helps humans and agents understand what is true, why it is believed, and when that belief must be rechecked.
-
 ## The Claim
 
 Spec-Driven Development gave software a better starting point.
@@ -123,4 +121,3 @@ Specs define intent. Evidence establishes trust. Change invalidates confidence. 
 That is the move from specified intent to justified confidence.
 
 And in a world where humans and AI agents build software together, justified confidence is the scarce resource.
-

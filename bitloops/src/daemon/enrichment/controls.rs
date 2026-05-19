@@ -9,9 +9,9 @@ use super::worker_count::{EnrichmentWorkerBudgets, configured_enrichment_worker_
 use super::workplane::{
     compact_and_prune_workplane_jobs, current_workplane_mailbox_blocked_statuses,
     current_workplane_mailbox_blocked_statuses_for_repo, default_state,
-    iter_workplane_job_config_roots, last_failed_embedding_job_from_workplane,
-    migrate_legacy_semantic_workplane_rows, project_workplane_status,
-    prune_failed_semantic_inbox_items, retry_failed_semantic_inbox_items,
+    iter_workplane_job_config_roots, iter_workplane_job_repo_roots,
+    last_failed_embedding_job_from_workplane, migrate_legacy_semantic_workplane_rows,
+    project_workplane_status, prune_failed_semantic_inbox_items, retry_failed_semantic_inbox_items,
     retry_failed_workplane_jobs,
 };
 
@@ -149,8 +149,8 @@ pub(crate) fn effective_worker_budgets(
     fallback_config_root: &std::path::Path,
 ) -> Result<EnrichmentWorkerBudgets> {
     let mut budgets = configured_enrichment_worker_budgets_for_repo(fallback_config_root);
-    for config_root in iter_workplane_job_config_roots(workplane_store)? {
-        let next = configured_enrichment_worker_budgets_for_repo(&config_root);
+    for repo_root in iter_workplane_job_repo_roots(workplane_store)? {
+        let next = configured_enrichment_worker_budgets_for_repo(&repo_root);
         budgets.summary_refresh = budgets.summary_refresh.max(next.summary_refresh);
         budgets.embeddings = budgets.embeddings.max(next.embeddings);
         budgets.clone_rebuild = budgets.clone_rebuild.max(next.clone_rebuild);

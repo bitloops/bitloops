@@ -209,6 +209,7 @@ mod tests {
                 driver: Some("fake".to_string()),
                 runtime: None,
                 model: Some("fake-model".to_string()),
+                thinking_level: None,
             })
         }
     }

@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
+use std::sync::{Arc, Barrier};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
@@ -169,6 +171,42 @@ done
         ),
     )
     .expect("write request recording fake runtime script");
+}
+
+fn write_slow_request_fake_runtime_script(script_path: &Path, sleep_secs: u64) {
+    fs::write(
+        script_path,
+        format!(
+            r#"launch_log="$1"
+shift
+printf '%s\n' "$$" >> "$launch_log"
+printf '%s\n' '{{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}}'
+
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"cmd":"shutdown"'*)
+      printf '{{"id":"%s","ok":true}}\n' "$request_id"
+      exit 0
+      ;;
+    *'"cmd":"embed"'*)
+      case "$line" in
+        *'bitloops python embedding dimension probe'*)
+          printf '{{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}}\n' "$request_id"
+          ;;
+        *)
+          sleep {sleep_secs}
+          printf '{{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}}\n' "$request_id"
+          ;;
+      esac
+      ;;
+  esac
+done
+"#,
+            sleep_secs = sleep_secs,
+        ),
+    )
+    .expect("write slow request fake runtime script");
 }
 
 fn fake_runtime_config(script_path: &Path, launch_log: &Path) -> InferenceRuntimeConfig {
@@ -565,5 +603,62 @@ fn ipc_service_keeps_online_startup_when_cache_does_not_contain_model() {
     assert!(
         !env.contains("TRANSFORMERS_OFFLINE=1"),
         "expected online startup without warm cache, got: {env}"
+    );
+}
+
+#[test]
+fn platform_ipc_service_runs_concurrent_requests_across_multiple_sessions() {
+    let temp = TempDir::new().expect("temp dir");
+    let script_path = temp.path().join("fake_embeddings_runtime.sh");
+    let launch_log = temp.path().join("launches.log");
+    write_slow_request_fake_runtime_script(&script_path, 2);
+
+    let mut runtime = fake_runtime_config(&script_path, &launch_log);
+    runtime.request_timeout_secs = 5;
+    let service = with_platform_runtime_auth_environment_hook(
+        |api_key_env| {
+            Ok(vec![(
+                api_key_env.to_string(),
+                "token-from-login".to_string(),
+            )])
+        },
+        || BitloopsEmbeddingsIpcService::new("platform_code", &runtime, "test-model", None, true),
+    )
+    .expect("build platform ipc service");
+    let service = Arc::new(service);
+    let start_barrier = Arc::new(Barrier::new(3));
+
+    let handles = ["first document", "second document"]
+        .into_iter()
+        .map(|input| {
+            let service = Arc::clone(&service);
+            let start_barrier = Arc::clone(&start_barrier);
+            thread::spawn(move || {
+                start_barrier.wait();
+                service
+                    .embed(input, EmbeddingInputType::Document)
+                    .expect("concurrent embedding request")
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let started_at = Instant::now();
+    start_barrier.wait();
+    let vectors = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("join embedding thread"))
+        .collect::<Vec<_>>();
+    let elapsed = started_at.elapsed();
+
+    assert_eq!(vectors, vec![vec![1.0, 2.0], vec![1.0, 2.0]]);
+    assert!(
+        elapsed < Duration::from_millis(3500),
+        "expected concurrent platform embedding requests to overlap, took {elapsed:?}"
+    );
+
+    let launches = fs::read_to_string(&launch_log).expect("read launch log");
+    assert!(
+        launches.lines().count() >= 2,
+        "expected concurrent platform embedding requests to launch multiple sessions, got: {launches}"
     );
 }

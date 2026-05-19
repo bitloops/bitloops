@@ -434,20 +434,46 @@ fn build_capability_config_root_exposes_architecture_inference_binding() {
     let architecture = crate::config::ArchitectureConfig {
         inference: crate::config::ArchitectureInferenceBindings {
             fact_synthesis: Some("local_agent".to_string()),
+            role_adjudication: Some("role_adjudicator".to_string()),
         },
     };
+    let mut inference = crate::config::InferenceConfig::default();
+    inference.profiles.insert(
+        "local_agent".to_string(),
+        crate::config::InferenceProfileConfig {
+            name: "local_agent".to_string(),
+            task: crate::config::InferenceTask::StructuredGeneration,
+            driver: "codex_exec".to_string(),
+            runtime: Some("codex".to_string()),
+            model: Some("gpt-5.4-mini".to_string()),
+            api_key: None,
+            base_url: None,
+            temperature: Some("0.1".to_string()),
+            max_output_tokens: Some(4096),
+            thinking_level: Some("xhigh".to_string()),
+            cache_dir: None,
+        },
+    );
     let root = build_capability_config_root(
         &backends,
         &ProviderConfig::default(),
         &crate::config::SemanticClonesConfig::default(),
         &ContextGuidanceConfig::default(),
         &architecture,
-        &crate::config::EmbeddingsConfig::default(),
+        &inference,
     );
 
     assert_eq!(
         root["architecture_graph"]["inference"]["fact_synthesis"],
         json!("local_agent")
+    );
+    assert_eq!(
+        root["architecture_graph"]["inference"]["role_adjudication"],
+        json!("role_adjudicator")
+    );
+    assert_eq!(
+        root["inference"]["profiles"]["local_agent"]["thinking_level"],
+        json!("xhigh")
     );
 }
 
@@ -523,7 +549,7 @@ fn runtime_exposes_repo_repo_root_and_config_view() {
 }
 
 #[test]
-fn apply_devql_sqlite_ddl_noops_when_postgres_configured() {
+fn apply_devql_sqlite_ddl_uses_local_projection_when_postgres_is_configured() {
     let temp = tempdir().expect("tempdir");
     let repo_root = temp.path();
     let repo = test_repo_identity(repo_root);
@@ -572,10 +598,20 @@ fn apply_devql_sqlite_ddl_noops_when_postgres_configured() {
     assert!(!sqlite_path.exists());
 
     runtime
-        .apply_devql_sqlite_ddl("CREATE TABLE should_not_exist (id INTEGER PRIMARY KEY);")
+        .apply_devql_sqlite_ddl("CREATE TABLE should_exist (id INTEGER PRIMARY KEY);")
         .expect("postgres mode should not error");
 
-    assert!(!sqlite_path.exists());
+    assert!(sqlite_path.exists());
+
+    let conn = rusqlite::Connection::open(sqlite_path).expect("open devql sqlite");
+    let table_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'should_exist'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count created tables");
+    assert_eq!(table_count, 1);
 }
 
 #[test]

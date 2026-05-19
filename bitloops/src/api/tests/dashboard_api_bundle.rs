@@ -684,17 +684,19 @@ async fn dashboard_interaction_queries_return_session_detail_buckets_and_search_
 }
 
 #[test]
-fn interaction_commit_author_buckets_do_not_block_on_relational_write_locks() {
+fn interaction_commit_author_buckets_do_not_block_on_managed_relational_write_locks() {
     let repo = seed_dashboard_repo();
     let sqlite_path = checkpoint_sqlite_path(repo.path());
-    let lock_conn = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite");
-    lock_conn
-        .execute_batch("BEGIN IMMEDIATE;")
-        .expect("hold relational writer lock");
+    let held_lock = crate::storage::sqlite::hold_sqlite_write_lock_until_release(sqlite_path)
+        .expect("hold managed relational write lock");
 
     let (tx, rx) = std::sync::mpsc::channel();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
     let repo_root = repo.path().to_path_buf();
     let worker = std::thread::spawn(move || {
+        started_tx
+            .send(())
+            .expect("signal interaction commit author query started");
         let result = crate::host::interactions::query::list_commit_author_buckets(
             &repo_root,
             &crate::host::interactions::query::InteractionBrowseFilter::default(),
@@ -703,11 +705,14 @@ fn interaction_commit_author_buckets_do_not_block_on_relational_write_locks() {
             .expect("send interaction commit author buckets");
     });
 
+    started_rx
+        .recv()
+        .expect("interaction commit author query worker should start");
     let received = rx.recv_timeout(std::time::Duration::from_secs(1));
 
-    lock_conn
-        .execute_batch("ROLLBACK;")
-        .expect("release relational writer lock");
+    held_lock
+        .release()
+        .expect("release managed relational write lock");
 
     let buckets = match received {
         Ok(result) => result.expect("load interaction commit author buckets"),
@@ -717,7 +722,7 @@ fn interaction_commit_author_buckets_do_not_block_on_relational_write_locks() {
                 .expect("query should finish after releasing relational writer lock");
             let delayed_error = delayed.err().map(|err| err.to_string());
             panic!(
-                "interaction commit author query blocked on a transient relational write lock: {err}; eventual error after releasing lock: {delayed_error:?}"
+                "interaction commit author query blocked on the managed relational write lock: {err}; eventual error after releasing lock: {delayed_error:?}"
             );
         }
     };

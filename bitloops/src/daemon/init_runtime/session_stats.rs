@@ -5,9 +5,9 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::capability_packs::semantic_clones::types::{
-    SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::capability_packs::semantic_clones::workplane::{
     payload_artefact_id, payload_is_repo_backfill, payload_repo_backfill_artefact_ids,
@@ -156,6 +156,7 @@ pub(crate) fn load_session_workplane_stats(
             &[
                 SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
                 SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+                SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX,
             ],
         )?;
         stats.summary_embedding_jobs.latest_error = latest_mailbox_error(
@@ -181,7 +182,8 @@ pub(crate) fn load_session_workplane_stats(
                 continue;
             }
             if (blocked.mailbox_name == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
-                || blocked.mailbox_name == SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX)
+                || blocked.mailbox_name == SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+                || blocked.mailbox_name == SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX)
                 && stats.code_embedding_jobs.counts.has_pending_or_running()
             {
                 stats
@@ -300,6 +302,7 @@ fn latest_semantic_mailbox_error(
             .optional(),
         SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
         | SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+        | SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
         | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => {
             let representation_kind =
                 semantic_embedding_representation_kind_for_mailbox(mailbox_name);
@@ -372,7 +375,11 @@ pub(crate) fn load_semantic_embedding_session_mailbox_counts(
     let mut stmt = conn.prepare(
         "SELECT representation_kind, status, item_kind, artefact_id, payload_json
          FROM semantic_embedding_mailbox_items
-         WHERE repo_id = ?1 AND init_session_id = ?2",
+         WHERE repo_id = ?1
+           AND (
+               init_session_id = ?2
+               OR (representation_kind = 'summary' AND init_session_id IS NULL)
+           )",
     )?;
     let rows = stmt.query_map(params![repo_id, init_session_id], |row| {
         Ok((
@@ -553,6 +560,15 @@ fn effective_session_work_item_count(
             "pending" | "running" | "failed" => embedding_effective_work_item_count(
                 payload,
                 EmbeddingRepresentationKind::Identity,
+                embedding_freshness,
+                mailbox_name,
+            ),
+            _ => payload_work_item_count(payload, mailbox_name),
+        },
+        SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX => match status {
+            "pending" | "running" | "failed" => embedding_effective_work_item_count(
+                payload,
+                EmbeddingRepresentationKind::Architecture,
                 embedding_freshness,
                 mailbox_name,
             ),

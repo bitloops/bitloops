@@ -48,6 +48,7 @@ pub(super) fn build_capability_config_root(
         "architecture_graph": {
             "inference": {
                 "fact_synthesis": architecture.inference.fact_synthesis,
+                "role_adjudication": architecture.inference.role_adjudication,
             },
         },
         "inference": {
@@ -71,6 +72,7 @@ pub(super) fn build_capability_config_root(
                     "base_url": profile.base_url,
                     "temperature": profile.temperature,
                     "max_output_tokens": profile.max_output_tokens,
+                    "thinking_level": profile.thinking_level,
                     "cache_dir": profile.cache_dir,
                 })
             )).collect::<serde_json::Map<_, _>>(),

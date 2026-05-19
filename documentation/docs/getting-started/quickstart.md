@@ -18,10 +18,6 @@ curl -fsSL https://bitloops.com/install.sh | bash
 ```
 
 ```bash
-brew tap bitloops/tap && brew install bitloops
-```
-
-```bash
 cargo install bitloops
 ```
 

@@ -140,6 +140,7 @@ The current daemon parser accepts these top-level surfaces:
 - `knowledge`
 - `semantic_clones`
 - `context_guidance`
+- `architecture`
 - `inference`
 - `dashboard`
 
@@ -164,6 +165,53 @@ Notes:
 - `driver` on a text-generation profile is interpreted by `bitloops-inference`, not by Bitloops itself.
 - Local summary bootstrap uses Ollama by default when `bitloops init --install-default-daemon` or interactive `bitloops enable` can detect it, and writes `base_url = "http://127.0.0.1:11434/api/chat"`.
 - Local context guidance setup uses the same Ollama chat profile shape and writes `max_output_tokens = 4096`.
+- `thinking_level` is an optional profile property for local CLI-agent drivers only. Bitloops preserves the configured value and includes it in runtime identity; when absent, Bitloops leaves it unset and does not synthesize a default.
+
+### Structured-Generation Profiles
+
+`task = "structured_generation"` profiles use the same generic `[inference.profiles.<name>]` profile shape as text generation. The `thinking_level` property is optional on any profile, but only local CLI-agent drivers use it.
+
+For local CLI-agent drivers, Bitloops launches the managed `bitloops_inference` runtime, and `bitloops-inference` launches the selected agent runtime from the profile. Configure these profiles manually when you need structured generation backed by a local CLI agent.
+
+Supported `thinking_level` values:
+
+- `codex_exec`: `low`, `medium`, `high`, `extra_high`, `xhigh`. `extra_high` and `xhigh` both run Codex with `model_reasoning_effort = "xhigh"`.
+- `claude_code_print`: `low`, `medium`, `high`, `xhigh`, `max`.
+
+When `thinking_level` is absent, Bitloops sends no default and emits no warning. The local inference runtime and driver decide their own default behavior.
+
+The `architecture_graph` capability currently exposes two structured-generation slots:
+
+- `[architecture.inference].fact_synthesis`: optional profile for architecture graph synthesis and architecture role seed generation.
+- `[architecture.inference].role_adjudication`: optional profile for queued architecture role adjudication.
+
+Example Codex-backed role adjudication profile:
+
+```toml
+[architecture.inference]
+role_adjudication = "architecture_role_adjudication_codex"
+
+[inference.runtimes.bitloops_inference]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-inference/bitloops-inference"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.runtimes.codex]
+command = "codex"
+args = ["--ask-for-approval", "never"]
+startup_timeout_secs = 5
+request_timeout_secs = 900
+
+[inference.profiles.architecture_role_adjudication_codex]
+task = "structured_generation"
+driver = "codex_exec"
+runtime = "codex"
+model = "gpt-5.4-mini"
+temperature = "0.1"
+max_output_tokens = 1024
+thinking_level = "high"
+```
 
 ### Telemetry Consent
 
@@ -346,6 +394,35 @@ Configured relational, events, and blob stores still come from the daemon config
 - `[stores.relational]` selects the `RelationalStore` backend, using SQLite or Postgres
 - `[stores.events]` selects the event backend, using DuckDB or ClickHouse
 - `[stores.blob]` selects the blob backend, using local disk or a remote object store
+
+The effective storage authority is split by data family:
+
+| Data family | Authority | Backend selection |
+| --- | --- | --- |
+| `runtime` | workspace-local | always SQLite |
+| `relational current` | workspace-local | always SQLite |
+| `relational shared` | workspace-local or shared | SQLite by default, Postgres when `[stores.relational].postgres_dsn` is configured |
+| `events` | workspace-local or shared | DuckDB by default, ClickHouse when `[stores.events].clickhouse_url` is configured |
+| `blob runtime/session` | workspace-local | always local disk |
+| `blob project/knowledge` | workspace-local or shared | local disk by default, S3 or GCS when `[stores.blob]` is configured for a remote object store |
+
+Notes:
+
+- Runtime/session state always stays workspace-local in runtime SQLite.
+- Relational `*_current` and other current/projection tables always stay workspace-local in SQLite, even when Postgres is configured.
+- Shared relational historical tables use Postgres when `[stores.relational].postgres_dsn` is configured; otherwise they stay local in SQLite.
+- Canonical interaction event rows use the selected event backend from `[stores.events]`. The local interaction spool is runtime-local staging, not a second canonical event store.
+- Runtime/session blob payloads always stay workspace-local on disk.
+- Project/knowledge blob payloads follow `[stores.blob]`, using local disk when no remote object store is configured and S3 or GCS when one is configured.
+
+### Multi-Workspace Behavior
+
+Bitloops treats each workspace or worktree as having its own local runtime and current-projection state:
+
+- Local runtime SQLite and local current/projection relational state are derived from the active config root and workspace path, so one worktree’s current state does not overwrite another worktree’s local current state.
+- Shared historical relational data, canonical event data, and project/knowledge blob payloads may point at shared remote backends when configured.
+- This means different worktrees can keep divergent local runtime and `*_current` views while still sharing the same historical or project-level backing stores.
+- The detailed `bitloops status` view and the GraphQL `health` surface report this split explicitly so you can see which families stay local and which resolve to shared infrastructure.
 
 ## Project Policy
 

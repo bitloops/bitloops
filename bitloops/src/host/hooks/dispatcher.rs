@@ -557,6 +557,10 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
         other => other,
     };
 
+    if crate::host::hooks::agent_hooks_suppressed_by_env() {
+        return Ok(());
+    }
+
     let repo_root = match paths::repo_root() {
         Ok(r) => r,
         Err(_) => return Ok(()),
@@ -957,6 +961,30 @@ fn read_stdin() -> Result<String> {
         .read_to_string(&mut buf)
         .context("reading stdin")?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::host::hooks::{BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV, agent_hooks_suppressed_by_env};
+    use crate::test_support::process_state::enter_process_state;
+
+    #[test]
+    fn agent_hooks_suppressed_env_accepts_truthy_values() {
+        let _guard = enter_process_state(None, &[(BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV, Some("1"))]);
+        assert!(agent_hooks_suppressed_by_env());
+    }
+
+    #[test]
+    fn agent_hooks_suppressed_env_rejects_false_values() {
+        for value in ["", "0", "false", "no", "off"] {
+            let _guard =
+                enter_process_state(None, &[(BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV, Some(value))]);
+            assert!(
+                !agent_hooks_suppressed_by_env(),
+                "value `{value}` should not suppress hooks"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

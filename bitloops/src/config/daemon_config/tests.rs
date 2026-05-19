@@ -111,6 +111,7 @@ runtime = "codex"
 model = "gpt-5.4-mini"
 temperature = "0.1"
 max_output_tokens = 4096
+thinking_level = "xhigh"
 "#,
     )
     .expect("write temp config");
@@ -123,6 +124,15 @@ max_output_tokens = 4096
                 "fact_synthesis": "local_agent"
             }
         }))
+    );
+    assert_eq!(
+        loaded
+            .settings
+            .inference
+            .as_ref()
+            .and_then(|value| value.pointer("/profiles/local_agent/thinking_level"))
+            .and_then(serde_json::Value::as_str),
+        Some("xhigh")
     );
 }
 
@@ -161,6 +171,71 @@ local_path = "stores/blob"
     assert!(dir.path().join("stores/relational/relational.db").is_file());
     assert!(dir.path().join("stores/event/events.duckdb").is_file());
     assert!(dir.path().join("stores/blob").is_dir());
+}
+
+#[test]
+fn persist_daemon_store_backend_selection_copies_remote_store_selection_without_clobbering_local_paths()
+ {
+    let source = NamedTempFile::new().expect("create source config");
+    fs::write(
+        source.path(),
+        r#"
+[runtime]
+local_dev = false
+
+[stores.relational]
+postgres_dsn = "postgres://user:pass@localhost:5432/bitloops"
+
+[stores.events]
+clickhouse_url = "http://localhost:8123"
+clickhouse_user = "bitloops"
+clickhouse_password = "secret"
+clickhouse_database = "bitloops"
+
+[stores.blob]
+s3_bucket = "bitloops-bucket"
+s3_region = "eu-central-1"
+s3_access_key_id = "AKIA..."
+s3_secret_access_key = "secret-key"
+"#,
+    )
+    .expect("write source config");
+
+    let target = NamedTempFile::new().expect("create target config");
+    fs::write(
+        target.path(),
+        r#"
+[runtime]
+local_dev = false
+
+[stores.relational]
+sqlite_path = "stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "stores/event/events.duckdb"
+
+[stores.blob]
+local_path = "stores/blob"
+"#,
+    )
+    .expect("write target config");
+
+    persist_daemon_store_backend_selection(source.path(), target.path())
+        .expect("persist remote store selection");
+
+    let rendered = fs::read_to_string(target.path()).expect("read updated target config");
+    assert!(rendered.contains("sqlite_path = \"stores/relational/relational.db\""));
+    assert!(rendered.contains("duckdb_path = \"stores/event/events.duckdb\""));
+    assert!(rendered.contains("local_path = \"stores/blob\""));
+    assert!(rendered.contains("postgres_dsn = \"postgres://user:pass@localhost:5432/bitloops\""));
+    assert!(rendered.contains("clickhouse_url = \"http://localhost:8123\""));
+    assert!(rendered.contains("clickhouse_user = \"bitloops\""));
+    assert!(rendered.contains("clickhouse_password = \"secret\""));
+    assert!(rendered.contains("clickhouse_database = \"bitloops\""));
+    assert!(rendered.contains("s3_bucket = \"bitloops-bucket\""));
+    assert!(rendered.contains("s3_region = \"eu-central-1\""));
+    assert!(rendered.contains("s3_access_key_id = \"AKIA...\""));
+    assert!(rendered.contains("s3_secret_access_key = \"secret-key\""));
 }
 
 #[test]

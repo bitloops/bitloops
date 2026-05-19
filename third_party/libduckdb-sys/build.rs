@@ -209,8 +209,6 @@ mod build_bundled {
         let loader_path = Path::new(out_dir).join("duckdb/generated_extension_loader_package_build.cpp");
         rewrite_generated_extension_loader(&extensions, &loader_path)
             .expect("failed to rewrite generated extension loader");
-        println!("cargo:warning=generated extension loader: {}", loader_path.display());
-
         // duckdb/tools/pythonpkg/setup.py
         cfg.define("DUCKDB_EXTENSION_AUTOINSTALL_DEFAULT", "1");
         cfg.define("DUCKDB_EXTENSION_AUTOLOAD_DEFAULT", "1");
@@ -463,9 +461,7 @@ mod build_linked {
             .copied()
             .collect::<Vec<_>>();
 
-        if missing_artifacts.is_empty() {
-            println!("cargo:warning=Reusing libduckdb from {}", download_dir.display());
-        } else {
+        if !missing_artifacts.is_empty() {
             let client = http_client()?;
             let url = archive.download_url(&version);
             ensure_libduckdb(&client, &url, &archive_path)?;
@@ -508,7 +504,6 @@ mod build_linked {
         archive_path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if archive_path.exists() {
-            println!("cargo:warning=libduckdb already present at {}", archive_path.display());
             return Ok(());
         }
         let tmp_path = archive_path.with_extension("download");
@@ -519,7 +514,6 @@ mod build_linked {
         let mut tmp_file = fs::File::create(&tmp_path)?;
         io::copy(&mut response, &mut tmp_file)?;
         fs::rename(&tmp_path, archive_path)?;
-        println!("cargo:warning=Downloaded libduckdb from {url}");
         Ok(())
     }
 
@@ -527,7 +521,6 @@ mod build_linked {
         let file = fs::File::open(archive_path)?;
         let mut archive = zip::ZipArchive::new(file)?;
         archive.extract(destination)?;
-        println!("cargo:warning=Extracted libduckdb to {}", destination.display());
         Ok(())
     }
 
@@ -549,7 +542,6 @@ mod build_linked {
                 fs::remove_file(&dest)?;
             }
             fs::copy(&source, &dest)?;
-            println!("cargo:warning=Copied libduckdb to {}", dest.display());
         }
         Ok(deps_dir)
     }

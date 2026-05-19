@@ -157,7 +157,7 @@ impl InitProgressRenderer {
                 },
                 spinner.as_str(),
                 tick.as_str(),
-                "Configuring semantic summaries with bitloops-inference",
+                "Configuring Bitloops inference",
                 self.terminal_width,
             ));
         }
@@ -356,7 +356,7 @@ impl InitProgressRenderer {
                 lines.push(String::new());
             }
             lines.push(fit_init_plain_line(
-                "Configuring semantic summaries with bitloops-inference",
+                "Configuring Bitloops inference",
                 self.terminal_width,
             ));
             lines.push(format_summary_progress_bar_line(

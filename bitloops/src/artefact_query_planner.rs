@@ -14,7 +14,14 @@ pub(crate) struct ArtefactQuerySpec {
     pub temporal_scope: ArtefactTemporalScope,
     pub structural_filter: ArtefactStructuralFilter,
     pub activity_filter: Option<ArtefactActivityFilter>,
+    pub current_activity_snapshots: Option<Vec<ArtefactActivitySnapshot>>,
     pub pagination: Option<ArtefactPagination>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ArtefactActivitySnapshot {
+    pub path: String,
+    pub snapshot_id: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -220,6 +227,7 @@ pub(crate) fn plan_graphql_artefact_query(
                 filter.since.as_ref().map(|value| value.as_str()),
             )
         }),
+        current_activity_snapshots: None,
         pagination,
     }
 }
@@ -264,6 +272,7 @@ pub(crate) fn plan_devql_artefact_query(
             parsed.artefacts.agent.as_deref(),
             parsed.artefacts.since.as_deref(),
         ),
+        current_activity_snapshots: None,
         pagination: Some(ArtefactPagination::forward(None, parsed.limit)),
     })
 }

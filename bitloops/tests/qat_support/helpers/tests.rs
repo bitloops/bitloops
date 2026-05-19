@@ -6,7 +6,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
 
-use crate::qat_support::world::QatRunConfig;
+use crate::qat_support::world::{QatRunConfig, QatWorld};
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
 use bitloops::daemon::CapabilityEventRunStatus;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
@@ -1202,7 +1202,7 @@ fn load_latest_test_harness_capability_event_run_reads_macos_current_state_store
     fs::create_dir_all(runtime_parent).expect("create runtime parent");
     let store = DaemonSqliteRuntimeStore::open_at(runtime_path).expect("open runtime store");
     store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
@@ -1272,7 +1272,7 @@ fn load_latest_test_harness_capability_event_run_reads_xdg_config_runtime_store(
     fs::create_dir_all(runtime_parent).expect("create runtime parent");
     let store = DaemonSqliteRuntimeStore::open_at(runtime_path).expect("open runtime store");
     store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
@@ -1342,7 +1342,7 @@ fn load_latest_test_harness_capability_event_run_prefers_newer_legacy_run() {
     fs::create_dir_all(runtime_parent).expect("create runtime parent");
     let store = DaemonSqliteRuntimeStore::open_at(runtime_path).expect("open runtime store");
     store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
@@ -1433,7 +1433,7 @@ fn load_latest_test_harness_capability_event_run_filters_to_requested_repo() {
     fs::create_dir_all(runtime_parent).expect("create runtime parent");
     let store = DaemonSqliteRuntimeStore::open_at(runtime_path).expect("open runtime store");
     store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
@@ -1543,7 +1543,7 @@ fn load_latest_test_harness_capability_event_run_prefers_higher_generation_when_
     fs::create_dir_all(runtime_parent).expect("create runtime parent");
     let store = DaemonSqliteRuntimeStore::open_at(runtime_path).expect("open runtime store");
     store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
@@ -1632,7 +1632,7 @@ fn load_latest_test_harness_generation_state_reads_cursor_progress_from_xdg_conf
     let store =
         DaemonSqliteRuntimeStore::open_at(runtime_path.clone()).expect("open runtime store");
     store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO capability_workplane_cursor_generations (repo_id, generation_seq, source_task_id, sync_mode, active_branch, head_commit_sha, requires_full_reconcile, created_at_unix) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -2140,6 +2140,49 @@ fn wait_for_qat_condition_times_out_with_last_observation() {
     let message = format!("{err:#}");
     assert!(message.contains("DevQL artefacts query to return results"));
     assert!(message.contains("last observation=value: artefacts=0"));
+}
+
+#[test]
+fn resolve_repo_id_prefers_repo_path_identity_over_relational_fallback() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo_dir = dir.path().join("repo");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    fs::create_dir_all(&run_dir).expect("create run dir");
+    let expected = bitloops::host::devql::resolve_repo_id(&repo_dir).expect("resolve repo id");
+    let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+    conn.execute_batch(
+        "CREATE TABLE repositories (
+            repo_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            created_at TEXT NOT NULL
+         );
+         INSERT INTO repositories (repo_id, provider, created_at)
+         VALUES ('relational-repo-id', 'local', '2026-05-19T00:00:00Z');",
+    )
+    .expect("seed relational repo id");
+    let mut world = QatWorld::default();
+    world.run_dir = Some(run_dir);
+    world.repo_dir = Some(repo_dir);
+
+    let actual = resolve_repo_id_for_world(&world, &conn).expect("resolve repo id");
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn recent_hook_failure_lines_from_log_content_filters_latest_failures() {
+    let content = "\
+2026-05-19T10:00:00Z hook=pre-commit success=true\n\
+2026-05-19T10:01:00Z hook=post-commit success=false error=duckdb lock\n\
+2026-05-19T10:02:00Z unrelated error line\n\
+2026-05-19T10:03:00Z {\"hook\":\"post-commit\",\"success\":false,\"error\":\"denied\"}\n";
+
+    let lines = recent_hook_failure_lines_from_log_content(content, 8);
+
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].contains("duckdb lock"));
+    assert!(lines[1].contains("denied"));
 }
 
 #[test]

@@ -399,6 +399,7 @@ summary_embeddings = "repo_summary"
         capability.architecture.inference,
         ArchitectureInferenceBindings {
             fact_synthesis: Some("local_agent".to_string()),
+            role_adjudication: None,
         }
     );
 }
@@ -597,6 +598,7 @@ fn architecture_and_inference_from_unified_read_fact_synthesis_slot_binding() {
         architecture.inference,
         ArchitectureInferenceBindings {
             fact_synthesis: Some("local_agent".to_string()),
+            role_adjudication: None,
         }
     );
     assert_eq!(capability.architecture, architecture);
@@ -608,6 +610,212 @@ fn architecture_and_inference_from_unified_read_fact_synthesis_slot_binding() {
             .expect("local agent profile")
             .task,
         InferenceTask::StructuredGeneration
+    );
+}
+
+#[test]
+fn architecture_and_inference_from_unified_read_cli_agent_thinking_level() {
+    let settings = UnifiedSettings {
+        architecture: Some(json!({
+            "inference": {
+                "fact_synthesis": "local_agent",
+                "role_adjudication": "role_agent"
+            }
+        })),
+        inference: Some(json!({
+            "runtimes": {
+                "codex": {
+                    "command": "codex",
+                    "args": [],
+                    "startup_timeout_secs": 5,
+                    "request_timeout_secs": 900
+                }
+            },
+            "profiles": {
+                "local_agent": {
+                    "task": "structured_generation",
+                    "driver": "codex_exec",
+                    "runtime": "codex",
+                    "model": "gpt-5.4-mini",
+                    "temperature": "0.1",
+                    "max_output_tokens": 4096,
+                    "thinking_level": "xhigh"
+                },
+                "role_agent": {
+                    "task": "structured_generation",
+                    "driver": "claude_code_print",
+                    "runtime": "codex",
+                    "model": "claude-sonnet-4.5",
+                    "temperature": "0.1",
+                    "max_output_tokens": 1024,
+                    "thinking_level": "max"
+                }
+            }
+        })),
+        ..Default::default()
+    };
+
+    let capability =
+        resolve_inference_capability_from_unified(&settings, Path::new("/config"), no_env);
+
+    assert_eq!(
+        capability
+            .inference
+            .profiles
+            .get("local_agent")
+            .expect("local agent profile")
+            .thinking_level
+            .as_deref(),
+        Some("xhigh")
+    );
+    assert_eq!(
+        capability
+            .inference
+            .profiles
+            .get("role_agent")
+            .expect("role agent profile")
+            .thinking_level
+            .as_deref(),
+        Some("max")
+    );
+    assert!(capability.inference.warnings.is_empty());
+}
+
+#[test]
+fn inference_profile_warns_on_invalid_cli_agent_thinking_level() {
+    let settings = UnifiedSettings {
+        inference: Some(json!({
+            "runtimes": {
+                "codex": {
+                    "command": "codex"
+                }
+            },
+            "profiles": {
+                "local_agent": {
+                    "task": "structured_generation",
+                    "driver": "codex_exec",
+                    "runtime": "codex",
+                    "model": "gpt-5.4-mini",
+                    "temperature": "0.1",
+                    "max_output_tokens": 4096,
+                    "thinking_level": "max"
+                }
+            }
+        })),
+        ..Default::default()
+    };
+
+    let capability =
+        resolve_inference_capability_from_unified(&settings, Path::new("/config"), no_env);
+    let inference = capability.inference;
+
+    assert_eq!(
+        inference
+            .profiles
+            .get("local_agent")
+            .expect("profile")
+            .thinking_level
+            .as_deref(),
+        Some("max")
+    );
+    assert!(
+        inference.warnings.iter().any(|warning| warning.contains(
+            "inference.profiles.local_agent.thinking_level `max` is not supported by driver `codex_exec`"
+        )),
+        "expected thinking_level warning, got {:?}",
+        inference.warnings
+    );
+}
+
+#[test]
+fn inference_profile_warns_when_thinking_level_is_set_for_non_cli_driver() {
+    let settings = UnifiedSettings {
+        inference: Some(json!({
+            "runtimes": {
+                "bitloops_inference": {
+                    "command": "bitloops-inference"
+                }
+            },
+            "profiles": {
+                "guidance": {
+                    "task": "text_generation",
+                    "driver": "ollama_chat",
+                    "runtime": "bitloops_inference",
+                    "model": "ministral-3:3b",
+                    "base_url": "http://127.0.0.1:11434/api/chat",
+                    "temperature": "0.1",
+                    "max_output_tokens": 4096,
+                    "thinking_level": "high"
+                }
+            }
+        })),
+        ..Default::default()
+    };
+
+    let capability =
+        resolve_inference_capability_from_unified(&settings, Path::new("/config"), no_env);
+    let inference = capability.inference;
+
+    assert_eq!(
+        inference
+            .profiles
+            .get("guidance")
+            .expect("profile")
+            .thinking_level
+            .as_deref(),
+        Some("high")
+    );
+    assert!(
+        inference.warnings.iter().any(|warning| warning.contains(
+            "inference.profiles.guidance.thinking_level is only supported by local CLI-agent drivers"
+        )),
+        "expected thinking_level warning, got {:?}",
+        inference.warnings
+    );
+}
+
+#[test]
+fn inference_profile_without_thinking_level_has_no_default_and_no_warning() {
+    let settings = UnifiedSettings {
+        inference: Some(json!({
+            "runtimes": {
+                "codex": {
+                    "command": "codex"
+                }
+            },
+            "profiles": {
+                "local_agent": {
+                    "task": "structured_generation",
+                    "driver": "codex_exec",
+                    "runtime": "codex",
+                    "model": "gpt-5.4-mini",
+                    "temperature": "0.1",
+                    "max_output_tokens": 4096
+                }
+            }
+        })),
+        ..Default::default()
+    };
+
+    let capability =
+        resolve_inference_capability_from_unified(&settings, Path::new("/config"), no_env);
+    let inference = capability.inference;
+
+    assert_eq!(
+        inference
+            .profiles
+            .get("local_agent")
+            .expect("profile")
+            .thinking_level,
+        None
+    );
+    assert!(
+        inference
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("thinking_level")),
+        "missing thinking_level should not warn, got {:?}",
+        inference.warnings
     );
 }
 

@@ -24,6 +24,7 @@ use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,
     default_daemon_config_path, ensure_daemon_config_exists,
 };
+use crate::test_support::git_fixtures::init_test_repo;
 use crate::test_support::process_state::{with_env_vars, with_process_state};
 use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_dir_overrides};
 
@@ -35,11 +36,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 fn setup_git_repo(dir: &TempDir) {
-    std::process::Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(dir.path())
-        .status()
-        .expect("git init");
+    init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");
 }
 
 fn write_repo_policy(dir: &TempDir, file_name: &str, content: &str) {
@@ -143,7 +140,7 @@ fn with_temp_app_dirs<T>(
     assume_daemon_running: bool,
     f: impl FnOnce() -> T,
 ) -> T {
-    with_temp_app_dirs_and_summary_configured(temp, tty, assume_daemon_running, true, f)
+    with_temp_app_dirs_and_generation_configured(temp, tty, assume_daemon_running, true, true, f)
 }
 
 fn with_temp_app_dirs_and_summary_configured<T>(
@@ -153,11 +150,29 @@ fn with_temp_app_dirs_and_summary_configured<T>(
     summary_configured: bool,
     f: impl FnOnce() -> T,
 ) -> T {
+    with_temp_app_dirs_and_generation_configured(
+        temp,
+        tty,
+        assume_daemon_running,
+        summary_configured,
+        true,
+        f,
+    )
+}
+
+fn with_temp_app_dirs_and_generation_configured<T>(
+    temp: &TempDir,
+    tty: bool,
+    assume_daemon_running: bool,
+    summary_configured: bool,
+    context_guidance_configured: bool,
+    f: impl FnOnce() -> T,
+) -> T {
     with_summary_generation_configured_hook(
         move |_| summary_configured,
         || {
             with_context_guidance_generation_configured_hook(
-                |_| true,
+                move |_| context_guidance_configured,
                 || {
                     with_test_platform_dir_overrides(app_dir_overrides(temp), || {
                         with_test_tty_override(tty, || {
@@ -845,6 +860,114 @@ fn choose_summary_setup_during_init_skips_when_summary_mode_is_off() {
         selection,
         crate::cli::inference::SummarySetupSelection::Skip
     );
+}
+
+#[test]
+fn choose_summary_setup_interactive_does_not_resolve_cloud_login_status() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let mut out = Vec::new();
+    let mut input = Cursor::new("\n");
+
+    let selection = with_test_tty_override(true, || {
+        with_summary_generation_configured_hook(
+            |_| false,
+            || {
+                with_cloud_login_status_hook(
+                    || panic!("interactive summary setup should not resolve cloud login status"),
+                    || {
+                        test_runtime().block_on(choose_summary_setup_during_init(
+                            repo.path(),
+                            false,
+                            false,
+                            &mut out,
+                            &mut input,
+                        ))
+                    },
+                )
+            },
+        )
+    })
+    .expect("choose summary setup");
+
+    assert_eq!(
+        selection,
+        crate::cli::inference::SummarySetupSelection::Skip
+    );
+    let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(rendered.contains("Configure semantic summaries"));
+}
+
+#[test]
+fn choose_summary_setup_noninteractive_treats_login_error_as_not_logged_in() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let mut out = Vec::new();
+    let mut input = Cursor::new("");
+
+    let selection = with_test_tty_override(false, || {
+        with_summary_generation_configured_hook(
+            |_| false,
+            || {
+                with_cloud_login_status_hook(
+                    || Err(anyhow::anyhow!("keyring unavailable")),
+                    || {
+                        test_runtime().block_on(choose_summary_setup_during_init(
+                            repo.path(),
+                            false,
+                            false,
+                            &mut out,
+                            &mut input,
+                        ))
+                    },
+                )
+            },
+        )
+    })
+    .expect("choose summary setup");
+
+    assert_eq!(
+        selection,
+        crate::cli::inference::SummarySetupSelection::Skip
+    );
+}
+
+#[test]
+fn choose_context_guidance_setup_interactive_does_not_resolve_cloud_login_status() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let parsed = Cli::try_parse_from(["bitloops", "init"]).expect("parse init");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    let mut out = Vec::new();
+    let mut input = Cursor::new("\n");
+
+    let selection = with_test_tty_override(true, || {
+        with_context_guidance_generation_configured_hook(
+            |_| false,
+            || {
+                with_cloud_login_status_hook(
+                    || {
+                        panic!("interactive context guidance setup should not resolve cloud login status")
+                    },
+                    || {
+                        test_runtime().block_on(choose_context_guidance_setup_during_init(
+                            repo.path(),
+                            &args,
+                            &mut out,
+                            &mut input,
+                        ))
+                    },
+                )
+            },
+        )
+    })
+    .expect("choose context guidance setup");
+
+    assert_eq!(
+        selection,
+        crate::cli::inference::ContextGuidanceSetupSelection::Skip
+    );
+    let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(rendered.contains("Configure context guidance"));
 }
 
 #[test]
@@ -3421,12 +3544,12 @@ fn run_init_with_install_default_daemon_prefers_https_fallback_when_mkcert_is_av
 }
 
 #[test]
-fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
+fn run_init_without_install_default_daemon_prompts_for_skippable_embeddings_setup() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_temp_app_dirs(&app_dirs, false, true, || {
+    with_temp_app_dirs(&app_dirs, true, true, || {
         let config_path = ensure_daemon_config_exists().expect("create default daemon config");
         let (command, args) = fake_runtime_command_and_args(repo.path());
         write_runtime_only_daemon_config(&config_path, &command, &args);
@@ -3443,7 +3566,7 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
             },
             || {
                 let mut out = Vec::new();
-                let mut input = Cursor::new("");
+                let mut input = Cursor::new("3\n\n");
                 let runtime = test_runtime();
                 runtime
                     .block_on(run_with_io_async_for_project_root(
@@ -3452,7 +3575,7 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                             install_default_daemon: false,
                             force: false,
                             disable_devql_guidance: false,
-                            agent: Vec::new(),
+                            agent: vec![DEFAULT_AGENT.to_string()],
                             telemetry: Some(false),
                             no_telemetry: false,
                             skip_baseline: false,
@@ -3484,7 +3607,8 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                     "plain init should not install embeddings:\n{config}"
                 );
                 let rendered = String::from_utf8(out).expect("utf8 output");
-                assert!(!rendered.contains("Configure embeddings"));
+                assert!(rendered.contains("Configure embeddings"));
+                assert!(rendered.contains("Skip for now"));
                 assert!(!rendered.contains("Install local embeddings as well?"));
             },
         );
@@ -3492,12 +3616,12 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
 }
 
 #[test]
-fn run_init_interactive_without_install_default_daemon_skips_daemon_setup_prompts() {
+fn run_init_interactive_without_install_default_daemon_uses_full_setup_prompt_path() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_temp_app_dirs_and_summary_configured(&app_dirs, true, true, false, || {
+    with_temp_app_dirs_and_generation_configured(&app_dirs, true, true, false, false, || {
         let config_path = ensure_daemon_config_exists().expect("create default daemon config");
         write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
 
@@ -3516,7 +3640,7 @@ fn run_init_interactive_without_install_default_daemon_skips_daemon_setup_prompt
                     |_repo_root| panic!("plain init should not install embeddings"),
                     || {
                         let mut out = Vec::new();
-                        let mut input = Cursor::new("");
+                        let mut input = Cursor::new("3\n\n\n\n");
                         let select = |_items: &[String], enable_devql_guidance: bool| {
                             Ok(InitAgentSelection {
                                 agents: vec!["claude-code".to_string()],
@@ -3559,9 +3683,10 @@ fn run_init_interactive_without_install_default_daemon_skips_daemon_setup_prompt
                             .expect("run init");
 
                         let rendered = String::from_utf8(out).expect("utf8 output");
-                        assert!(!rendered.contains("Configure embeddings"));
+                        assert!(rendered.contains("Configure embeddings"));
                         assert!(!rendered.contains("Install local embeddings as well?"));
-                        assert!(!rendered.contains("Configure semantic summaries"));
+                        assert!(rendered.contains("Configure semantic summaries"));
+                        assert!(rendered.contains("Configure context guidance"));
 
                         let daemon_config = ensure_daemon_config_exists()
                             .expect("resolve daemon config after init");
@@ -4279,7 +4404,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
 }
 
 #[test]
-fn run_init_with_install_default_daemon_requires_explicit_embeddings_choice_when_noninteractive() {
+fn run_init_with_install_default_daemon_leaves_embeddings_unchanged_when_noninteractive() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
@@ -4308,7 +4433,7 @@ fn run_init_with_install_default_daemon_requires_explicit_embeddings_choice_when
                         let mut out = Vec::new();
                         let mut input = Cursor::new("");
                         let runtime = test_runtime();
-                        let err = runtime
+                        runtime
                             .block_on(run_with_io_async_for_project_root(
                                 InitArgs {
                                     command: None,
@@ -4340,11 +4465,15 @@ fn run_init_with_install_default_daemon_requires_explicit_embeddings_choice_when
                                 &mut input,
                                 None,
                             ))
-                            .expect_err("non-interactive init should require an embeddings choice");
+                            .expect("run non-interactive init without embeddings choice");
 
+                        let daemon_config = ensure_daemon_config_exists()
+                            .expect("resolve daemon config after init");
+                        let daemon_config =
+                            std::fs::read_to_string(daemon_config).expect("read daemon config");
                         assert!(
-                            format!("{err:#}")
-                                .contains(NON_INTERACTIVE_INIT_EMBEDDINGS_SELECTION_ERROR)
+                            !daemon_config.contains("code_embeddings = "),
+                            "non-interactive init without an explicit embeddings choice should leave embeddings unconfigured:\n{daemon_config}"
                         );
                     },
                 );
@@ -4469,6 +4598,111 @@ fn run_init_with_install_default_daemon_can_skip_embeddings_via_flag() {
                                 .is_some_and(|status| status.intent_active),
                             "skip should not activate clone rebuild mailbox: {status:#?}"
                         );
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_with_install_default_daemon_carries_forward_repo_store_backend_selection() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+    std::fs::write(
+        repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+        r#"
+[stores.relational]
+postgres_dsn = "postgres://user:pass@localhost:5432/bitloops"
+
+[stores.events]
+clickhouse_url = "http://localhost:8123"
+clickhouse_database = "bitloops"
+"#,
+    )
+    .expect("write repo daemon config with remote stores");
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, false, true, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                ensure_daemon_config_exists().expect("create default daemon config");
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("");
+                        let runtime = test_runtime();
+                        runtime
+                            .block_on(run_with_io_async_for_project_root(
+                                InitArgs {
+                                    command: None,
+                                    install_default_daemon: true,
+                                    force: false,
+                                    disable_devql_guidance: false,
+                                    agent: vec![DEFAULT_AGENT.to_string()],
+                                    telemetry: Some(false),
+                                    no_telemetry: false,
+                                    skip_baseline: false,
+                                    sync: Some(false),
+                                    ingest: Some(false),
+                                    backfill: None,
+                                    exclude: Vec::new(),
+                                    exclude_from: Vec::new(),
+                                    embeddings_runtime: None,
+                                    no_embeddings: true,
+                                    no_summaries: true,
+                                    context_guidance_runtime: None,
+                                    no_context_guidance: true,
+                                    context_guidance_gateway_url: None,
+                                    context_guidance_api_key_env: None,
+                                    embeddings_gateway_url: None,
+                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                        .to_string(),
+                                },
+                                repo.path(),
+                                &mut out,
+                                &mut input,
+                                None,
+                            ))
+                            .expect("run init");
+
+                        let daemon_config = ensure_daemon_config_exists()
+                            .expect("resolve daemon config after init");
+                        let daemon_config =
+                            std::fs::read_to_string(&daemon_config).expect("read daemon config");
+                        assert!(
+                            daemon_config.contains(
+                                "postgres_dsn = \"postgres://user:pass@localhost:5432/bitloops\""
+                            ),
+                            "init should carry forward relational remote selection:\n{daemon_config}"
+                        );
+                        assert!(
+                            daemon_config.contains("clickhouse_url = \"http://localhost:8123\""),
+                            "init should carry forward event remote selection:\n{daemon_config}"
+                        );
+                        assert!(
+                            daemon_config.contains("clickhouse_database = \"bitloops\""),
+                            "init should carry forward event database selection:\n{daemon_config}"
+                        );
+
+                        let bound =
+                            crate::config::resolve_bound_store_backend_config_for_repo(repo.path())
+                                .expect("resolve bound store backend config");
+                        assert!(bound.relational.has_postgres());
+                        assert!(bound.events.has_clickhouse());
                     },
                 );
             },

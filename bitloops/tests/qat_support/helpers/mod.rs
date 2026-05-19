@@ -1,4 +1,4 @@
-use super::world::QatWorld;
+use super::world::{ArchitectureRoleAssignmentSnapshot, QatWorld};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use bitloops::adapters::agents::{
     AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR,
@@ -16,7 +16,6 @@ use bitloops::host::checkpoints::session::create_session_backend_or_local;
 use bitloops::host::checkpoints::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed,
 };
-use bitloops::host::interactions::store::InteractionSpool;
 use bitloops::host::interactions::types::{InteractionSession, InteractionTurn};
 use bitloops::host::runtime_store::{
     DaemonSqliteRuntimeStore as QatDaemonSqliteRuntimeStore, RepoSqliteRuntimeStore,
@@ -156,6 +155,7 @@ include!("core.rs");
 include!("daemon_harness.rs");
 include!("capability_runtime.rs");
 include!("deps_and_testlens.rs");
+include!("architecture_roles.rs");
 include!("semantic_clones.rs");
 include!("knowledge_stub.rs");
 include!("knowledge.rs");

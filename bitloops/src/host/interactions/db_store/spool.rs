@@ -414,6 +414,25 @@ impl InteractionSpool for SqliteInteractionSpool {
         })
     }
 
+    fn refresh_turn_local_only(&self, turn: &InteractionTurn) -> Result<()> {
+        self.sqlite.with_write_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE;")
+                .context("starting local-only interaction turn refresh transaction")?;
+            let result = self.upsert_local_turn(conn, turn);
+            match result {
+                Ok(()) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing local-only interaction turn refresh transaction")?;
+                    Ok(())
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })
+    }
+
     fn assign_checkpoint_to_turns(
         &self,
         turn_ids: &[String],
@@ -701,5 +720,65 @@ impl InteractionSpool for SqliteInteractionSpool {
             rows.collect::<Result<Vec<_>, _>>()
                 .context("reading interaction events from spool")
         })
+    }
+}
+
+impl InteractionEventRepository for SqliteInteractionSpool {
+    fn repo_id(&self) -> &str {
+        &self.repo_id
+    }
+
+    fn upsert_session(&self, session: &InteractionSession) -> Result<()> {
+        <Self as InteractionSpool>::record_session(self, session)
+    }
+
+    fn upsert_turn(&self, turn: &InteractionTurn) -> Result<()> {
+        <Self as InteractionSpool>::record_turn(self, turn)
+    }
+
+    fn append_event(&self, event: &InteractionEvent) -> Result<()> {
+        <Self as InteractionSpool>::record_event(self, event)
+    }
+
+    fn assign_checkpoint_to_turns(
+        &self,
+        turn_ids: &[String],
+        checkpoint_id: &str,
+        assigned_at: &str,
+    ) -> Result<()> {
+        <Self as InteractionSpool>::assign_checkpoint_to_turns(
+            self,
+            turn_ids,
+            checkpoint_id,
+            assigned_at,
+        )
+    }
+
+    fn list_sessions(&self, agent: Option<&str>, limit: usize) -> Result<Vec<InteractionSession>> {
+        <Self as InteractionSpool>::list_sessions(self, agent, limit)
+    }
+
+    fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>> {
+        <Self as InteractionSpool>::load_session(self, session_id)
+    }
+
+    fn list_turns_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<InteractionTurn>> {
+        <Self as InteractionSpool>::list_turns_for_session(self, session_id, limit)
+    }
+
+    fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
+        <Self as InteractionSpool>::list_uncheckpointed_turns(self)
+    }
+
+    fn list_events(
+        &self,
+        filter: &InteractionEventFilter,
+        limit: usize,
+    ) -> Result<Vec<InteractionEvent>> {
+        <Self as InteractionSpool>::list_events(self, filter, limit)
     }
 }

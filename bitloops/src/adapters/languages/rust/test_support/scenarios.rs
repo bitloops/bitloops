@@ -154,9 +154,18 @@ fn canonicalize_rust_discovered_scenarios(
         std::collections::HashMap::new();
 
     for scenario in scenarios {
+        let scenario_identity =
+            if scenario.scenario.discovery_source == ScenarioDiscoverySource::Doctest {
+                format!(
+                    "{}:{}",
+                    scenario.scenario.name, scenario.scenario.start_line
+                )
+            } else {
+                scenario.scenario.name.clone()
+            };
         let key = (
             scenario.suite_name.clone(),
-            scenario.scenario.name.clone(),
+            scenario_identity,
             scenario.scenario.discovery_source.as_str().to_string(),
         );
 

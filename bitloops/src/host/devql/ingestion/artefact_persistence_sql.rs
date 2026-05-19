@@ -8,9 +8,12 @@ pub(super) fn sql_nullable_text(value: Option<&str>) -> String {
         .unwrap_or_else(|| "NULL".to_string())
 }
 
-pub(super) fn sql_json_text_array(relational: &RelationalStorage, values: &[String]) -> String {
+pub(super) fn sql_json_text_array_for_dialect(
+    dialect: RelationalDialect,
+    values: &[String],
+) -> String {
     let raw = esc_pg(&serde_json::to_string(values).unwrap_or_else(|_| "[]".to_string()));
-    match relational.dialect() {
+    match dialect {
         RelationalDialect::Postgres => format!("'{raw}'::jsonb"),
         RelationalDialect::Sqlite => format!("'{raw}'"),
     }
@@ -25,8 +28,12 @@ pub(super) fn sql_jsonb_text_array(values: &[String]) -> String {
 }
 
 pub(crate) fn sql_json_value(relational: &RelationalStorage, value: &Value) -> String {
+    sql_json_value_for_dialect(relational.dialect(), value)
+}
+
+pub(crate) fn sql_json_value_for_dialect(dialect: RelationalDialect, value: &Value) -> String {
     let raw = esc_pg(&value.to_string());
-    match relational.dialect() {
+    match dialect {
         RelationalDialect::Postgres => format!("'{raw}'::jsonb"),
         RelationalDialect::Sqlite => format!("'{raw}'"),
     }
@@ -34,6 +41,13 @@ pub(crate) fn sql_json_value(relational: &RelationalStorage, value: &Value) -> S
 
 pub(crate) fn sql_now(relational: &RelationalStorage) -> &'static str {
     match relational.dialect() {
+        RelationalDialect::Postgres => "now()",
+        RelationalDialect::Sqlite => "datetime('now')",
+    }
+}
+
+pub(crate) fn sql_now_for_dialect(dialect: RelationalDialect) -> &'static str {
+    match dialect {
         RelationalDialect::Postgres => "now()",
         RelationalDialect::Sqlite => "datetime('now')",
     }

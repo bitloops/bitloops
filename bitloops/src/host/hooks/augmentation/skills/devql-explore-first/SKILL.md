@@ -32,6 +32,8 @@ Choose the most specific selector:
 - known file or file range: use `path`, optionally with `lines`
 - single concrete identifier, method name, literal, error code, path-like
   string, or copied snippet: use `searchMode: LEXICAL`
+- architecture role terms such as API endpoint, command handler, repository,
+  adapter, or boundary: use `searchMode: ARCHITECTURE`
 - multiple related terms, behavior, concept, or task keywords without one exact
   anchor: omit `searchMode` and use default `AUTO`
 
@@ -46,6 +48,14 @@ bitloops devql query '{ selectArtefacts(by: { search: "<short behavior phrase or
 bitloops devql query '{ selectArtefacts(by: { search: "<single identifier, literal, path fragment, or short snippet>", searchMode: LEXICAL }) { count artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine score } } }'
 bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { count artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine score } } }'
 bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>", lines: { start: <start>, end: <end> } }) { count artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine score } } }'
+```
+
+For architecture role context on a known file, use the minimal GraphQL shape and
+request role fields only unless target or rule metadata is needed:
+
+```bash
+bitloops devql query  '{ selectArtefacts(by: { path: "<repo-relative-path>" }) { architectureRoles(first: 10) { items(first: 10) { role { canonicalKey displayName family description } target { symbolFqn canonicalKind } } } } }'
+bitloops devql query  '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { architectureRoles(first: 10) { items(first: 10) { role { canonicalKey displayName family description } target { symbolFqn canonicalKind } } } } }'
 ```
 
 If DevQL returns relevant paths and line ranges:

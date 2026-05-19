@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -7,7 +7,10 @@ use rusqlite::Connection;
 use serde_json::json;
 use tempfile::TempDir;
 
-use super::{TestHarnessCurrentStateConsumer, ensure_unique_test_artefact_ids};
+use super::{
+    TestHarnessCurrentStateConsumer, ensure_unique_test_artefact_ids,
+    persistence::load_existing_test_artefact_identity_rows,
+};
 use crate::capability_packs::test_harness::storage::init_test_domain_database;
 use crate::host::capability_host::gateways::{
     CapabilityMailboxStatus, CapabilityWorkplaneEnqueueResult, CapabilityWorkplaneGateway,
@@ -353,6 +356,142 @@ async fn merged_delta_promotes_to_full_reconcile_when_production_artefacts_chang
     Ok(())
 }
 
+#[tokio::test]
+async fn full_reconcile_reuses_duplicate_symbol_ids_when_test_lines_shift() -> Result<()> {
+    let fixture = TestFixture::new()?;
+    fixture.write_file("tests/dupes.fake", "original")?;
+    let context = fixture.context(
+        Arc::new(FakeLanguageTestSupport {
+            language_id: "fake",
+            discovered_by_path: HashMap::from([(
+                "tests/dupes.fake".to_string(),
+                duplicate_source_discovery(2, 5),
+            )]),
+            enumeration: EnumerationResult::default(),
+        }),
+        Vec::new(),
+    )?;
+    let request = full_request(&fixture, 1);
+
+    TestHarnessCurrentStateConsumer
+        .reconcile(&request, &context)
+        .await?;
+    let original_symbols = load_test_scenario_symbols_by_line(fixture.db_path())?;
+
+    fixture.write_file("tests/dupes.fake", "\n\n\nshifted")?;
+    let shifted_context = fixture.context(
+        Arc::new(FakeLanguageTestSupport {
+            language_id: "fake",
+            discovered_by_path: HashMap::from([(
+                "tests/dupes.fake".to_string(),
+                duplicate_source_discovery(9, 13),
+            )]),
+            enumeration: EnumerationResult::default(),
+        }),
+        Vec::new(),
+    )?;
+    let shifted_request = full_request(&fixture, 2);
+
+    TestHarnessCurrentStateConsumer
+        .reconcile(&shifted_request, &shifted_context)
+        .await?;
+    let shifted_symbols = load_test_scenario_symbols_by_line(fixture.db_path())?;
+
+    assert_eq!(original_symbols.len(), 2);
+    assert_eq!(shifted_symbols.len(), 2);
+    assert_eq!(
+        original_symbols
+            .iter()
+            .map(|(_, symbol_id)| symbol_id)
+            .collect::<Vec<_>>(),
+        shifted_symbols
+            .iter()
+            .map(|(_, symbol_id)| symbol_id)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(shifted_symbols[0].0, 9);
+    assert_eq!(shifted_symbols[1].0, 13);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn merged_delta_reuses_duplicate_symbol_ids_when_test_lines_shift() -> Result<()> {
+    let fixture = TestFixture::new()?;
+    fixture.write_file("tests/dupes.fake", "original")?;
+    let context = fixture.context(
+        Arc::new(FakeLanguageTestSupport {
+            language_id: "fake",
+            discovered_by_path: HashMap::from([(
+                "tests/dupes.fake".to_string(),
+                duplicate_source_discovery(2, 5),
+            )]),
+            enumeration: EnumerationResult::default(),
+        }),
+        Vec::new(),
+    )?;
+    let request = full_request(&fixture, 1);
+
+    TestHarnessCurrentStateConsumer
+        .reconcile(&request, &context)
+        .await?;
+    let original_symbols = load_test_scenario_symbols_by_line(fixture.db_path())?;
+
+    fixture.write_file("tests/dupes.fake", "\n\n\nshifted")?;
+    let shifted_context = fixture.context(
+        Arc::new(FakeLanguageTestSupport {
+            language_id: "fake",
+            discovered_by_path: HashMap::from([(
+                "tests/dupes.fake".to_string(),
+                duplicate_source_discovery(9, 13),
+            )]),
+            enumeration: EnumerationResult::default(),
+        }),
+        Vec::new(),
+    )?;
+    let shifted_request = CurrentStateConsumerRequest {
+        run_id: None,
+        repo_id: "repo-1".to_string(),
+        repo_root: fixture.repo_root(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("HEAD".to_string()),
+        from_generation_seq_exclusive: 1,
+        to_generation_seq_inclusive: 2,
+        reconcile_mode: ReconcileMode::MergedDelta,
+        file_upserts: vec![ChangedFile {
+            path: "tests/dupes.fake".to_string(),
+            language: "fake".to_string(),
+            content_id: "shifted-content".to_string(),
+        }],
+        file_removals: Vec::new(),
+        affected_paths: Vec::new(),
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    };
+
+    TestHarnessCurrentStateConsumer
+        .reconcile(&shifted_request, &shifted_context)
+        .await?;
+    let shifted_symbols = load_test_scenario_symbols_by_line(fixture.db_path())?;
+
+    assert_eq!(original_symbols.len(), 2);
+    assert_eq!(shifted_symbols.len(), 2);
+    assert_eq!(
+        original_symbols
+            .iter()
+            .map(|(_, symbol_id)| symbol_id)
+            .collect::<Vec<_>>(),
+        shifted_symbols
+            .iter()
+            .map(|(_, symbol_id)| symbol_id)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(shifted_symbols[0].0, 9);
+    assert_eq!(shifted_symbols[1].0, 13);
+
+    Ok(())
+}
+
 #[test]
 fn duplicate_test_artefact_ids_are_reported_before_sqlite_insert() {
     let duplicate_a = TestArtefactCurrentRecord {
@@ -406,6 +545,147 @@ fn duplicate_test_artefact_ids_are_reported_before_sqlite_insert() {
     assert!(message.contains("duplicate-artefact-id"));
     assert!(message.contains("tests/a.rs"));
     assert!(message.contains("tests/b.rs"));
+}
+
+#[test]
+fn duplicate_test_symbol_keys_are_reported_before_sqlite_insert() {
+    let duplicate_a = TestArtefactCurrentRecord {
+        artefact_id: "artefact-a".to_string(),
+        symbol_id: "same-symbol".to_string(),
+        repo_id: "repo-1".to_string(),
+        content_id: "content-a".to_string(),
+        path: "tests/a.rs".to_string(),
+        language: "rust".to_string(),
+        canonical_kind: "test_scenario".to_string(),
+        language_kind: None,
+        symbol_fqn: Some("suite.a".to_string()),
+        name: "a".to_string(),
+        parent_artefact_id: None,
+        parent_symbol_id: None,
+        start_line: 10,
+        end_line: 10,
+        start_byte: None,
+        end_byte: None,
+        signature: Some("a".to_string()),
+        modifiers: "[]".to_string(),
+        docstring: None,
+        discovery_source: "enumeration".to_string(),
+    };
+    let duplicate_b = TestArtefactCurrentRecord {
+        artefact_id: "artefact-b".to_string(),
+        symbol_id: "same-symbol".to_string(),
+        repo_id: "repo-1".to_string(),
+        content_id: "content-b".to_string(),
+        path: "tests/a.rs".to_string(),
+        language: "rust".to_string(),
+        canonical_kind: "test_scenario".to_string(),
+        language_kind: None,
+        symbol_fqn: Some("suite.b".to_string()),
+        name: "b".to_string(),
+        parent_artefact_id: None,
+        parent_symbol_id: None,
+        start_line: 20,
+        end_line: 20,
+        start_byte: None,
+        end_byte: None,
+        signature: Some("b".to_string()),
+        modifiers: "[]".to_string(),
+        docstring: None,
+        discovery_source: "source".to_string(),
+    };
+
+    let error = ensure_unique_test_artefact_ids(&[duplicate_a, duplicate_b]).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("duplicate test artefact symbol keys detected before persistence"));
+    assert!(message.contains("repo-1/tests/a.rs/same-symbol"));
+    assert!(message.contains("name=a"));
+    assert!(message.contains("name=b"));
+}
+
+#[tokio::test]
+async fn load_existing_test_artefact_identity_rows_filters_and_orders_rows() -> Result<()> {
+    let fixture = TestFixture::new()?;
+    let conn = Connection::open(fixture.db_path())?;
+    conn.execute(
+        "INSERT INTO test_artefacts_current (
+            repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,
+            language_kind, symbol_fqn, name, parent_symbol_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte, signature, modifiers,
+            docstring, discovery_source
+        ) VALUES (
+            'repo-1', 'tests/b.fake', 'content-b', 'symbol-b', 'artefact-b',
+            'fake', 'test_scenario', 'it', NULL, 'case b', 'parent-b', NULL,
+            20, 22, NULL, NULL, 'case b()', '[]', NULL, 'source'
+        )",
+        [],
+    )?;
+    conn.execute(
+        "INSERT INTO test_artefacts_current (
+            repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,
+            language_kind, symbol_fqn, name, parent_symbol_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte, signature, modifiers,
+            docstring, discovery_source
+        ) VALUES (
+            'repo-1', 'tests/a.fake', 'content-a', 'symbol-a', 'artefact-a',
+            'fake', 'test_suite', NULL, NULL, 'suite a', NULL, NULL,
+            10, 30, NULL, NULL, NULL, '[]', NULL, 'enumeration'
+        )",
+        [],
+    )?;
+    conn.execute(
+        "INSERT INTO test_artefacts_current (
+            repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,
+            language_kind, symbol_fqn, name, parent_symbol_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte, signature, modifiers,
+            docstring, discovery_source
+        ) VALUES (
+            'repo-1', 'tests/a.fake', 'content-a2', 'symbol-a2', 'artefact-a2',
+            'fake', 'test_scenario', 'it', NULL, 'case a', 'symbol-a', NULL,
+            12, 12, NULL, NULL, 'case a()', '[]', NULL, 'source'
+        )",
+        [],
+    )?;
+    conn.execute(
+        "INSERT INTO test_artefacts_current (
+            repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,
+            language_kind, symbol_fqn, name, parent_symbol_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte, signature, modifiers,
+            docstring, discovery_source
+        ) VALUES (
+            'repo-2', 'tests/a.fake', 'other-content', 'other-symbol', 'other-artefact',
+            'fake', 'test_scenario', NULL, NULL, 'other', NULL, NULL,
+            1, 1, NULL, NULL, NULL, '[]', NULL, 'source'
+        )",
+        [],
+    )?;
+    drop(conn);
+
+    let storage = RelationalStorage::local_only(fixture.db_path().to_path_buf());
+    let paths = HashSet::from(["tests/a.fake".to_string(), "tests/b.fake".to_string()]);
+
+    let rows = load_existing_test_artefact_identity_rows(&storage, "repo-1", Some(&paths)).await?;
+
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.symbol_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["symbol-a", "symbol-a2", "symbol-b"]
+    );
+    assert_eq!(rows[0].path, "tests/a.fake");
+    assert_eq!(rows[0].canonical_kind, "test_suite");
+    assert_eq!(rows[0].language_kind, None);
+    assert_eq!(rows[0].name, "suite a");
+    assert_eq!(rows[0].parent_symbol_id, None);
+    assert_eq!(rows[0].start_line, 10);
+    assert_eq!(rows[0].end_line, 30);
+    assert_eq!(rows[0].signature, None);
+    assert_eq!(rows[0].discovery_source, "enumeration");
+
+    assert_eq!(rows[1].language_kind.as_deref(), Some("it"));
+    assert_eq!(rows[1].parent_symbol_id.as_deref(), Some("symbol-a"));
+    assert_eq!(rows[1].signature.as_deref(), Some("case a()"));
+
+    Ok(())
 }
 
 struct TestFixture {
@@ -484,6 +764,53 @@ fn enumerated_scenario(relative_path: &str, scenario_name: &str) -> EnumeratedTe
     }
 }
 
+fn duplicate_source_discovery(first_line: i64, second_line: i64) -> DiscoveredTestFile {
+    DiscoveredTestFile {
+        relative_path: "tests/dupes.fake".to_string(),
+        language: "fake".to_string(),
+        reference_candidates: Vec::new(),
+        suites: vec![DiscoveredTestSuite {
+            name: "suite".to_string(),
+            start_line: 1,
+            end_line: second_line + 1,
+            scenarios: vec![
+                DiscoveredTestScenario {
+                    name: "same case".to_string(),
+                    start_line: first_line,
+                    end_line: first_line + 1,
+                    reference_candidates: Vec::new(),
+                    discovery_source: ScenarioDiscoverySource::Source,
+                },
+                DiscoveredTestScenario {
+                    name: "same case".to_string(),
+                    start_line: second_line,
+                    end_line: second_line + 1,
+                    reference_candidates: Vec::new(),
+                    discovery_source: ScenarioDiscoverySource::Source,
+                },
+            ],
+        }],
+    }
+}
+
+fn full_request(fixture: &TestFixture, generation: u64) -> CurrentStateConsumerRequest {
+    CurrentStateConsumerRequest {
+        run_id: None,
+        repo_id: "repo-1".to_string(),
+        repo_root: fixture.repo_root(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("HEAD".to_string()),
+        from_generation_seq_exclusive: generation.saturating_sub(1),
+        to_generation_seq_inclusive: generation,
+        reconcile_mode: ReconcileMode::FullReconcile,
+        file_upserts: Vec::new(),
+        file_removals: Vec::new(),
+        affected_paths: Vec::new(),
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    }
+}
+
 fn load_test_scenarios(db_path: &Path) -> Result<Vec<(String, String, String)>> {
     let conn = Connection::open(db_path)?;
     let mut stmt = conn.prepare(
@@ -493,6 +820,22 @@ fn load_test_scenarios(db_path: &Path) -> Result<Vec<(String, String, String)>> 
          ORDER BY path, name",
     )?;
     let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+    let mut scenarios = Vec::new();
+    for row in rows {
+        scenarios.push(row?);
+    }
+    Ok(scenarios)
+}
+
+fn load_test_scenario_symbols_by_line(db_path: &Path) -> Result<Vec<(i64, String)>> {
+    let conn = Connection::open(db_path)?;
+    let mut stmt = conn.prepare(
+        "SELECT start_line, symbol_id
+         FROM test_artefacts_current
+         WHERE canonical_kind = 'test_scenario'
+         ORDER BY start_line",
+    )?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
     let mut scenarios = Vec::new();
     for row in rows {
         scenarios.push(row?);

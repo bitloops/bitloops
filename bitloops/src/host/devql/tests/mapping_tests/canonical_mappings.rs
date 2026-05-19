@@ -1115,3 +1115,101 @@ public enum UserRole
     );
     assert_eq!(canonical_kind(enum_item), Some("enum"));
 }
+
+#[test]
+fn cpp_canonical_mapping_covers_supported_kind_table() {
+    let expected = [
+        (
+            LanguageKind::cpp(CppKind::NamespaceDefinition),
+            false,
+            true,
+            Some("namespace"),
+        ),
+        (
+            LanguageKind::cpp(CppKind::UsingDeclaration),
+            false,
+            true,
+            None,
+        ),
+        (
+            LanguageKind::cpp(CppKind::ClassSpecifier),
+            false,
+            true,
+            Some("type"),
+        ),
+        (
+            LanguageKind::cpp(CppKind::StructSpecifier),
+            false,
+            true,
+            Some("type"),
+        ),
+        (
+            LanguageKind::cpp(CppKind::EnumSpecifier),
+            false,
+            true,
+            Some("enum"),
+        ),
+        (
+            LanguageKind::cpp(CppKind::FunctionDefinition),
+            false,
+            true,
+            Some("function"),
+        ),
+        (
+            LanguageKind::cpp(CppKind::FunctionDefinition),
+            true,
+            true,
+            Some("method"),
+        ),
+    ];
+
+    for (language_kind, inside_parent, supported, canonical_kind) in expected {
+        assert_eq!(
+            is_supported_language_kind(CPP_SUPPORTED_LANGUAGE_KINDS, language_kind),
+            supported
+        );
+        assert_eq!(
+            resolve_canonical_kind(CPP_CANONICAL_MAPPINGS, language_kind, inside_parent)
+                .map(CanonicalKindProjection::as_str),
+            canonical_kind
+        );
+    }
+}
+
+#[test]
+fn cpp_canonical_mapping_preserves_cpp_specific_structure() {
+    let content = r#"#include <vector>
+namespace app {
+class UserService {
+public:
+    int helper(int x) { return x + 1; }
+    int run(int x) { return helper(x); }
+};
+}
+"#;
+    let artefacts = extract_cpp_artefacts(content, "src/main.cpp").unwrap();
+
+    let include = artefact_by_language_kind(&artefacts, LanguageKind::cpp(CppKind::PreprocInclude));
+    assert_eq!(canonical_kind(include), Some("import"));
+
+    let namespace = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::cpp(CppKind::NamespaceDefinition),
+        "app",
+    );
+    assert_eq!(canonical_kind(namespace), Some("namespace"));
+
+    let class = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::cpp(CppKind::ClassSpecifier),
+        "UserService",
+    );
+    assert_eq!(canonical_kind(class), Some("type"));
+
+    let method = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::cpp(CppKind::FunctionDefinition),
+        "run",
+    );
+    assert_eq!(canonical_kind(method), Some("method"));
+}

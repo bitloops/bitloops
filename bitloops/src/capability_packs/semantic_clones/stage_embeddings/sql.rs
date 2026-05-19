@@ -60,7 +60,18 @@ WHERE repo_id = '{repo_id}' AND {representation_predicate}",
     )
 }
 
-pub(super) fn build_current_repo_embedding_states_sql(
+pub(super) fn build_current_repo_artefact_snapshots_sql(repo_id: &str) -> String {
+    format!(
+        "SELECT DISTINCT artefact_id, content_id AS snapshot_id \
+FROM artefacts_current \
+WHERE repo_id = '{repo_id}'",
+        repo_id = esc_pg(repo_id),
+    )
+}
+
+pub(super) fn build_repo_embedding_state_candidates_sql(
+    table: &str,
+    snapshot_column: &str,
     repo_id: &str,
     representation_kind: Option<embeddings::EmbeddingRepresentationKind>,
 ) -> String {
@@ -68,24 +79,19 @@ pub(super) fn build_current_repo_embedding_states_sql(
         .map(|kind| {
             format!(
                 "AND {}",
-                representation_kind_sql_predicate("e.representation_kind", kind)
+                representation_kind_sql_predicate("representation_kind", kind)
             )
         })
         .unwrap_or_default();
     format!(
-        "SELECT representation_kind, provider, model, dimension, setup_fingerprint \
-FROM ( \
-    SELECT e.representation_kind AS representation_kind, e.provider AS provider, e.model AS model, e.dimension AS dimension, e.setup_fingerprint AS setup_fingerprint \
-    FROM artefacts_current a \
-    JOIN symbol_embeddings_current e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id AND e.content_id = a.content_id \
-    WHERE a.repo_id = '{repo_id}' {representation_filter} \
-    UNION \
-    SELECT e.representation_kind AS representation_kind, e.provider AS provider, e.model AS model, e.dimension AS dimension, e.setup_fingerprint AS setup_fingerprint \
-    FROM artefacts_current a \
-    JOIN symbol_embeddings e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id \
-    WHERE a.repo_id = '{repo_id}' {representation_filter} \
-) setups \
-ORDER BY representation_kind, provider, model, dimension, setup_fingerprint",
+        "SELECT artefact_id, {snapshot_column} AS snapshot_id, representation_kind, provider, \
+                model, dimension, setup_fingerprint \
+         FROM {table} \
+         WHERE repo_id = '{repo_id}' {representation_filter} \
+         ORDER BY artefact_id, snapshot_id, representation_kind, provider, model, dimension, \
+                  setup_fingerprint",
+        table = table,
+        snapshot_column = snapshot_column,
         repo_id = esc_pg(repo_id),
         representation_filter = representation_filter,
     )
@@ -111,6 +117,7 @@ pub(super) fn build_current_repo_semantic_clone_coverage_sql(
 
     match representation_kind {
         embeddings::EmbeddingRepresentationKind::Code
+        | embeddings::EmbeddingRepresentationKind::Architecture
         | embeddings::EmbeddingRepresentationKind::Identity => format!(
             "SELECT \
                 (SELECT COUNT(*) \
@@ -182,31 +189,6 @@ WHERE artefact_id IN ({})",
     )
 }
 
-pub(super) fn build_current_semantic_summary_lookup_sql(artefact_ids: &[String]) -> String {
-    format!(
-        "SELECT a.artefact_id AS artefact_id, \
-                COALESCE(sc.docstring_summary, sh.docstring_summary) AS docstring_summary, \
-                COALESCE(sc.llm_summary, sh.llm_summary) AS llm_summary, \
-                COALESCE(sc.template_summary, sh.template_summary) AS template_summary, \
-                COALESCE(sc.summary, sh.summary) AS summary, \
-                COALESCE(sc.source_model, sh.source_model) AS source_model \
-         FROM artefacts_current a \
-         JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
-         LEFT JOIN symbol_semantics_current sc \
-           ON sc.repo_id = a.repo_id \
-          AND sc.artefact_id = a.artefact_id \
-          AND sc.content_id = a.content_id \
-         LEFT JOIN symbol_semantics sh \
-           ON sh.repo_id = a.repo_id \
-          AND sh.artefact_id = a.artefact_id \
-          AND sh.blob_sha = a.content_id \
-         WHERE a.artefact_id IN ({}) \
-           AND cfs.analysis_mode = 'code' \
-           AND (sc.artefact_id IS NOT NULL OR sh.artefact_id IS NOT NULL)",
-        sql_string_list_pg(artefact_ids),
-    )
-}
-
 pub(crate) fn build_active_embedding_setup_persist_sql(
     repo_id: &str,
     active_state: &embeddings::ActiveEmbeddingRepresentationState,
@@ -246,6 +228,7 @@ ON CONFLICT (artefact_id, representation_kind, setup_fingerprint) DO UPDATE SET 
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn build_postgres_current_symbol_embedding_persist_sql(
     input: &semantic::SemanticFeatureInput,
     path: &str,

@@ -8,7 +8,7 @@ fn daemon_state_root(repo_root: &Path) -> PathBuf {
     repo_root.join(".bitloops-test-state")
 }
 
-fn open_test_event_repository(
+pub(crate) fn open_test_event_repository(
     repo_root: &Path,
 ) -> impl crate::host::interactions::store::InteractionEventRepository + use<> {
     let repo = crate::host::devql::resolve_repo_identity(repo_root)

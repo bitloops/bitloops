@@ -115,7 +115,10 @@ pub(super) async fn upsert_language_artefacts(
         ));
     }
     relational
-        .exec_batch_transactional(&historical_sql_batch)
+        .exec_batch_transactional_for_role(
+            RelationalStorageRole::SharedRelational,
+            &historical_sql_batch,
+        )
         .await?;
 
     Ok(())

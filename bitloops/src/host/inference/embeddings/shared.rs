@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -10,9 +11,16 @@ use super::session::{PythonEmbeddingsSession, PythonEmbeddingsSessionConfig};
 
 const SHARED_EMBEDDINGS_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const SHARED_EMBEDDINGS_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+const DEFAULT_REMOTE_EMBEDDINGS_SESSION_POOL_SIZE: usize = 4;
 
 pub(crate) struct SharedBitloopsEmbeddingsSessionRegistry {
-    sessions: Mutex<HashMap<PythonEmbeddingsSessionConfig, Arc<SharedBitloopsEmbeddingsSession>>>,
+    session_pools:
+        Mutex<HashMap<PythonEmbeddingsSessionConfig, Arc<SharedBitloopsEmbeddingsSessionPool>>>,
+}
+
+pub(crate) struct SharedBitloopsEmbeddingsSessionPool {
+    sessions: Vec<Arc<SharedBitloopsEmbeddingsSession>>,
+    next_session_index: AtomicUsize,
 }
 
 pub(crate) struct SharedBitloopsEmbeddingsSession {
@@ -30,25 +38,68 @@ impl SharedBitloopsEmbeddingsSessionRegistry {
     pub(crate) fn get_or_create(
         &self,
         config: &PythonEmbeddingsSessionConfig,
-    ) -> Result<Arc<SharedBitloopsEmbeddingsSession>> {
-        let mut sessions = self
-            .sessions
+    ) -> Result<Arc<SharedBitloopsEmbeddingsSessionPool>> {
+        let mut session_pools = self
+            .session_pools
             .lock()
             .map_err(|_| anyhow!("shared embeddings session registry mutex was poisoned"))?;
-        Ok(sessions
+        let pool_size = embeddings_session_pool_size(config);
+        Ok(session_pools
             .entry(config.clone())
-            .or_insert_with(|| Arc::new(SharedBitloopsEmbeddingsSession::new(config.clone())))
+            .or_insert_with(|| {
+                Arc::new(SharedBitloopsEmbeddingsSessionPool::new(
+                    config.clone(),
+                    pool_size,
+                ))
+            })
             .clone())
     }
 
     fn shutdown_idle_sessions(&self, idle_timeout: Duration) {
-        let sessions = match self.sessions.lock() {
-            Ok(sessions) => sessions.values().cloned().collect::<Vec<_>>(),
+        let session_pools = match self.session_pools.lock() {
+            Ok(session_pools) => session_pools.values().cloned().collect::<Vec<_>>(),
             Err(_) => return,
         };
-        for session in sessions {
+        for session_pool in session_pools {
+            session_pool.shutdown_idle_sessions(idle_timeout);
+        }
+    }
+}
+
+impl SharedBitloopsEmbeddingsSessionPool {
+    fn new(config: PythonEmbeddingsSessionConfig, pool_size: usize) -> Self {
+        let pool_size = pool_size.max(1);
+        Self {
+            sessions: (0..pool_size)
+                .map(|_| Arc::new(SharedBitloopsEmbeddingsSession::new(config.clone())))
+                .collect(),
+            next_session_index: AtomicUsize::new(0),
+        }
+    }
+
+    pub(crate) fn output_dimension(&self) -> Result<usize> {
+        self.first_session().output_dimension()
+    }
+
+    pub(crate) fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.next_session().embed(texts)
+    }
+
+    fn shutdown_idle_sessions(&self, idle_timeout: Duration) {
+        for session in &self.sessions {
             session.shutdown_if_idle(idle_timeout);
         }
+    }
+
+    fn first_session(&self) -> &Arc<SharedBitloopsEmbeddingsSession> {
+        self.sessions
+            .first()
+            .expect("embeddings session pool always contains at least one session")
+    }
+
+    fn next_session(&self) -> &Arc<SharedBitloopsEmbeddingsSession> {
+        let index = self.next_session_index.fetch_add(1, Ordering::Relaxed) % self.sessions.len();
+        &self.sessions[index]
     }
 }
 
@@ -152,7 +203,7 @@ pub(crate) fn shared_bitloops_embeddings_session_registry()
     static REGISTRY: OnceLock<Arc<SharedBitloopsEmbeddingsSessionRegistry>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
         let registry = Arc::new(SharedBitloopsEmbeddingsSessionRegistry {
-            sessions: Mutex::new(HashMap::new()),
+            session_pools: Mutex::new(HashMap::new()),
         });
         let sweeper_registry = Arc::clone(&registry);
         let _ = thread::Builder::new()
@@ -170,4 +221,12 @@ pub(crate) fn shared_bitloops_embeddings_session_registry()
 #[cfg(test)]
 pub(crate) fn evict_idle_embeddings_sessions_for_tests(idle_timeout: Duration) {
     shared_bitloops_embeddings_session_registry().shutdown_idle_sessions(idle_timeout);
+}
+
+fn embeddings_session_pool_size(config: &PythonEmbeddingsSessionConfig) -> usize {
+    if config.platform_backed {
+        DEFAULT_REMOTE_EMBEDDINGS_SESSION_POOL_SIZE
+    } else {
+        1
+    }
 }

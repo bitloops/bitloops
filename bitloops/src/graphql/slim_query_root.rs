@@ -618,7 +618,7 @@ impl SlimQueryRoot {
                             "failed to resolve selected artefacts by symbolFqn: {err:#}"
                         ))
                     })?;
-                ArtefactSelection::new(artefacts, Vec::new(), scope)
+                ArtefactSelection::from_exact_artefacts(artefacts, scope)
             }
             ArtefactSelectorMode::Search { query, mode } => {
                 let bundle = select_search_artefacts(context, &scope, query, *mode).await?;
@@ -670,7 +670,7 @@ impl SlimQueryRoot {
                                 "failed to resolve selected artefacts for `{normalized}`: {err:#}"
                             ))
                         })?;
-                    ArtefactSelection::new(artefacts, Vec::new(), scope)
+                    ArtefactSelection::from_path_artefacts(artefacts, scope)
                 }
             }
         };

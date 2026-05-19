@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 mod agent_hooks;
 mod agent_selection;
 mod args;
+mod cloud_login_status;
 mod context_guidance_setup;
 mod daemon_bootstrap;
 mod embeddings_setup;
@@ -26,6 +27,8 @@ pub use args::{InitArgs, InitCommand, InitStatusArgs};
 pub(super) use args::{
     DEFAULT_INIT_INGEST_BACKFILL, normalize_cli_exclusions, normalize_exclude_from_paths,
 };
+#[cfg(test)]
+pub(super) use cloud_login_status::with_cloud_login_status_hook;
 pub(super) use context_guidance_setup::choose_context_guidance_setup_during_init;
 pub(super) use daemon_bootstrap::{
     maybe_enable_default_daemon_service, maybe_install_default_daemon,
@@ -34,12 +37,10 @@ pub(super) use daemon_bootstrap::{
 pub(super) use daemon_bootstrap::{
     with_enable_default_daemon_service_hook, with_install_default_daemon_hook,
 };
+#[cfg(test)]
+pub(super) use embeddings_setup::prompt_install_embeddings_setup_selection;
 pub(super) use embeddings_setup::{
     InitEmbeddingsSetupSelection, should_install_embeddings_during_init,
-};
-#[cfg(test)]
-pub(super) use embeddings_setup::{
-    NON_INTERACTIVE_INIT_EMBEDDINGS_SELECTION_ERROR, prompt_install_embeddings_setup_selection,
 };
 #[cfg(test)]
 pub(super) use final_setup::InitFinalSetupSelection;

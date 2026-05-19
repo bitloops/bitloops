@@ -28,10 +28,9 @@ pub(crate) fn build_current_repo_artefacts_sql(repo_id: &str) -> String {
         "SELECT current.artefact_id, current.symbol_id, current.repo_id, current.content_id AS blob_sha, current.path, current.language, \
 COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol')) AS canonical_kind, \
 COALESCE(current.language_kind, COALESCE(current.canonical_kind, 'symbol')) AS language_kind, \
-COALESCE(current.symbol_fqn, current.path) AS symbol_fqn, current.parent_artefact_id, current.start_line, current.end_line, current.start_byte, current.end_byte, current.signature, current.modifiers, current.docstring, a.content_hash \
+COALESCE(current.symbol_fqn, current.path) AS symbol_fqn, current.parent_artefact_id, current.start_line, current.end_line, current.start_byte, current.end_byte, current.signature, current.modifiers, current.docstring, current.content_id AS content_hash \
 FROM artefacts_current current \
 JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
-LEFT JOIN artefacts a ON a.repo_id = current.repo_id AND a.artefact_id = current.artefact_id \
 WHERE current.repo_id = '{repo_id}' AND state.analysis_mode = 'code' \
 ORDER BY current.path, current.start_line, current.symbol_id, coalesce(current.start_byte, 0), current.artefact_id",
         repo_id = esc_pg(repo_id),
@@ -52,10 +51,9 @@ pub(crate) fn build_current_repo_artefacts_by_ids_sql(
         "SELECT current.artefact_id, current.symbol_id, current.repo_id, current.content_id AS blob_sha, current.path, current.language, \
 COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol')) AS canonical_kind, \
 COALESCE(current.language_kind, COALESCE(current.canonical_kind, 'symbol')) AS language_kind, \
-COALESCE(current.symbol_fqn, current.path) AS symbol_fqn, current.parent_artefact_id, current.start_line, current.end_line, current.start_byte, current.end_byte, current.signature, current.modifiers, current.docstring, a.content_hash \
+COALESCE(current.symbol_fqn, current.path) AS symbol_fqn, current.parent_artefact_id, current.start_line, current.end_line, current.start_byte, current.end_byte, current.signature, current.modifiers, current.docstring, current.content_id AS content_hash \
 FROM artefacts_current current \
 JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
-LEFT JOIN artefacts a ON a.repo_id = current.repo_id AND a.artefact_id = current.artefact_id \
 WHERE current.repo_id = '{repo_id}' AND state.analysis_mode = 'code' AND current.artefact_id IN ({artefact_ids}) \
 ORDER BY current.path, current.start_line, current.symbol_id, coalesce(current.start_byte, 0), current.artefact_id",
         repo_id = esc_pg(repo_id),

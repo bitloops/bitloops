@@ -39,6 +39,7 @@ pub(crate) struct CommitSummaryBatchRequest {
     pub repo: SemanticBatchRepoContext,
     pub lease_token: String,
     pub semantic_statements: Vec<String>,
+    pub remote_semantic_statements: Vec<String>,
     pub embedding_follow_ups: Vec<SemanticEmbeddingMailboxItemInsert>,
     pub replacement_backfill_item: Option<SemanticSummaryMailboxItemInsert>,
     pub acked_item_ids: Vec<String>,

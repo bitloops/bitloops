@@ -687,6 +687,9 @@ fn devql_action(
             );
             Some(new_action("bitloops devql packs", props))
         }
+        crate::cli::devql::DevqlCommand::Architecture(_) => {
+            Some(new_action("bitloops devql architecture", HashMap::new()))
+        }
         crate::cli::devql::DevqlCommand::Knowledge(args) => match &args.command {
             crate::cli::devql::DevqlKnowledgeCommand::Add(args) => {
                 let mut props = HashMap::new();
@@ -922,7 +925,7 @@ fn inference_action(
     args: &crate::cli::inference::InferenceArgs,
 ) -> Option<crate::telemetry::analytics::ActionDescriptor> {
     match args.command.as_ref()? {
-        crate::cli::inference::InferenceCommand::Install(_) => {
+        crate::cli::inference::InferenceCommand::Install => {
             Some(new_action("bitloops inference install", HashMap::new()))
         }
     }

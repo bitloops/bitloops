@@ -314,6 +314,7 @@ mod tests {
                     driver: Some("fake".to_string()),
                     runtime: Some("fake-runtime".to_string()),
                     model: Some("fake-model".to_string()),
+                    thinking_level: None,
                 },
             );
             Self {

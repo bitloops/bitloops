@@ -570,10 +570,11 @@ fn start_init_runtime_mutation_serializes_runtime_orchestration_input() {
             api_key_env: None,
         }),
         summaries_bootstrap: Some(super::types::RuntimeSummaryBootstrapRequestInput {
-            action: "configure_local".to_string(),
-            message: Some("configure summaries".to_string()),
-            model_name: Some("ministral-3:3b".to_string()),
-            gateway_url_override: None,
+            action: "configure_cloud".to_string(),
+            message: None,
+            model_name: None,
+            gateway_url_override: Some("https://gateway.example/v1/chat/completions".to_string()),
+            api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
         }),
     };
 
@@ -597,7 +598,15 @@ fn start_init_runtime_mutation_serializes_runtime_orchestration_input() {
             );
             assert_eq!(
                 variables["input"]["summariesBootstrap"]["action"],
-                json!("CONFIGURE_LOCAL")
+                json!("CONFIGURE_CLOUD")
+            );
+            assert_eq!(
+                variables["input"]["summariesBootstrap"]["gatewayUrlOverride"],
+                json!("https://gateway.example/v1/chat/completions")
+            );
+            assert_eq!(
+                variables["input"]["summariesBootstrap"]["apiKeyEnv"],
+                json!("BITLOOPS_PLATFORM_GATEWAY_TOKEN")
             );
             Ok(json!({
                 "startInit": {

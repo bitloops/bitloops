@@ -8,9 +8,9 @@ use crate::config::resolve_store_backend_config_for_repo;
 use crate::storage::PostgresSyncConnection;
 
 use super::runtime_store::{
-    delete_runtime_embedding_mailbox_items, delete_runtime_summary_mailbox_items,
-    insert_runtime_embedding_mailbox_item, insert_runtime_summary_mailbox_item,
-    upsert_runtime_clone_rebuild_signal, upsert_runtime_embedding_mailbox_item,
+    delete_runtime_embedding_mailbox_items_direct, delete_runtime_summary_mailbox_items,
+    insert_runtime_summary_mailbox_item, upsert_runtime_clone_rebuild_signal_direct,
+    upsert_runtime_embedding_mailbox_item, upsert_runtime_embedding_mailbox_item_direct,
 };
 use super::{CommitEmbeddingBatchRequest, CommitSummaryBatchRequest};
 
@@ -147,6 +147,73 @@ pub(super) fn execute_summary_commit(
             ));
         }
     }
+    if !request.remote_semantic_statements.is_empty() {
+        let backends = match resolve_store_backend_config_for_repo(&request.repo.config_root) {
+            Ok(backends) => backends,
+            Err(err) => {
+                timings.summary_sql_ms = elapsed_ms(stage_started);
+                return Err(SummaryCommitFailure::new(
+                    SummaryCommitPhase::SummarySql,
+                    timings,
+                    runtime_store_writes_succeeded_in_tx,
+                    err.context("resolving backend config for remote semantic summary commit"),
+                ));
+            }
+        };
+        let dsn = match backends.relational.postgres_dsn {
+            Some(dsn) => dsn,
+            None => {
+                timings.summary_sql_ms = elapsed_ms(stage_started);
+                return Err(SummaryCommitFailure::new(
+                    SummaryCommitPhase::SummarySql,
+                    timings,
+                    runtime_store_writes_succeeded_in_tx,
+                    anyhow!("remote semantic summary commit requires Postgres DSN"),
+                ));
+            }
+        };
+        let remote_connection = match PostgresSyncConnection::connect(dsn) {
+            Ok(connection) => connection,
+            Err(err) => {
+                timings.summary_sql_ms = elapsed_ms(stage_started);
+                return Err(SummaryCommitFailure::new(
+                    SummaryCommitPhase::SummarySql,
+                    timings,
+                    runtime_store_writes_succeeded_in_tx,
+                    err.context("connecting Postgres for remote semantic summary commit"),
+                ));
+            }
+        };
+        if let Err(err) = remote_connection.with_client_timeout(Duration::from_secs(30), |client| {
+            let statements = request.remote_semantic_statements.clone();
+            Box::pin(async move {
+                let tx = client
+                    .transaction()
+                    .await
+                    .context("starting remote semantic summary transaction")?;
+                for statement in &statements {
+                    if statement.trim().is_empty() {
+                        continue;
+                    }
+                    tx.batch_execute(statement)
+                        .await
+                        .context("executing remote semantic summary SQL")?;
+                }
+                tx.commit()
+                    .await
+                    .context("committing remote semantic summary transaction")?;
+                Ok(())
+            })
+        }) {
+            timings.summary_sql_ms = elapsed_ms(stage_started);
+            return Err(SummaryCommitFailure::new(
+                SummaryCommitPhase::SummarySql,
+                timings,
+                runtime_store_writes_succeeded_in_tx,
+                err.context("mirroring semantic summary batch to Postgres"),
+            ));
+        }
+    }
     timings.summary_sql_ms = elapsed_ms(stage_started);
 
     let stage_started = Instant::now();
@@ -210,7 +277,17 @@ pub(super) fn execute_summary_commit(
     Ok(SummaryCommitReport { timings })
 }
 
+#[cfg(test)]
 pub(super) fn execute_embedding_commit(
+    relational_connection: &mut Connection,
+    runtime_connection: &mut Connection,
+    request: &CommitEmbeddingBatchRequest,
+) -> Result<()> {
+    execute_embedding_relational_commit(relational_connection, request)?;
+    execute_embedding_runtime_finalization(runtime_connection, request)
+}
+
+pub(super) fn execute_embedding_relational_commit(
     connection: &mut Connection,
     request: &CommitEmbeddingBatchRequest,
 ) -> Result<()> {
@@ -266,15 +343,31 @@ pub(super) fn execute_embedding_commit(
             })
             .context("mirroring semantic embedding batch to Postgres")?;
     }
-    if let Some(signal) = request.clone_rebuild_signal.as_ref() {
-        upsert_runtime_clone_rebuild_signal(&tx, &request.repo, signal)?;
-    }
-    if let Some(item) = request.replacement_backfill_item.as_ref() {
-        insert_runtime_embedding_mailbox_item(&tx, &request.repo, item)?;
-    }
-    delete_runtime_embedding_mailbox_items(&tx, &request.lease_token, &request.acked_item_ids)?;
     tx.commit()
-        .context("committing semantic embedding batch transaction")?;
+        .context("committing semantic embedding relational transaction")?;
+    Ok(())
+}
+
+pub(super) fn execute_embedding_runtime_finalization(
+    connection: &mut Connection,
+    request: &CommitEmbeddingBatchRequest,
+) -> Result<()> {
+    let tx = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .context("starting semantic embedding runtime finalization transaction")?;
+    if let Some(signal) = request.clone_rebuild_signal.as_ref() {
+        upsert_runtime_clone_rebuild_signal_direct(&tx, &request.repo, signal)?;
+    }
+    delete_runtime_embedding_mailbox_items_direct(
+        &tx,
+        &request.lease_token,
+        &request.acked_item_ids,
+    )?;
+    if let Some(item) = request.replacement_backfill_item.as_ref() {
+        upsert_runtime_embedding_mailbox_item_direct(&tx, &request.repo, item)?;
+    }
+    tx.commit()
+        .context("committing semantic embedding runtime finalization transaction")?;
     Ok(())
 }
 

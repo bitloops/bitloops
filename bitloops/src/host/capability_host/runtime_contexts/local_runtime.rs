@@ -229,9 +229,6 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
     }
 
     fn apply_devql_sqlite_ddl(&self, sql: &str) -> Result<()> {
-        if self.backends.relational.has_postgres() {
-            return Ok(());
-        }
         let relational = DefaultRelationalStore::open_local_for_backend_config(
             self.repo_root,
             &self.backends.relational,
@@ -244,9 +241,6 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
         &self,
         operation: &mut dyn FnMut(&rusqlite::Connection) -> Result<()>,
     ) -> Result<()> {
-        if self.backends.relational.has_postgres() {
-            return Ok(());
-        }
         let relational = DefaultRelationalStore::open_local_for_backend_config(
             self.repo_root,
             &self.backends.relational,

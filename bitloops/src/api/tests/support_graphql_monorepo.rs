@@ -1059,7 +1059,7 @@ CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
         ],
     )
     .expect("insert semantic query setup");
-    for representation_kind in ["identity", "code", "summary"] {
+    for representation_kind in ["identity", "architecture", "code", "summary"] {
         conn.execute(
             "INSERT OR REPLACE INTO semantic_clone_embedding_setup_state (
                 repo_id, representation_kind, provider, model, dimension, setup_fingerprint
@@ -1108,6 +1108,17 @@ CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
                 "sym::web-render",
                 "semantic-query-hash-web-render-identity",
                 "[0.0,0.0,1.0]",
+            ),
+        ),
+        (
+            "architecture",
+            (
+                "artefact::api-target",
+                "packages/api/src/target.ts",
+                "blob-api-target",
+                "sym::api-target",
+                "semantic-query-hash-api-target-architecture",
+                "[-1.0,0.0,0.0]",
             ),
         ),
         (
@@ -1203,6 +1214,9 @@ while IFS= read -r line; do
   fi
   req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
+    *'"cmd":"embed"'*'"texts":["api endpoint"]'*)
+      vector='[[-1.0,0.0,0.0]]'
+      ;;
     *'"cmd":"embed"'*'"texts":["build response payload"]'*)
       vector='[[1.0,0.0,0.0]]'
       ;;
@@ -1219,7 +1233,7 @@ while IFS= read -r line; do
       vector='[[0.0,0.0,1.0]]'
       ;;
     *'"cmd":"embed"'*)
-      vector='[[-1.0,0.0,0.0]]'
+      vector='[[0.0,0.0,0.0]]'
       ;;
     *'"cmd":"shutdown"'*)
       printf '{"id":"%s","ok":true,"model":"semantic-query-test-model"}\n' "$req_id"
@@ -1272,7 +1286,9 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
   switch ($request.cmd) {
     "embed" {
       $text = $request.texts[0]
-      if ($text -eq "build response payload") {
+      if ($text -eq "api endpoint") {
+        $vector = @(@(-1.0, 0.0, 0.0))
+      } elseif ($text -eq "build response payload") {
         $vector = @(@(1.0, 0.0, 0.0))
       } elseif ($text -eq "render payload fragment") {
         $vector = @(@(0.0, 1.0, 0.0))
@@ -1283,7 +1299,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
       } elseif ($text -eq "render in page ts") {
         $vector = @(@(0.0, 0.0, 1.0))
       } else {
-        $vector = @(@(-1.0, 0.0, 0.0))
+        $vector = @(@(0.0, 0.0, 0.0))
       }
       $response = @{
         id = $request.id

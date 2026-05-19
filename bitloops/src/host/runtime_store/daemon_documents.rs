@@ -14,6 +14,7 @@ use crate::daemon::{runtime_state_path, service_metadata_path};
 use crate::storage::SqliteConnectionPool;
 use crate::utils::paths::default_global_runtime_db_path;
 
+use super::sqlite_migrate::ensure_sqlite_schema_once;
 use super::types::{
     DaemonSqliteRuntimeStore, PersistedCapabilityEventQueueState, PersistedDevqlTaskQueueState,
     PersistedSyncQueueState,
@@ -125,9 +126,7 @@ impl DaemonSqliteRuntimeStore {
     }
 
     pub fn open_at(db_path: PathBuf) -> Result<Self> {
-        let sqlite = SqliteConnectionPool::connect(db_path.clone())
-            .with_context(|| format!("opening daemon runtime database {}", db_path.display()))?;
-        initialise_runtime_schema(&sqlite)?;
+        ensure_daemon_runtime_schema_once(&db_path)?;
         Ok(Self { db_path })
     }
 
@@ -136,11 +135,9 @@ impl DaemonSqliteRuntimeStore {
     }
 
     fn open_sqlite_with_runtime_schema(&self) -> Result<SqliteConnectionPool> {
-        let sqlite = SqliteConnectionPool::connect(self.db_path.clone()).with_context(|| {
-            format!("opening daemon runtime database {}", self.db_path.display())
-        })?;
-        initialise_runtime_schema(&sqlite)?;
-        Ok(sqlite)
+        ensure_daemon_runtime_schema_once(&self.db_path)?;
+        SqliteConnectionPool::connect_existing(self.db_path.clone())
+            .with_context(|| format!("opening daemon runtime database {}", self.db_path.display()))
     }
 
     pub fn with_connection<T>(
@@ -151,7 +148,7 @@ impl DaemonSqliteRuntimeStore {
         sqlite.with_connection(operation)
     }
 
-    pub(crate) fn with_write_connection<T>(
+    pub fn with_write_connection<T>(
         &self,
         operation: impl FnOnce(&rusqlite::Connection) -> Result<T>,
     ) -> Result<T> {
@@ -586,6 +583,15 @@ fn import_legacy_document_if_needed(
         }
     };
     store_document_payload(conn, kind, &payload)
+}
+
+fn ensure_daemon_runtime_schema_once(db_path: &Path) -> Result<()> {
+    ensure_sqlite_schema_once(db_path, "daemon-runtime-store", |sqlite_path| {
+        let sqlite = SqliteConnectionPool::connect(sqlite_path.clone()).with_context(|| {
+            format!("opening daemon runtime database {}", sqlite_path.display())
+        })?;
+        initialise_runtime_schema(&sqlite)
+    })
 }
 
 fn document_key_runtime_state() -> &'static str {

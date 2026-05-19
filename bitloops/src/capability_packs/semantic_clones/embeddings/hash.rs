@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 
 use crate::host::inference::EmbeddingService;
 
+use super::architecture::architecture_roles_hash_value;
 use super::identity::{identity_container_raw, normalize_identity_path};
 use super::text::{MAX_EMBEDDING_BODY_CHARS, normalize_whitespace, truncate_chars};
 use super::types::{EmbeddingRepresentationKind, SymbolEmbeddingIndexState, SymbolEmbeddingInput};
@@ -43,6 +44,13 @@ pub fn build_symbol_embedding_input_hash(
                         normalize_whitespace(&input.body),
                         MAX_EMBEDDING_BODY_CHARS
                     )),
+                );
+            }
+            EmbeddingRepresentationKind::Architecture => {
+                map.insert("path".to_string(), json!(normalize_whitespace(&input.path)));
+                map.insert(
+                    "architecture_roles".to_string(),
+                    architecture_roles_hash_value(&input.architecture_roles),
                 );
             }
             EmbeddingRepresentationKind::Summary => {

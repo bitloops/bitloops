@@ -464,6 +464,7 @@ pub(crate) const RUNTIME_SNAPSHOT_QUERY: &str = r#"
             message
             modelName
             gatewayUrlOverride
+            apiKeyEnv
           }
           progress {
             phase
