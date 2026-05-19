@@ -1,9 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::capability_packs::test_harness::event_handlers::ExistingTestArtefactIdentityRow;
 use crate::capability_packs::test_harness::identity::{
-    stable_test_identity_key, test_duplicate_aware_symbol_id, test_edge_id,
-    test_revision_artefact_id,
+    ExistingTestArtefactIdentityRow, stable_test_identity_key, test_duplicate_aware_symbol_id,
+    test_edge_id, test_revision_artefact_id,
 };
 use crate::models::{ProductionArtefact, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
 
@@ -341,9 +340,9 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{DraftTestArtefact, DraftTestArtefactId, resolve_test_identities};
-    use crate::capability_packs::test_harness::event_handlers::ExistingTestArtefactIdentityRow;
     use crate::capability_packs::test_harness::identity::{
-        test_duplicate_aware_symbol_id, test_revision_artefact_id, test_structural_symbol_id,
+        ExistingTestArtefactIdentityRow, test_duplicate_aware_symbol_id, test_revision_artefact_id,
+        test_structural_symbol_id,
     };
     use crate::models::TestArtefactCurrentRecord;
 

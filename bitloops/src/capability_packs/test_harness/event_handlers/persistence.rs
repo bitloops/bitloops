@@ -3,22 +3,9 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
 
+use crate::capability_packs::test_harness::identity::ExistingTestArtefactIdentityRow;
 use crate::host::devql::{RelationalStorage, esc_pg};
 use crate::models::{TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
-
-#[derive(Debug, Clone)]
-pub(crate) struct ExistingTestArtefactIdentityRow {
-    pub(crate) path: String,
-    pub(crate) symbol_id: String,
-    pub(crate) canonical_kind: String,
-    pub(crate) language_kind: Option<String>,
-    pub(crate) name: String,
-    pub(crate) parent_symbol_id: Option<String>,
-    pub(crate) start_line: i64,
-    pub(crate) end_line: i64,
-    pub(crate) signature: Option<String>,
-    pub(crate) discovery_source: String,
-}
 
 pub(super) async fn replace_repo_state(
     storage: &RelationalStorage,

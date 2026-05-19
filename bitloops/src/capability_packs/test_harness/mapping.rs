@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 
-use crate::capability_packs::test_harness::event_handlers::ExistingTestArtefactIdentityRow;
+use crate::capability_packs::test_harness::identity::ExistingTestArtefactIdentityRow;
 use crate::capability_packs::test_harness::mapping::file_discovery::discover_test_files;
 use crate::capability_packs::test_harness::mapping::identity_resolution::{
     DraftTestArtefact, DraftTestArtefactId, DraftTestEdge, ResolvedTestIdentityOutput,

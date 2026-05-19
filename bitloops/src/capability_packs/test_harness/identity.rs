@@ -3,6 +3,20 @@
 //! The test harness follows the same deterministic identity algorithm as the
 //! core artefact pipeline while keeping the pack-level API local.
 
+#[derive(Debug, Clone)]
+pub(crate) struct ExistingTestArtefactIdentityRow {
+    pub(crate) path: String,
+    pub(crate) symbol_id: String,
+    pub(crate) canonical_kind: String,
+    pub(crate) language_kind: Option<String>,
+    pub(crate) name: String,
+    pub(crate) parent_symbol_id: Option<String>,
+    pub(crate) start_line: i64,
+    pub(crate) end_line: i64,
+    pub(crate) signature: Option<String>,
+    pub(crate) discovery_source: String,
+}
+
 fn normalize_identity_fragment(input: &str) -> String {
     let normalized = input
         .chars()
@@ -15,7 +29,8 @@ fn normalize_identity_fragment(input: &str) -> String {
     }
 }
 
-/// Stable logical identity for a test artefact (suite or scenario).
+/// Stable pre-hash identity key for a test artefact (suite or scenario).
+/// `test_structural_symbol_id` hashes this key into the deterministic symbol id.
 pub fn stable_test_identity_key(
     path: &str,
     canonical_kind: &str,
