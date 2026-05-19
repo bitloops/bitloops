@@ -12,6 +12,11 @@ use crate::capability_packs::architecture_graph::roles::llm_adjudication::{
 use crate::capability_packs::architecture_graph::roles::migrations::{
     apply_proposal, create_rule_activate_proposal,
 };
+use crate::capability_packs::architecture_graph::roles::seed_evidence::{
+    BudgetedSeedEvidence, ROLE_DISCOVERY_USER_PROMPT_BUDGET_BYTES,
+    RULE_GENERATION_USER_PROMPT_BUDGET_BYTES, budget_role_discovery_evidence,
+    budget_rule_generation_evidence,
+};
 use crate::capability_packs::architecture_graph::roles::storage::{
     AliasConflict, ArchitectureRoleAliasRecord, ArchitectureRoleRecord, ArchitectureRoleRuleRecord,
     create_role_alias, deterministic_alias_id, deterministic_role_id, deterministic_rule_id,
@@ -76,11 +81,19 @@ pub(super) struct ArchitectureSeedRequestDiagnostics {
     pub(super) runtime: Option<String>,
     pub(super) model: Option<String>,
     pub(super) thinking_level: Option<String>,
+    pub(super) signals: usize,
     pub(super) files: usize,
     pub(super) artefacts: usize,
     pub(super) edges: usize,
     pub(super) graph_facts: usize,
     pub(super) summaries: usize,
+    pub(super) prompt_budget_bytes: Option<usize>,
+    pub(super) omitted_signals: usize,
+    pub(super) omitted_files: usize,
+    pub(super) omitted_artefacts: usize,
+    pub(super) omitted_edges: usize,
+    pub(super) omitted_graph_facts: usize,
+    pub(super) omitted_summaries: usize,
     pub(super) system_prompt_bytes: usize,
     pub(super) user_prompt_bytes: usize,
     pub(super) schema_bytes: usize,
@@ -97,8 +110,12 @@ pub(super) struct ArchitectureSeedProfileDiagnostics<'a> {
 
 impl ArchitectureSeedRequestDiagnostics {
     pub(super) fn human_summary(&self) -> String {
+        let prompt_budget_bytes = self
+            .prompt_budget_bytes
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string());
         format!(
-            "phase={} profile={} driver={} runtime={} model={} thinking_level={} evidence(files={} artefacts={} edges={} graph_facts={} summaries={}) prompt_bytes(system={} user={} schema={})",
+            "phase={} profile={} driver={} runtime={} model={} thinking_level={} evidence(files={} artefacts={} edges={} graph_facts={} summaries={} signals={}) omitted(files={} artefacts={} edges={} graph_facts={} summaries={} signals={}) prompt_bytes(system={} user={} schema={} budget={})",
             self.phase_name,
             self.profile_name,
             self.driver.as_deref().unwrap_or("unknown"),
@@ -110,9 +127,17 @@ impl ArchitectureSeedRequestDiagnostics {
             self.edges,
             self.graph_facts,
             self.summaries,
+            self.signals,
+            self.omitted_files,
+            self.omitted_artefacts,
+            self.omitted_edges,
+            self.omitted_graph_facts,
+            self.omitted_summaries,
+            self.omitted_signals,
             self.system_prompt_bytes,
             self.user_prompt_bytes,
             self.schema_bytes,
+            prompt_budget_bytes,
         )
     }
 }
@@ -182,12 +207,20 @@ fn generate_seed_taxonomy_with_diagnostics(
         model: resolved.model.as_deref(),
         thinking_level: resolved.thinking_level.as_deref(),
     };
-    let role_request = architecture_roles_seed_roles_request(scope, evidence);
+    let role_budgeted = budget_role_discovery_evidence(scope, evidence)
+        .context("budgeting architecture role discovery seed evidence")?;
+    let role_request = architecture_roles_seed_roles_request(scope, role_budgeted.evidence());
+    ensure_seed_request_within_budget(
+        "role_discovery",
+        &role_request,
+        ROLE_DISCOVERY_USER_PROMPT_BUDGET_BYTES,
+    )?;
     let role_diagnostics = architecture_seed_request_diagnostics(
         "role_discovery",
         profile_diagnostics,
         &role_request,
-        evidence,
+        role_budgeted.evidence(),
+        Some(&role_budgeted),
     );
     eprintln!(
         "architecture roles seed: {}",
@@ -209,17 +242,27 @@ fn generate_seed_taxonomy_with_diagnostics(
         .enumerate()
     {
         let phase_name = format!("rule_generation_batch_{batch_index}");
+        let rule_budgeted = budget_rule_generation_evidence(scope, evidence, role_batch)
+            .with_context(|| {
+                format!("budgeting architecture rule generation seed evidence batch {batch_index}")
+            })?;
         let rule_request = architecture_roles_seed_rule_candidates_request(
             scope,
-            evidence,
+            rule_budgeted.evidence(),
             role_batch,
             batch_index,
         );
+        ensure_seed_request_within_budget(
+            &phase_name,
+            &rule_request,
+            RULE_GENERATION_USER_PROMPT_BUDGET_BYTES,
+        )?;
         let rule_diagnostics = architecture_seed_request_diagnostics(
             &phase_name,
             profile_diagnostics,
             &rule_request,
-            evidence,
+            rule_budgeted.evidence(),
+            Some(&rule_budgeted),
         );
         eprintln!(
             "architecture roles seed: {}",
@@ -390,7 +433,15 @@ pub(super) fn architecture_seed_request_diagnostics(
     profile: ArchitectureSeedProfileDiagnostics<'_>,
     request: &StructuredGenerationRequest,
     evidence: &Value,
+    budgeted: Option<&BudgetedSeedEvidence>,
 ) -> ArchitectureSeedRequestDiagnostics {
+    let omitted_count = |section: &str| {
+        budgeted
+            .and_then(|budgeted| budgeted.report().omitted_counts.get(section))
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or(0)
+    };
     ArchitectureSeedRequestDiagnostics {
         phase_name: phase_name.to_string(),
         profile_name: profile.profile_name.to_string(),
@@ -398,15 +449,37 @@ pub(super) fn architecture_seed_request_diagnostics(
         runtime: profile.runtime.map(ToOwned::to_owned),
         model: profile.model.map(ToOwned::to_owned),
         thinking_level: profile.thinking_level.map(ToOwned::to_owned),
+        signals: json_array_len(evidence, "language_framework_signals"),
         files: json_array_len(evidence, "canonical_files"),
         artefacts: json_array_len(evidence, "canonical_artefacts"),
         edges: json_array_len(evidence, "dependency_graph_hints"),
         graph_facts: json_array_len(evidence, "existing_architecture_graph_facts"),
         summaries: json_array_len(evidence, "artefact_summaries"),
+        prompt_budget_bytes: budgeted.map(|budgeted| budgeted.report().prompt_budget_bytes),
+        omitted_signals: omitted_count("language_framework_signals"),
+        omitted_files: omitted_count("canonical_files"),
+        omitted_artefacts: omitted_count("canonical_artefacts"),
+        omitted_edges: omitted_count("dependency_graph_hints"),
+        omitted_graph_facts: omitted_count("existing_architecture_graph_facts"),
+        omitted_summaries: omitted_count("artefact_summaries"),
         system_prompt_bytes: request.system_prompt.len(),
         user_prompt_bytes: request.user_prompt.len(),
         schema_bytes: request.json_schema.to_string().len(),
     }
+}
+
+fn ensure_seed_request_within_budget(
+    phase_name: &str,
+    request: &StructuredGenerationRequest,
+    prompt_budget_bytes: usize,
+) -> Result<()> {
+    let user_prompt_bytes = request.user_prompt.len();
+    if user_prompt_bytes > prompt_budget_bytes {
+        bail!(
+            "architecture role seed `{phase_name}` prompt is {user_prompt_bytes} bytes, exceeding budget {prompt_budget_bytes} bytes; seed evidence budgeting failed before inference"
+        );
+    }
+    Ok(())
 }
 
 fn json_array_len(value: &Value, key: &str) -> usize {

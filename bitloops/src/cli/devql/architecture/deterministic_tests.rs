@@ -410,6 +410,7 @@ fn architecture_seed_diagnostics_count_evidence_and_prompt_bytes() {
         },
         &request,
         &evidence,
+        None,
     );
 
     assert_eq!(
@@ -417,10 +418,14 @@ fn architecture_seed_diagnostics_count_evidence_and_prompt_bytes() {
         "architecture_fact_synthesis_codex"
     );
     assert_eq!(diagnostics.files, 2);
+    assert_eq!(diagnostics.signals, 0);
     assert_eq!(diagnostics.artefacts, 1);
     assert_eq!(diagnostics.edges, 0);
     assert_eq!(diagnostics.graph_facts, 1);
     assert_eq!(diagnostics.summaries, 1);
+    assert_eq!(diagnostics.prompt_budget_bytes, None);
+    assert_eq!(diagnostics.omitted_signals, 0);
+    assert_eq!(diagnostics.omitted_files, 0);
     assert_eq!(diagnostics.thinking_level.as_deref(), Some("xhigh"));
     assert!(diagnostics.user_prompt_bytes > 0);
 
@@ -432,6 +437,56 @@ fn architecture_seed_diagnostics_count_evidence_and_prompt_bytes() {
     assert!(rendered.contains("files=2"));
     assert!(rendered.contains("artefacts=1"));
     assert!(rendered.contains("prompt_bytes(system="));
+    assert!(rendered.contains("budget=none"));
+}
+
+#[test]
+fn architecture_seed_diagnostics_include_budget_and_omitted_counts() {
+    let evidence = json!({
+        "repository": {},
+        "language_framework_signals": [],
+        "canonical_files": [
+            { "path": "src/runtime.rs" }
+        ],
+        "canonical_artefacts": [],
+        "dependency_graph_hints": [],
+        "existing_architecture_graph_facts": [],
+        "artefact_summaries": [],
+        "generic_role_family_examples": []
+    });
+    let budgeted = crate::capability_packs::architecture_graph::roles::seed_evidence
+        ::budget_role_discovery_evidence(&test_scope(), &evidence)
+        .expect("budget evidence");
+    let request = crate::capability_packs::architecture_graph::roles::llm_adjudication
+        ::architecture_roles_seed_roles_request(&test_scope(), budgeted.evidence());
+
+    let diagnostics = architecture_seed_request_diagnostics(
+        "role_discovery",
+        ArchitectureSeedProfileDiagnostics {
+            profile_name: "architecture_fact_synthesis_codex",
+            driver: Some("codex_exec"),
+            runtime: Some("codex"),
+            model: Some("gpt-5.4-mini"),
+            thinking_level: Some("low"),
+        },
+        &request,
+        budgeted.evidence(),
+        Some(&budgeted),
+    );
+
+    assert_eq!(
+        diagnostics.prompt_budget_bytes,
+        Some(
+            crate::capability_packs::architecture_graph::roles::seed_evidence
+                ::ROLE_DISCOVERY_USER_PROMPT_BUDGET_BYTES
+        )
+    );
+    assert_eq!(diagnostics.files, 1);
+    assert_eq!(diagnostics.signals, 0);
+    assert_eq!(diagnostics.omitted_signals, 0);
+    assert_eq!(diagnostics.omitted_files, 0);
+    assert!(diagnostics.human_summary().contains("budget=65536"));
+    assert!(diagnostics.human_summary().contains("omitted(files=0"));
 }
 
 #[test]

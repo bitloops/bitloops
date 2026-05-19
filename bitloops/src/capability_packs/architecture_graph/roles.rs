@@ -13,6 +13,7 @@ pub mod queue_store;
 pub mod response_validator;
 pub mod rules;
 pub mod schema;
+pub mod seed_evidence;
 pub mod storage;
 pub mod taxonomy;
 
@@ -80,7 +81,8 @@ mod tests {
             "orchestrator",
             "queue_store",
             "response_validator",
+            "seed_evidence",
         ];
-        assert_eq!(submodules.len(), 15);
+        assert_eq!(submodules.len(), 16);
     }
 }
