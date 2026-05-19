@@ -28,10 +28,6 @@ pub(crate) async fn choose_summary_setup_during_init(
         return Ok(SummarySetupSelection::Skip);
     }
 
-    if !install_default_daemon {
-        return Ok(SummarySetupSelection::Skip);
-    }
-
     let cloud_logged_in = crate::daemon::resolve_workos_session_status()
         .await?
         .is_some();

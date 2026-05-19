@@ -34,12 +34,10 @@ pub(super) use daemon_bootstrap::{
 pub(super) use daemon_bootstrap::{
     with_enable_default_daemon_service_hook, with_install_default_daemon_hook,
 };
+#[cfg(test)]
+pub(super) use embeddings_setup::prompt_install_embeddings_setup_selection;
 pub(super) use embeddings_setup::{
     InitEmbeddingsSetupSelection, should_install_embeddings_during_init,
-};
-#[cfg(test)]
-pub(super) use embeddings_setup::{
-    NON_INTERACTIVE_INIT_EMBEDDINGS_SELECTION_ERROR, prompt_install_embeddings_setup_selection,
 };
 #[cfg(test)]
 pub(super) use final_setup::InitFinalSetupSelection;

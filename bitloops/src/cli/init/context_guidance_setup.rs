@@ -25,10 +25,6 @@ pub(crate) async fn choose_context_guidance_setup_during_init(
         return Ok(ContextGuidanceSetupSelection::Skip);
     }
 
-    if !args.install_default_daemon {
-        return Ok(ContextGuidanceSetupSelection::Skip);
-    }
-
     if let Some(runtime) = args.context_guidance_runtime {
         return Ok(match runtime {
             TextGenerationRuntime::Local => ContextGuidanceSetupSelection::Local,
