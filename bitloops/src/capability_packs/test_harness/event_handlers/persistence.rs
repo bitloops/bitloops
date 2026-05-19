@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
 
+use crate::capability_packs::test_harness::identity::ExistingTestArtefactIdentityRow;
 use crate::host::devql::{RelationalStorage, esc_pg};
 use crate::models::{TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
 
@@ -28,6 +29,37 @@ pub(super) async fn replace_repo_state(
             .map(|edge| insert_test_edge_sql(storage, edge)),
     );
     storage.exec_batch_transactional(&statements).await
+}
+
+pub(super) async fn load_existing_test_artefact_identity_rows(
+    storage: &RelationalStorage,
+    repo_id: &str,
+    paths: Option<&HashSet<String>>,
+) -> Result<Vec<ExistingTestArtefactIdentityRow>> {
+    let path_filter = paths
+        .filter(|paths| !paths.is_empty())
+        .map(|paths| {
+            let values = paths
+                .iter()
+                .map(|path| format!("'{}'", esc_pg(path)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(" AND path IN ({values})")
+        })
+        .unwrap_or_default();
+    let sql = format!(
+        "SELECT path, symbol_id, canonical_kind, language_kind, name, parent_symbol_id, \
+                start_line, end_line, signature, discovery_source \
+         FROM test_artefacts_current \
+         WHERE repo_id = '{}'{} \
+         ORDER BY path ASC, start_line ASC, symbol_id ASC",
+        esc_pg(repo_id),
+        path_filter,
+    );
+    let rows = storage.query_rows(&sql).await?;
+    rows.into_iter()
+        .map(existing_test_row_from_json)
+        .collect::<Result<Vec<_>>>()
 }
 
 pub(super) async fn persist_discovered_files(
@@ -60,9 +92,19 @@ pub(super) fn ensure_unique_test_artefact_ids(
     test_artefacts: &[TestArtefactCurrentRecord],
 ) -> Result<()> {
     let mut by_artefact_id: HashMap<&str, Vec<&TestArtefactCurrentRecord>> = HashMap::new();
+    let mut by_current_symbol_key: HashMap<(&str, &str, &str), Vec<&TestArtefactCurrentRecord>> =
+        HashMap::new();
     for artefact in test_artefacts {
         by_artefact_id
             .entry(artefact.artefact_id.as_str())
+            .or_default()
+            .push(artefact);
+        by_current_symbol_key
+            .entry((
+                artefact.repo_id.as_str(),
+                artefact.path.as_str(),
+                artefact.symbol_id.as_str(),
+            ))
             .or_default()
             .push(artefact);
     }
@@ -94,6 +136,33 @@ pub(super) fn ensure_unique_test_artefact_ids(
         bail!(
             "duplicate test artefact ids detected before persistence: {}",
             duplicates.join(" | ")
+        );
+    }
+
+    let duplicate_symbol_keys = by_current_symbol_key
+        .into_iter()
+        .filter_map(|((repo_id, path, symbol_id), artefacts)| {
+            (artefacts.len() > 1).then(|| {
+                let details = artefacts
+                    .iter()
+                    .map(|artefact| {
+                        format!(
+                            "kind={}, name={}, discovery_source={}",
+                            artefact.canonical_kind, artefact.name, artefact.discovery_source
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ; ");
+                format!("{repo_id}/{path}/{symbol_id} => {details}")
+            })
+        })
+        .take(5)
+        .collect::<Vec<_>>();
+
+    if !duplicate_symbol_keys.is_empty() {
+        bail!(
+            "duplicate test artefact symbol keys detected before persistence: {}",
+            duplicate_symbol_keys.join(" | ")
         );
     }
 
@@ -254,4 +323,54 @@ fn nullable_i64_sql(value: Option<i64>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "NULL".to_string())
+}
+
+fn existing_test_row_from_json(row: Value) -> Result<ExistingTestArtefactIdentityRow> {
+    Ok(ExistingTestArtefactIdentityRow {
+        path: required_string_field(&row, "path")?,
+        symbol_id: required_string_field(&row, "symbol_id")?,
+        canonical_kind: required_string_field(&row, "canonical_kind")?,
+        language_kind: optional_string_field(&row, "language_kind")?,
+        name: required_string_field(&row, "name")?,
+        parent_symbol_id: optional_string_field(&row, "parent_symbol_id")?,
+        start_line: required_i64_field(&row, "start_line")?,
+        end_line: required_i64_field(&row, "end_line")?,
+        signature: optional_string_field(&row, "signature")?,
+        discovery_source: required_string_field(&row, "discovery_source")?,
+    })
+}
+
+fn required_string_field(row: &Value, key: &str) -> Result<String> {
+    match row.get(key) {
+        Some(Value::String(value)) => Ok(value.clone()),
+        Some(value) => Err(anyhow!(
+            "expected string field `{key}` in test artefact identity row, got {value}"
+        )),
+        None => Err(anyhow!(
+            "missing string field `{key}` in test artefact identity row"
+        )),
+    }
+}
+
+fn optional_string_field(row: &Value, key: &str) -> Result<Option<String>> {
+    match row.get(key) {
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(Value::Null) | None => Ok(None),
+        Some(value) => Err(anyhow!(
+            "expected nullable string field `{key}` in test artefact identity row, got {value}"
+        )),
+    }
+}
+
+fn required_i64_field(row: &Value, key: &str) -> Result<i64> {
+    match row.get(key).and_then(Value::as_i64) {
+        Some(value) => Ok(value),
+        None if row.get(key).is_some() => Err(anyhow!(
+            "expected integer field `{key}` in test artefact identity row, got {}",
+            row.get(key).unwrap()
+        )),
+        None => Err(anyhow!(
+            "missing integer field `{key}` in test artefact identity row"
+        )),
+    }
 }

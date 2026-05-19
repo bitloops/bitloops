@@ -345,7 +345,7 @@ mod tests {
                 start_line: 1,
                 end_line: 1,
                 scenarios: vec![DiscoveredTestScenario {
-                    name: "sample::documented_increment[doctest:12]".to_string(),
+                    name: "sample::documented_increment".to_string(),
                     start_line: 12,
                     end_line: 15,
                     reference_candidates: vec![ReferenceCandidate::ExplicitTarget {
@@ -362,7 +362,7 @@ mod tests {
             scenarios: vec![EnumeratedTestScenario {
                 language: "rust".to_string(),
                 suite_name: "src::lib.rs::doctests".to_string(),
-                scenario_name: "sample::documented_increment[doctest:12]".to_string(),
+                scenario_name: "sample::documented_increment".to_string(),
                 relative_path: "src/lib.rs".to_string(),
                 start_line: 12,
                 reference_candidates: vec![ReferenceCandidate::ExplicitTarget {

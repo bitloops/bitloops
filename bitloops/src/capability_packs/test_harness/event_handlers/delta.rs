@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
+use crate::capability_packs::test_harness::mapping;
 use crate::capability_packs::test_harness::mapping::linker::build_production_index;
 use crate::capability_packs::test_harness::mapping::materialize::{
     MaterializationContext, materialize_enumerated_scenarios, materialize_source_discovery,
@@ -13,7 +14,10 @@ use crate::host::language_adapter::{
 };
 
 use super::full::reconcile_full;
-use super::persistence::{delete_edges_to_removed_symbols, delete_paths, persist_discovered_files};
+use super::persistence::{
+    delete_edges_to_removed_symbols, delete_paths, load_existing_test_artefact_identity_rows,
+    persist_discovered_files,
+};
 
 pub(super) async fn reconcile_delta(
     request: &CurrentStateConsumerRequest,
@@ -92,12 +96,26 @@ pub(super) async fn reconcile_delta(
         materialize_source_discovery(&mut materialization, &discovered_files);
         materialize_enumerated_scenarios(&mut materialization, &enumerated_scenarios);
 
+        let existing_test_artefacts = load_existing_test_artefact_identity_rows(
+            &context.storage,
+            &request.repo_id,
+            Some(&processed_paths),
+        )
+        .await?;
+        let resolved = mapping::resolve_materialized_output(
+            &request.repo_id,
+            &existing_test_artefacts,
+            &production,
+            test_artefacts,
+            test_edges,
+        );
+
         persist_discovered_files(
             &context.storage,
             &request.repo_id,
             &processed_paths,
-            &test_artefacts,
-            &test_edges,
+            &resolved.test_artefacts,
+            &resolved.test_edges,
         )
         .await?;
     }
