@@ -9,6 +9,7 @@ fn open_commit_checkpoint_mapping_store(
     let relational = crate::host::relational_store::DefaultRelationalStore::
         open_primary_for_repo_root_preferring_bound_config(repo_root)
         .context("opening relational store for commit_checkpoints")?;
+    initialise_checkpoint_relational_roles(&relational)?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for commit_checkpoints")?
         .repo_id;

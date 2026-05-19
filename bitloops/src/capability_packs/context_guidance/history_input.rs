@@ -1,6 +1,5 @@
 use anyhow::{Result, anyhow, ensure};
 
-use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventFilter, InteractionEventType,
 };

@@ -54,6 +54,8 @@ pub(crate) enum RunCompletion {
     Completed {
         run: CapabilityEventRunRecord,
         applied_to_generation_seq: u64,
+        warnings: Vec<String>,
+        metrics: Option<serde_json::Value>,
     },
     RetryableFailure {
         run: CapabilityEventRunRecord,

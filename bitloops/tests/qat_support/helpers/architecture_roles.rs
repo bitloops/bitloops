@@ -1,5 +1,7 @@
 const ARCHITECTURE_GRAPH_CAPABILITY_ID_QAT: &str = "architecture_graph";
 const ARCHITECTURE_GRAPH_SNAPSHOT_MAILBOX_QAT: &str = "architecture_graph.snapshot";
+const ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_MAILBOX_QAT: &str =
+    "architecture_graph.roles.current_state";
 const ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_QAT: &str =
     "architecture_graph.role_adjudication";
 const ARCHITECTURE_ROLE_ADJUDICATION_MAILBOX_QAT: &str =
@@ -145,7 +147,7 @@ pub fn activate_seeded_architecture_role_rules(
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT rule.rule_id
@@ -635,7 +637,7 @@ pub fn assert_architecture_roles_include_keys(
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     for key in split_csv(keys_csv) {
         let count: i64 = conn
             .query_row(
@@ -707,7 +709,7 @@ pub fn assert_architecture_role_rule_signal_for_path(
     ensure_bitloops_repo_name(repo_name)?;
     let role_id = architecture_role_id_for_key(world, role_key)?;
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*)
@@ -1077,7 +1079,7 @@ pub fn assert_architecture_role_assignment_history_status(
     ensure_bitloops_repo_name(repo_name)?;
     let role_id = architecture_role_id_for_key(world, role_key)?;
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*)
@@ -1313,7 +1315,7 @@ fn parse_architecture_role_proposal_id(stdout: &str) -> Result<String> {
 
 fn assert_no_draft_seeded_architecture_role_rules(world: &QatWorld) -> Result<()> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let draft_count: i64 = conn
         .query_row(
             "SELECT COUNT(*)
@@ -1718,7 +1720,7 @@ max_output_tokens = 1024
 
 fn architecture_role_id_for_key(world: &QatWorld, role_key: &str) -> Result<String> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     conn.query_row(
         "SELECT role_id
          FROM architecture_roles
@@ -1736,7 +1738,7 @@ fn architecture_role_field_for_key(world: &QatWorld, role_key: &str, field: &str
         "unsupported architecture role field `{field}`"
     );
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let sql = format!(
         "SELECT {field}
          FROM architecture_roles
@@ -1752,7 +1754,7 @@ fn architecture_role_field_for_key(world: &QatWorld, role_key: &str, field: &str
 fn active_architecture_role_rule_id(world: &QatWorld, role_key: &str) -> Result<String> {
     let role_id = architecture_role_id_for_key(world, role_key)?;
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     conn.query_row(
         "SELECT rule_id
          FROM architecture_role_detection_rules
@@ -1800,7 +1802,7 @@ fn architecture_role_assignment_json_for_path(
 ) -> Result<ArchitectureRoleAssignmentRow> {
     let role_id = architecture_role_id_for_key(world, role_key)?;
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     conn.query_row(
         "SELECT assignment.assignment_id,
                 assignment.path,
@@ -1844,7 +1846,7 @@ fn architecture_role_assignments_for_role(
 ) -> Result<Vec<ArchitectureRoleAssignmentSnapshot>> {
     let role_id = architecture_role_id_for_key(world, role_key)?;
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT assignment.path,
@@ -1875,7 +1877,7 @@ fn all_architecture_role_assignments(
     excluded_path: Option<&str>,
 ) -> Result<Vec<ArchitectureRoleAssignmentSnapshot>> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT assignment.path,
@@ -1931,7 +1933,7 @@ fn architecture_role_assignment_exclusion_snapshot_key(path: &str) -> String {
 
 fn architecture_role_fact_generation_for_path(world: &QatWorld, path: &str) -> Result<u64> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let generation: Option<i64> = conn
         .query_row(
             "SELECT MAX(generation_seq)
@@ -1948,7 +1950,7 @@ fn architecture_role_fact_generation_for_path(world: &QatWorld, path: &str) -> R
 
 fn architecture_role_facts_count_for_path(world: &QatWorld, path: &str) -> Result<i64> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     conn.query_row(
         "SELECT COUNT(*)
          FROM architecture_artefact_facts_current
@@ -1969,7 +1971,7 @@ fn assert_architecture_role_rule_edit_preview_contains_path(
         .as_ref()
         .ok_or_else(|| anyhow!("missing latest architecture role rule edit proposal id"))?;
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let preview_json: String = conn
         .query_row(
             "SELECT preview_payload_json
@@ -2267,18 +2269,30 @@ fn latest_architecture_graph_cursor_run(
 }
 
 fn latest_architecture_graph_role_metrics(world: &QatWorld) -> Result<serde_json::Value> {
-    let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
-    let metrics_json: String = conn
-        .query_row(
-            "SELECT metrics_json
-             FROM architecture_graph_runs_current
-             WHERE repo_id = ?1
-             LIMIT 1",
-            [repo_id.as_str()],
-            |row| row.get(0),
-        )
-        .context("loading latest ArchitectureGraph metrics")?;
+    let sqlite = open_scenario_runtime_sqlite(world)?;
+    let metrics_json = sqlite
+        .with_connection(|conn| {
+            use rusqlite::OptionalExtension as _;
+            conn.query_row(
+                "SELECT metrics_json
+                 FROM capability_workplane_cursor_runs
+                 WHERE capability_id = ?1
+                   AND mailbox_name = ?2
+                   AND status = 'completed'
+                 ORDER BY COALESCE(completed_at_unix, updated_at_unix) DESC,
+                          submitted_at_unix DESC
+                 LIMIT 1",
+                rusqlite::params![
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID_QAT,
+                    ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_MAILBOX_QAT
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })
+        .context("loading latest ArchitectureGraph role metrics")?
+        .ok_or_else(|| anyhow!("no completed ArchitectureGraph role current-state run found"))?;
     let metrics: serde_json::Value =
         serde_json::from_str(&metrics_json).context("parsing ArchitectureGraph metrics json")?;
     metrics

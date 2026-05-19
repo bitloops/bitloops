@@ -340,7 +340,6 @@ impl Strategy for ManualCommitStrategy {
                 "[bitloops] Warning: DevQL post-commit artefact refresh failed for commit {}: {err:#}",
                 head
             );
-            return Ok(());
         }
 
         self.execute_post_commit_derivation(&head, &committed_files_vec, is_rebase_in_progress)?;
@@ -450,45 +449,62 @@ impl ManualCommitStrategy {
         }
 
         let interaction_spool = open_interaction_spool(&self.repo_root).ok();
-        let interaction_spool_ref = interaction_spool
+        let spool_pending_work = interaction_spool
             .as_ref()
-            .map(|spool| spool as &dyn InteractionSpool);
-        let spool_pending_work = interaction_spool_ref.is_some_and(spool_has_pending_work);
-        let (interaction_repository, derivation_spool) =
-            match resolve_interaction_repository_for_post_commit(&self.repo_root) {
-                Ok(repository) => (repository, interaction_spool_ref),
-                Err(err) => {
-                    let context = format_post_commit_derivation_context(
-                        head,
-                        None,
-                        None,
-                        &[],
-                        Some(spool_pending_work),
-                    );
-                    eprintln!(
-                        "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}"
-                    );
-                    if spool_pending_work {
+            .is_some_and(|spool| spool_has_pending_work(spool));
+        let interaction_sources = match resolve_interaction_repository_for_post_commit(
+            &self.repo_root,
+        ) {
+            Ok(repository) => PostCommitInteractionSources::Canonical {
+                repository,
+                spool: interaction_spool,
+            },
+            Err(err) => {
+                let context = format_post_commit_derivation_context(
+                    head,
+                    None,
+                    None,
+                    &[],
+                    Some(spool_pending_work),
+                );
+                eprintln!(
+                    "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}"
+                );
+                match interaction_spool {
+                    Some(spool) if spool_pending_work => {
+                        PostCommitInteractionSources::LocalSpool { spool }
+                    }
+                    _ => {
                         return Err(err).context(format!(
                             "resolving interaction event repository for post_commit ({context})"
                         ));
                     }
-                    update_active_session_base_commits(
-                        self.backend.as_ref(),
-                        head,
-                        &std::collections::HashSet::new(),
-                    );
-                    return Ok(());
                 }
-            };
+            }
+        };
 
-        if let Some(checkpoint_id) = self.derive_post_commit_from_interaction_sources(
-            head,
-            &committed_files_set,
-            is_rebase_in_progress,
-            interaction_repository.as_ref(),
-            derivation_spool,
-        )? {
+        let derived_checkpoint_id = match interaction_sources {
+            PostCommitInteractionSources::Canonical { repository, spool } => {
+                let spool_ref = spool.as_ref().map(|spool| spool as &dyn InteractionSpool);
+                self.derive_post_commit_from_interaction_sources(
+                    head,
+                    &committed_files_set,
+                    is_rebase_in_progress,
+                    repository.as_ref(),
+                    spool_ref,
+                )?
+            }
+            PostCommitInteractionSources::LocalSpool { spool } => self
+                .derive_post_commit_from_interaction_sources(
+                    head,
+                    &committed_files_set,
+                    is_rebase_in_progress,
+                    &spool,
+                    None,
+                )?,
+        };
+
+        if let Some(checkpoint_id) = derived_checkpoint_id {
             insert_commit_checkpoint_mapping(&self.repo_root, head, &checkpoint_id)?;
             if let Err(err) = run_devql_post_commit_checkpoint_projection_refresh(
                 &self.repo_root,
@@ -660,6 +676,16 @@ impl ManualCommitStrategy {
 
         Ok(condensed_any_session.then_some(checkpoint_id))
     }
+}
+
+enum PostCommitInteractionSources {
+    Canonical {
+        repository: Box<dyn InteractionEventRepository>,
+        spool: Option<SqliteInteractionSpool>,
+    },
+    LocalSpool {
+        spool: SqliteInteractionSpool,
+    },
 }
 
 fn resolve_interaction_repository_for_post_commit(

@@ -9,7 +9,6 @@ use super::types::{
 use crate::host::checkpoints::lifecycle::interaction::resolve_interaction_spool;
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
 use crate::host::interactions::db_store::SqliteInteractionSpool;
-use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionSubagentRun, InteractionToolInvocation, InteractionTurn,
 };

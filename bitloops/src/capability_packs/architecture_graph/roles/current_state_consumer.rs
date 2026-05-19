@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::Context;
 use serde_json::json;
 
@@ -7,12 +9,17 @@ use crate::capability_packs::architecture_graph::roles::{
 use crate::capability_packs::architecture_graph::types::{
     ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
 };
-use crate::capability_packs::semantic_clones::workplane::{
-    architecture_embedding_jobs_for_artefacts, architecture_embedding_path_cleanup_jobs,
+use crate::capability_packs::semantic_clones::{
+    runtime_config::resolve_semantic_clones_config,
+    types::SEMANTIC_CLONES_CAPABILITY_ID,
+    workplane::{
+        architecture_embedding_jobs_for_artefacts, architecture_embedding_path_cleanup_jobs,
+        load_effective_mailbox_intent_for_repo,
+    },
 };
 use crate::host::capability_host::{
-    CurrentStateConsumer, CurrentStateConsumerContext, CurrentStateConsumerFuture,
-    CurrentStateConsumerRequest, CurrentStateConsumerResult,
+    CapabilityConfigView, CurrentStateConsumer, CurrentStateConsumerContext,
+    CurrentStateConsumerFuture, CurrentStateConsumerRequest, CurrentStateConsumerResult,
 };
 use crate::host::devql::{RelationalStorage, esc_pg, sql_string_list_pg};
 
@@ -67,6 +74,7 @@ impl CurrentStateConsumer for ArchitectureGraphRoleCurrentStateConsumer {
             let mut architecture_embedding_enqueue_failed = false;
             let architecture_embedding_metrics = match enqueue_architecture_embedding_refresh(
                 &request.repo_id,
+                &request.repo_root,
                 outcome.metrics.full_reconcile,
                 &outcome.architecture_embedding_refresh_paths,
                 &outcome.architecture_embedding_cleanup_paths,
@@ -127,11 +135,22 @@ struct ArchitectureEmbeddingEnqueueMetrics {
 
 async fn enqueue_architecture_embedding_refresh(
     repo_id: &str,
+    repo_root: &Path,
     full_reconcile: bool,
     refresh_paths: &[String],
     cleanup_paths: &[String],
     context: &CurrentStateConsumerContext,
 ) -> anyhow::Result<ArchitectureEmbeddingEnqueueMetrics> {
+    let semantic_clones_config = resolve_semantic_clones_config(&CapabilityConfigView::new(
+        SEMANTIC_CLONES_CAPABILITY_ID,
+        context.config_root.clone(),
+    ));
+    let intent = load_effective_mailbox_intent_for_repo(repo_root, &semantic_clones_config)
+        .context("loading semantic-clones mailbox intent for architecture embedding refresh")?;
+    if !intent.architecture_embeddings_active {
+        return Ok(ArchitectureEmbeddingEnqueueMetrics::default());
+    }
+
     let artefact_ids = if full_reconcile {
         load_current_embedding_artefact_ids(context.storage.as_ref(), repo_id, None).await?
     } else {

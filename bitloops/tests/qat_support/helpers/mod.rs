@@ -16,7 +16,6 @@ use bitloops::host::checkpoints::session::create_session_backend_or_local;
 use bitloops::host::checkpoints::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed,
 };
-use bitloops::host::interactions::store::InteractionSpool;
 use bitloops::host::interactions::types::{InteractionSession, InteractionTurn};
 use bitloops::host::runtime_store::{
     DaemonSqliteRuntimeStore as QatDaemonSqliteRuntimeStore, RepoSqliteRuntimeStore,

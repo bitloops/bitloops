@@ -2,6 +2,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::types::{
+    InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn,
+};
 use crate::storage::sqlite::SqliteConnectionPool;
 
 mod projections;
@@ -63,6 +67,52 @@ impl SqliteInteractionSpool {
 
     pub fn repo_id(&self) -> &str {
         &self.repo_id
+    }
+
+    pub fn assign_checkpoint_to_turns(
+        &self,
+        turn_ids: &[String],
+        checkpoint_id: &str,
+        assigned_at: &str,
+    ) -> Result<()> {
+        <Self as InteractionSpool>::assign_checkpoint_to_turns(
+            self,
+            turn_ids,
+            checkpoint_id,
+            assigned_at,
+        )
+    }
+
+    pub fn list_sessions(
+        &self,
+        agent: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<InteractionSession>> {
+        <Self as InteractionSpool>::list_sessions(self, agent, limit)
+    }
+
+    pub fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>> {
+        <Self as InteractionSpool>::load_session(self, session_id)
+    }
+
+    pub fn list_turns_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<InteractionTurn>> {
+        <Self as InteractionSpool>::list_turns_for_session(self, session_id, limit)
+    }
+
+    pub fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
+        <Self as InteractionSpool>::list_uncheckpointed_turns(self)
+    }
+
+    pub fn list_events(
+        &self,
+        filter: &InteractionEventFilter,
+        limit: usize,
+    ) -> Result<Vec<InteractionEvent>> {
+        <Self as InteractionSpool>::list_events(self, filter, limit)
     }
 
     pub(crate) fn with_connection<T, F>(&self, f: F) -> Result<T>

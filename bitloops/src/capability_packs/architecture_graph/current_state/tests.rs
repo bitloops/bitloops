@@ -176,7 +176,15 @@ struct ArchitectureConsumerTestContext {
 async fn architecture_consumer_test_context(
     repo_id: &str,
 ) -> anyhow::Result<ArchitectureConsumerTestContext> {
+    architecture_consumer_test_context_with_config(repo_id, json!({})).await
+}
+
+async fn architecture_consumer_test_context_with_config(
+    repo_id: &str,
+    config_root: Value,
+) -> anyhow::Result<ArchitectureConsumerTestContext> {
     let temp = tempfile::TempDir::new()?;
+    crate::test_support::git_fixtures::write_test_daemon_config(temp.path());
     let sqlite_path = temp.path().join("architecture-current-state.sqlite");
     crate::host::devql::sqlite_exec_path_allow_create(
         &sqlite_path,
@@ -208,7 +216,7 @@ async fn architecture_consumer_test_context(
     })?;
     let workplane = CapturingWorkplaneGateway::default();
     let context = CurrentStateConsumerContext {
-        config_root: json!({}),
+        config_root,
         storage: std::sync::Arc::clone(&storage),
         relational: std::sync::Arc::new(
             crate::host::capability_host::gateways::SqliteRelationalGateway::new(sqlite_pool),
@@ -234,6 +242,19 @@ async fn architecture_consumer_test_context(
         storage,
         context,
         workplane,
+    })
+}
+
+fn semantic_clones_config_with_code_embeddings() -> Value {
+    json!({
+        "semantic_clones": {
+            "summary_mode": "off",
+            "embedding_mode": "semantic_aware_once",
+            "ann_neighbors": 5,
+            "inference": {
+                "code_embeddings": "code_embeddings"
+            }
+        }
     })
 }
 
@@ -520,7 +541,11 @@ async fn current_state_reconcile_includes_role_metrics() -> anyhow::Result<()> {
 async fn current_state_reconcile_enqueues_architecture_embedding_job_after_classification()
 -> anyhow::Result<()> {
     let repo_id = "repo-architecture-embedding-current-state";
-    let test = architecture_consumer_test_context(repo_id).await?;
+    let test = architecture_consumer_test_context_with_config(
+        repo_id,
+        semantic_clones_config_with_code_embeddings(),
+    )
+    .await?;
     insert_current_file(&test.sqlite_path, repo_id, "src/api.rs", "rust")?;
     insert_current_artefact(
         &test.sqlite_path,
@@ -604,6 +629,77 @@ async fn current_state_reconcile_enqueues_architecture_embedding_job_after_class
             .metrics
             .as_ref()
             .and_then(|metrics| metrics.get("architecture_embedding_deduped"))
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_state_reconcile_skips_architecture_embedding_jobs_without_embedding_config()
+-> anyhow::Result<()> {
+    let repo_id = "repo-architecture-embedding-current-state-disabled";
+    let test = architecture_consumer_test_context(repo_id).await?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/api.rs", "rust")?;
+    insert_current_artefact(
+        &test.sqlite_path,
+        repo_id,
+        "src/api.rs",
+        "artefact-api",
+        "symbol-api",
+    )?;
+    upsert_test_role(test.storage.as_ref(), repo_id, "role-api-search", "api").await?;
+    upsert_path_suffix_rule(
+        test.storage.as_ref(),
+        repo_id,
+        "role-api-search",
+        "rule-api-search",
+        "api.rs",
+        0.95,
+    )
+    .await?;
+
+    let request = CurrentStateConsumerRequest {
+        run_id: Some("run".to_string()),
+        repo_id: repo_id.to_string(),
+        repo_root: test._temp.path().to_path_buf(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        from_generation_seq_exclusive: 0,
+        to_generation_seq_inclusive: 28,
+        reconcile_mode: crate::host::capability_host::ReconcileMode::MergedDelta,
+        file_upserts: Vec::new(),
+        file_removals: Vec::new(),
+        affected_paths: vec!["src/api.rs".to_string()],
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    };
+
+    let result = ArchitectureGraphRoleCurrentStateConsumer
+        .reconcile(&request, &test.context)
+        .await?;
+
+    let jobs = test.workplane.jobs();
+    assert!(
+        jobs.iter().all(|job| {
+            job.mailbox_name
+                != crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
+        }),
+        "architecture embedding jobs should not be enqueued without code embedding config: {jobs:?}"
+    );
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.pointer("/roles/assignments_written"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.get("architecture_embedding_selected"))
             .and_then(Value::as_u64),
         Some(0)
     );

@@ -294,6 +294,58 @@ fn apply_completion_noop_keeps_existing_cursor_and_clears_error() {
 }
 
 #[test]
+fn current_state_consumer_completion_persists_metrics_json() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = test_runtime_store(&temp);
+    let coordinator = CapabilityEventCoordinator::new_shared_instance(store.clone());
+    let run = sample_run(CapabilityEventRunStatus::Running);
+    insert_consumer_row(
+        &store,
+        &run.repo_id,
+        &run.capability_id,
+        &run.consumer_id,
+        Some(2),
+        Some("previous failure"),
+        29,
+    );
+    insert_run_row(&store, &run);
+
+    coordinator
+        .apply_completion(RunCompletion::Completed {
+            run: run.clone(),
+            applied_to_generation_seq: 5,
+            warnings: vec!["role classifier used fallback".to_string()],
+            metrics: Some(serde_json::json!({
+                "roles": {
+                    "assignments_written": 3,
+                    "files_classified": 2
+                }
+            })),
+        })
+        .expect("apply completed run with metrics");
+
+    store
+        .with_connection(|conn| {
+            let (warnings_json, metrics_json) = conn.query_row(
+                "SELECT warnings_json, metrics_json
+                 FROM capability_workplane_cursor_runs
+                 WHERE run_id = ?1",
+                params![&run.run_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?;
+            let warnings: Vec<String> =
+                serde_json::from_str(&warnings_json).expect("parse warnings json");
+            let metrics: serde_json::Value =
+                serde_json::from_str(&metrics_json).expect("parse metrics json");
+            assert_eq!(warnings, vec!["role classifier used fallback".to_string()]);
+            assert_eq!(metrics["roles"]["assignments_written"], 3);
+            assert_eq!(metrics["roles"]["files_classified"], 2);
+            Ok(())
+        })
+        .expect("load persisted metrics");
+}
+
+#[test]
 fn apply_completion_retryable_failure_clears_started_at_when_requeued() {
     let temp = TempDir::new().expect("tempdir");
     let store = test_runtime_store(&temp);

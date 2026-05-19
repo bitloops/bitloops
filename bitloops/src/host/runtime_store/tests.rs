@@ -128,6 +128,95 @@ fn runtime_schema_initialisation_does_not_rebuild_interaction_projections() {
 }
 
 #[test]
+fn repo_workplane_schema_migrates_cursor_run_metrics_columns() {
+    let dir = TempDir::new().expect("tempdir");
+    let sqlite_path = dir.path().join("runtime.sqlite");
+    let sqlite =
+        crate::storage::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+    sqlite
+        .with_write_connection(|conn| {
+            conn.execute_batch(
+                r#"
+CREATE TABLE capability_workplane_cursor_runs (
+    run_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    repo_root TEXT NOT NULL,
+    capability_id TEXT NOT NULL,
+    mailbox_name TEXT NOT NULL,
+    init_session_id TEXT,
+    from_generation_seq INTEGER NOT NULL,
+    to_generation_seq INTEGER NOT NULL,
+    reconcile_mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    submitted_at_unix INTEGER NOT NULL,
+    started_at_unix INTEGER,
+    updated_at_unix INTEGER NOT NULL,
+    completed_at_unix INTEGER,
+    error TEXT
+);
+
+CREATE TABLE capability_workplane_jobs (
+    job_id TEXT PRIMARY KEY
+);
+"#,
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .expect("create legacy cursor run table");
+
+    super::repo_workplane::ensure_repo_workplane_schema_upgrades(&sqlite)
+        .expect("upgrade cursor run table");
+
+    sqlite
+        .with_write_connection(|conn| {
+            let columns = {
+                let mut stmt =
+                    conn.prepare("PRAGMA table_info(capability_workplane_cursor_runs)")?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(1)?, row.get::<_, Option<String>>(4)?))
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            assert!(
+                columns.iter().any(|(name, default_value)| {
+                    name == "warnings_json" && default_value.as_deref() == Some("'[]'")
+                }),
+                "warnings_json column should be added with [] default: {columns:?}"
+            );
+            assert!(
+                columns.iter().any(|(name, default_value)| {
+                    name == "metrics_json" && default_value.as_deref() == Some("'{}'")
+                }),
+                "metrics_json column should be added with {{}} default: {columns:?}"
+            );
+
+            conn.execute(
+                "INSERT INTO capability_workplane_cursor_runs (
+                    run_id, repo_id, repo_root, capability_id, mailbox_name,
+                    from_generation_seq, to_generation_seq, reconcile_mode,
+                    status, attempts, submitted_at_unix, updated_at_unix
+                 ) VALUES (
+                    'run-1', 'repo-1', '/tmp/repo', 'architecture_graph',
+                    'architecture_graph.roles.current_state', 0, 1, 'merged_delta',
+                    'completed', 1, 10, 11
+                 )",
+                [],
+            )?;
+            let defaults = conn.query_row(
+                "SELECT warnings_json, metrics_json
+                 FROM capability_workplane_cursor_runs
+                 WHERE run_id = 'run-1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?;
+            assert_eq!(defaults, ("[]".to_string(), "{}".to_string()));
+            Ok::<_, anyhow::Error>(())
+        })
+        .expect("verify migrated cursor run defaults");
+}
+
+#[test]
 fn repo_runtime_store_fails_without_daemon_config() {
     let dir = TempDir::new().expect("tempdir");
     init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");

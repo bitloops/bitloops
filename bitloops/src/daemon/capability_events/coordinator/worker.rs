@@ -213,6 +213,8 @@ impl CapabilityEventCoordinator {
                     RunCompletion::Completed {
                         run: plan.record,
                         applied_to_generation_seq: result.applied_to_generation_seq,
+                        warnings: result.warnings,
+                        metrics: result.metrics,
                     }
                 }
                 Err(err) => terminal_or_retry(plan.record, err),

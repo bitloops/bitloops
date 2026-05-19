@@ -69,7 +69,14 @@ impl CapabilityEventCoordinator {
                     RunCompletion::Completed {
                         run,
                         applied_to_generation_seq,
+                        warnings,
+                        metrics,
                     } => {
+                        let warnings_json = serde_json::to_string(&warnings)
+                            .context("serialising current-state consumer warnings")?;
+                        let metrics = metrics.unwrap_or_else(|| serde_json::json!({}));
+                        let metrics_json = serde_json::to_string(&metrics)
+                            .context("serialising current-state consumer metrics")?;
                         conn.execute(
                             "UPDATE capability_workplane_cursor_mailboxes SET last_applied_generation_seq = ?1, last_error = NULL, updated_at_unix = ?2 WHERE repo_id = ?3 AND capability_id = ?4 AND mailbox_name = ?5",
                             params![
@@ -87,7 +94,7 @@ impl CapabilityEventCoordinator {
                             )
                         })?;
                         conn.execute(
-                            "UPDATE capability_workplane_cursor_runs SET from_generation_seq = ?1, to_generation_seq = ?2, reconcile_mode = ?3, status = ?4, updated_at_unix = ?5, completed_at_unix = ?6, error = NULL WHERE run_id = ?7",
+                            "UPDATE capability_workplane_cursor_runs SET from_generation_seq = ?1, to_generation_seq = ?2, reconcile_mode = ?3, status = ?4, updated_at_unix = ?5, completed_at_unix = ?6, error = NULL, warnings_json = ?7, metrics_json = ?8 WHERE run_id = ?9",
                             params![
                                 sql_i64(run.from_generation_seq)?,
                                 sql_i64(run.to_generation_seq)?,
@@ -95,6 +102,8 @@ impl CapabilityEventCoordinator {
                                 CapabilityEventRunStatus::Completed.to_string(),
                                 sql_i64(now)?,
                                 sql_i64(now)?,
+                                warnings_json,
+                                metrics_json,
                                 run.run_id,
                             ],
                         )
