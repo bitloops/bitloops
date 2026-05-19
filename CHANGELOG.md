@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.29] - 2026-05-19
+
 ### Fixed
 
 - **Interactive init now uses the same optional setup prompt path with or without the default daemon** (`CLI-1872`): `bitloops init` now offers embeddings, semantic summaries, and context guidance setup when those features are unconfigured, matching `bitloops init --install-default-daemon`; the daemon flag now only adds default-daemon bootstrap behavior.
