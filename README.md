@@ -122,7 +122,7 @@ capture → persist → rank → serve → refresh
  
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Your agent (Claude Code / Cursor / Copilot) makes a request        │
+│  Your agent (Claude Code / Cursor / Copilot) makes a request         │
 └──────────────────────────────────────────────────────────────────────┘
                                   ↓
 ┌──────────────────────────────────────────────────────────────────────┐
