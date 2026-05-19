@@ -166,6 +166,8 @@ const JAVA_LANGUAGE_PACK_ID: &str = "java-language-pack";
 const CSHARP_LANGUAGE_PACK_ID: &str = "csharp-language-pack";
 #[cfg(test)]
 const PHP_LANGUAGE_PACK_ID: &str = "php-language-pack";
+#[cfg(test)]
+const CPP_LANGUAGE_PACK_ID: &str = "cpp-language-pack";
 #[allow(dead_code)]
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";

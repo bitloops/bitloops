@@ -32,6 +32,10 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         Some(PHP_LANGUAGE_PACK_ID)
     );
     assert_eq!(
+        resolve_language_pack_owner("cpp"),
+        Some(CPP_LANGUAGE_PACK_ID)
+    );
+    assert_eq!(
         resolve_language_id_for_file_path("src/lib.rs"),
         Some("rust")
     );
@@ -60,6 +64,14 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         resolve_language_id_for_file_path("src/main.php"),
         Some("php")
     );
+    assert_eq!(
+        resolve_language_id_for_file_path("src/main.cpp"),
+        Some("cpp")
+    );
+    assert_eq!(
+        resolve_language_id_for_file_path("include/service.hpp"),
+        Some("cpp")
+    );
     assert!(resolve_language_id_for_file_path("README").is_none());
 }
 
@@ -69,6 +81,7 @@ fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
     assert_eq!(
         registry.registered_pack_ids(),
         vec![
+            CPP_LANGUAGE_PACK_ID,
             CSHARP_LANGUAGE_PACK_ID,
             GO_LANGUAGE_PACK_ID,
             JAVA_LANGUAGE_PACK_ID,
@@ -85,11 +98,13 @@ fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
     assert!(registry.get(TS_JS_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(PYTHON_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(PHP_LANGUAGE_PACK_ID).is_some());
+    assert!(registry.get(CPP_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get("unknown-pack").is_none());
 }
 
 #[test]
-fn devql_language_adapter_registry_executes_rust_ts_js_python_go_java_csharp_and_php_built_ins() {
+fn devql_language_adapter_registry_executes_rust_ts_js_python_go_java_csharp_php_and_cpp_built_ins()
+{
     let count_kind = |edges: &[DependencyEdge], kind: EdgeKind| -> usize {
         edges.iter().filter(|edge| edge.edge_kind == kind).count()
     };
@@ -426,4 +441,28 @@ function helper() {
         edge.edge_kind == EdgeKind::Imports
             && edge.to_symbol_ref.as_deref() == Some("App\\Core\\Helper")
     }));
+
+    let cpp_pack = registry
+        .get(CPP_LANGUAGE_PACK_ID)
+        .expect("resolve cpp built-in language adapter pack");
+    let cpp_content = r#"#include <vector>
+class Base {};
+class Child : public Base {
+public:
+    int helper(int x) { return x + 1; }
+    int run(int x) { return helper(x); }
+};
+"#;
+    let cpp_artefacts = cpp_pack
+        .extract_artefacts(cpp_content, "src/main.cpp")
+        .expect("extract cpp artefacts via language adapter registry");
+    assert!(
+        cpp_artefacts.iter().any(|artefact| artefact.name == "Child"),
+        "cpp built-in registry pack should surface type artefacts"
+    );
+    let cpp_edges = cpp_pack
+        .extract_dependency_edges(cpp_content, "src/main.cpp", &cpp_artefacts)
+        .expect("extract cpp dependency edges via language adapter registry");
+    assert_eq!(count_kind(&cpp_edges, EdgeKind::Imports), 1);
+    assert!(count_kind(&cpp_edges, EdgeKind::Calls) >= 1);
 }

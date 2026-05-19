@@ -218,7 +218,8 @@ pub(super) fn parse_cached_language_kind(
     raw_kind: &str,
 ) -> Result<crate::host::language_adapter::LanguageKind> {
     use crate::host::language_adapter::{
-        CSharpKind, GoKind, JavaKind, LanguageKind, PhpKind, PythonKind, RustKind, TsJsKind,
+        CSharpKind, CppKind, GoKind, JavaKind, LanguageKind, PhpKind, PythonKind, RustKind,
+        TsJsKind,
     };
 
     let normalized_language = language.trim().to_ascii_lowercase();
@@ -227,6 +228,9 @@ pub(super) fn parse_cached_language_kind(
     let parsed = match normalized_language.as_str() {
         "csharp" | "c#" => {
             CSharpKind::from_tree_sitter_kind(normalized_kind).map(LanguageKind::csharp)
+        }
+        "cpp" | "c++" | "cxx" => {
+            CppKind::from_tree_sitter_kind(normalized_kind).map(LanguageKind::cpp)
         }
         "go" => GoKind::from_tree_sitter_kind(normalized_kind).map(LanguageKind::go),
         "java" => JavaKind::from_tree_sitter_kind(normalized_kind)

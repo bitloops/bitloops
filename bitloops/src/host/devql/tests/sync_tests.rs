@@ -20,6 +20,8 @@ mod execute_sync_modes;
 mod execute_sync_worktree;
 #[path = "sync_tests/extraction_typescript.rs"]
 mod extraction_typescript;
+#[path = "sync_tests/extraction_cpp.rs"]
+mod extraction_cpp;
 #[path = "sync_tests/materialize_current.rs"]
 mod materialize_current;
 #[path = "sync_tests/repo_sync_state_writes.rs"]
