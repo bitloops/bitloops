@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **C++ language support in the host-managed language adapter runtime**: added a built-in `cpp-language-pack` with extension-host profile resolution (`.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`, `.h++`), typed `CppKind` language kinds, canonical mappings, C++ artefact extraction, dependency-edge extraction, and source-level C++ `LanguageTestSupport` discovery. C++ now participates in built-in language adapter registration, readiness/registry reporting, DevQL language detection, sync cache extraction/materialization, and cached-kind parsing alongside existing Rust/TS-JS/Python/Go/Java/C#/PHP support.
+
 ## [0.0.29] - 2026-05-19
 
 ### Fixed

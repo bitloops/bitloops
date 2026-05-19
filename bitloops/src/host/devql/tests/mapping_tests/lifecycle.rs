@@ -36,6 +36,7 @@ fn devql_language_adapter_lifecycle_summary_reports_builtins_and_readiness() {
     assert_eq!(
         pack_ids,
         vec![
+            CPP_LANGUAGE_PACK_ID,
             CSHARP_LANGUAGE_PACK_ID,
             GO_LANGUAGE_PACK_ID,
             JAVA_LANGUAGE_PACK_ID,
@@ -77,6 +78,7 @@ fn core_extension_host_registry_report_with_language_adapter_snapshot_includes_a
     assert_eq!(
         report.language_adapter_pack_ids,
         vec![
+            CPP_LANGUAGE_PACK_ID.to_string(),
             CSHARP_LANGUAGE_PACK_ID.to_string(),
             GO_LANGUAGE_PACK_ID.to_string(),
             JAVA_LANGUAGE_PACK_ID.to_string(),
