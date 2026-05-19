@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use tokio::sync::oneshot;
@@ -28,6 +28,51 @@ enum SemanticWriterRequest {
 #[derive(Debug)]
 pub(super) struct RepoSemanticWriterActor {
     sender: Sender<SemanticWriterRequest>,
+}
+
+const MAX_PENDING_REQUEST_DRAIN_PER_ITER: usize = 32;
+
+#[derive(Debug, Default)]
+struct PendingSemanticWriterRequests {
+    summaries: VecDeque<SemanticWriterRequest>,
+    embeddings: VecDeque<SemanticWriterRequest>,
+    prefer_summary: bool,
+}
+
+impl PendingSemanticWriterRequests {
+    fn push(&mut self, request: SemanticWriterRequest) {
+        match request {
+            request @ SemanticWriterRequest::Summary { .. } => self.summaries.push_back(request),
+            request @ SemanticWriterRequest::Embedding { .. } => self.embeddings.push_back(request),
+        }
+    }
+
+    fn pop_next(&mut self) -> Option<SemanticWriterRequest> {
+        match (self.summaries.is_empty(), self.embeddings.is_empty()) {
+            (true, true) => None,
+            (false, true) => {
+                self.prefer_summary = false;
+                self.summaries.pop_front()
+            }
+            (true, false) => {
+                self.prefer_summary = true;
+                self.embeddings.pop_front()
+            }
+            (false, false) => {
+                if self.prefer_summary {
+                    self.prefer_summary = false;
+                    self.summaries.pop_front()
+                } else {
+                    self.prefer_summary = true;
+                    self.embeddings.pop_front()
+                }
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.summaries.is_empty() && self.embeddings.is_empty()
+    }
 }
 
 impl RepoSemanticWriterActor {
@@ -133,7 +178,18 @@ fn writer_loop(
     let mut connection = open_semantic_writer_connection(&runtime_db_path, &relational_db_path)
         .map_err(|err| format!("{err:#}"))
         .ok();
-    while let Ok(request) = receiver.recv() {
+    let mut pending = PendingSemanticWriterRequests::default();
+    loop {
+        if pending.is_empty() {
+            let Ok(request) = receiver.recv() else {
+                break;
+            };
+            pending.push(request);
+        }
+        drain_pending_requests(&receiver, &mut pending, MAX_PENDING_REQUEST_DRAIN_PER_ITER);
+        let Some(request) = pending.pop_next() else {
+            continue;
+        };
         match (&mut connection, request) {
             (Some(connection), SemanticWriterRequest::Summary { request, response }) => {
                 let result = with_semantic_writer_sqlite_locks_map(
@@ -200,6 +256,24 @@ pub(super) fn with_semantic_writer_sqlite_locks<T>(
     with_semantic_writer_sqlite_locks_map(runtime_db_path, relational_db_path, |err| err, operation)
 }
 
+fn drain_pending_requests(
+    receiver: &Receiver<SemanticWriterRequest>,
+    pending: &mut PendingSemanticWriterRequests,
+    max_to_drain: usize,
+) -> usize {
+    let mut drained = 0;
+    while drained < max_to_drain {
+        match receiver.try_recv() {
+            Ok(request) => {
+                pending.push(request);
+                drained += 1;
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+        }
+    }
+    drained
+}
+
 fn with_semantic_writer_sqlite_locks_map<T, E>(
     runtime_db_path: &Path,
     relational_db_path: &Path,
@@ -233,4 +307,121 @@ fn with_semantic_writer_sqlite_locks_map<T, E>(
 
 fn canonical_lock_order_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PendingSemanticWriterRequests, SemanticWriterRequest, drain_pending_requests};
+    use crate::daemon::enrichment::semantic_writer::{
+        CommitEmbeddingBatchRequest, CommitSummaryBatchRequest, SemanticBatchRepoContext,
+    };
+    use std::sync::mpsc;
+    use tokio::sync::oneshot;
+
+    fn repo() -> SemanticBatchRepoContext {
+        SemanticBatchRepoContext {
+            repo_id: "repo-1".to_string(),
+            repo_root: std::path::PathBuf::from("/tmp/repo"),
+            config_root: std::path::PathBuf::from("/tmp/config"),
+        }
+    }
+
+    fn summary_request() -> SemanticWriterRequest {
+        let (response, _rx) = oneshot::channel();
+        SemanticWriterRequest::Summary {
+            request: CommitSummaryBatchRequest {
+                repo: repo(),
+                lease_token: "summary-lease".to_string(),
+                semantic_statements: Vec::new(),
+                remote_semantic_statements: Vec::new(),
+                embedding_follow_ups: Vec::new(),
+                replacement_backfill_item: None,
+                acked_item_ids: Vec::new(),
+            },
+            response,
+        }
+    }
+
+    fn embedding_request() -> SemanticWriterRequest {
+        let (response, _rx) = oneshot::channel();
+        SemanticWriterRequest::Embedding {
+            request: CommitEmbeddingBatchRequest {
+                repo: repo(),
+                lease_token: "embedding-lease".to_string(),
+                embedding_statements: Vec::new(),
+                setup_statements: Vec::new(),
+                remote_embedding_statements: Vec::new(),
+                remote_setup_statements: Vec::new(),
+                clone_rebuild_signal: None,
+                replacement_backfill_item: None,
+                acked_item_ids: Vec::new(),
+            },
+            response,
+        }
+    }
+
+    #[test]
+    fn pending_requests_alternate_between_embeddings_and_summaries() {
+        let mut pending = PendingSemanticWriterRequests::default();
+        pending.push(summary_request());
+        pending.push(embedding_request());
+        pending.push(summary_request());
+        pending.push(embedding_request());
+
+        assert!(matches!(
+            pending.pop_next(),
+            Some(SemanticWriterRequest::Embedding { .. })
+        ));
+        assert!(matches!(
+            pending.pop_next(),
+            Some(SemanticWriterRequest::Summary { .. })
+        ));
+        assert!(matches!(
+            pending.pop_next(),
+            Some(SemanticWriterRequest::Embedding { .. })
+        ));
+        assert!(matches!(
+            pending.pop_next(),
+            Some(SemanticWriterRequest::Summary { .. })
+        ));
+        assert!(pending.pop_next().is_none());
+    }
+
+    #[test]
+    fn pending_requests_drain_summaries_when_no_embeddings_are_waiting() {
+        let mut pending = PendingSemanticWriterRequests::default();
+        pending.push(summary_request());
+        pending.push(summary_request());
+
+        assert!(matches!(
+            pending.pop_next(),
+            Some(SemanticWriterRequest::Summary { .. })
+        ));
+        assert!(matches!(
+            pending.pop_next(),
+            Some(SemanticWriterRequest::Summary { .. })
+        ));
+        assert!(pending.pop_next().is_none());
+    }
+
+    #[test]
+    fn drain_pending_requests_limits_non_blocking_batch_size() {
+        let (sender, receiver) = mpsc::channel();
+        for _ in 0..5 {
+            sender
+                .send(summary_request())
+                .expect("queue summary request");
+        }
+
+        let mut pending = PendingSemanticWriterRequests::default();
+        let drained = drain_pending_requests(&receiver, &mut pending, 2);
+
+        assert_eq!(drained, 2);
+        assert_eq!(pending.summaries.len(), 2);
+        assert_eq!(pending.embeddings.len(), 0);
+        assert!(
+            receiver.try_recv().is_ok(),
+            "drain should leave queued work behind"
+        );
+    }
 }

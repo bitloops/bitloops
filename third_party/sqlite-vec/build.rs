@@ -6,5 +6,8 @@ fn main() {
         // from the published crate package.
         .define("SQLITE_VEC_ENABLE_DISKANN", Some("0"))
         .define("SQLITE_VEC_ENABLE_RESCORE", Some("0"))
+        .warnings(false)
+        .flag_if_supported("-w")
+        .flag_if_supported("/w")
         .compile("sqlite_vec0");
 }

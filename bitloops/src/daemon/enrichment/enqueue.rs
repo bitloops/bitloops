@@ -32,6 +32,7 @@ impl EnrichmentCoordinator {
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_semantic".to_string());
         self.save_state(&mut state)?;
+        self.refresh_worker_capacity_after_enqueue();
         self.notify.notify_waiters();
         publish_workplane_runtime_event(
             &target,
@@ -57,6 +58,7 @@ impl EnrichmentCoordinator {
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_embeddings".to_string());
         self.save_state(&mut state)?;
+        self.refresh_worker_capacity_after_enqueue();
         self.notify.notify_waiters();
         let mailbox_name = match representation_kind {
             EmbeddingRepresentationKind::Code => {
@@ -79,6 +81,7 @@ impl EnrichmentCoordinator {
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_clone_edges_rebuild".to_string());
         self.save_state(&mut state)?;
+        self.refresh_worker_capacity_after_enqueue();
         self.notify.notify_waiters();
         publish_workplane_runtime_event(
             &target,
@@ -199,6 +202,7 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_embeddings".to_string());
         self.save_state(&mut state)?;
+        self.refresh_worker_capacity_after_enqueue();
         self.notify.notify_waiters();
         let mailbox_name = match representation_kind {
             EmbeddingRepresentationKind::Code => {
@@ -225,6 +229,7 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_embeddings".to_string());
         self.save_state(&mut state)?;
+        self.refresh_worker_capacity_after_enqueue();
         self.notify.notify_waiters();
         let mailbox_name = match representation_kind {
             EmbeddingRepresentationKind::Code => {
@@ -250,6 +255,7 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_semantic".to_string());
         self.save_state(&mut state)?;
+        self.refresh_worker_capacity_after_enqueue();
         self.notify.notify_waiters();
         publish_workplane_runtime_event(
             &target,

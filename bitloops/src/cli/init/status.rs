@@ -394,6 +394,20 @@ fn selected_lane_warning(session: &RuntimeInitSessionGraphqlRecord) -> bool {
         .any(|selected| selected.lane.status.eq_ignore_ascii_case("warning"))
 }
 
+fn selected_semantic_lane_is_active(session: &RuntimeInitSessionGraphqlRecord) -> bool {
+    selected_lanes(session)
+        .iter()
+        .filter(|selected| {
+            selected.title == INIT_CODE_EMBEDDINGS_SECTION_TITLE
+                || selected.title == INIT_SUMMARIES_SECTION_TITLE
+                || selected.title == INIT_SUMMARY_EMBEDDINGS_SECTION_TITLE
+        })
+        .any(|selected| {
+            selected.lane.status.eq_ignore_ascii_case("queued")
+                || selected.lane.status.eq_ignore_ascii_case("running")
+        })
+}
+
 fn session_summary_text(
     snapshot: &RuntimeSnapshotGraphqlRecord,
     session: &RuntimeInitSessionGraphqlRecord,
@@ -422,6 +436,9 @@ fn session_summary_text(
 fn session_summary_status_text(session: &RuntimeInitSessionGraphqlRecord) -> String {
     if let Some(reason) = session.waiting_reason.as_deref() {
         return match reason {
+            "waiting_for_top_level_work" if selected_semantic_lane_is_active(session) => {
+                "Building your project's Intelligence Layer".to_string()
+            }
             "waiting_for_follow_up_sync" | "waiting_for_top_level_work" => {
                 "Waiting for codebase processing to stabilise".to_string()
             }
@@ -549,4 +566,76 @@ fn is_terminal_status(status: &str) -> bool {
         status.to_ascii_lowercase().as_str(),
         "completed" | "completed_with_warnings" | "failed"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_summary_status_text;
+    use super::{RuntimeInitLaneGraphqlRecord, RuntimeInitSessionGraphqlRecord};
+    use crate::cli::devql::graphql::RuntimeInitLaneQueueGraphqlRecord;
+
+    fn lane(status: &str) -> RuntimeInitLaneGraphqlRecord {
+        RuntimeInitLaneGraphqlRecord {
+            status: status.to_string(),
+            waiting_reason: None,
+            detail: None,
+            activity_label: None,
+            task_id: None,
+            run_id: None,
+            progress: None,
+            queue: RuntimeInitLaneQueueGraphqlRecord::default(),
+            warnings: Vec::new(),
+            pending_count: 0,
+            running_count: 0,
+            failed_count: 0,
+            completed_count: 0,
+        }
+    }
+
+    fn session(waiting_reason: &str) -> RuntimeInitSessionGraphqlRecord {
+        RuntimeInitSessionGraphqlRecord {
+            init_session_id: "init-session-1".to_string(),
+            status: "waiting".to_string(),
+            waiting_reason: Some(waiting_reason.to_string()),
+            warning_summary: None,
+            follow_up_sync_required: false,
+            run_sync: true,
+            run_ingest: true,
+            embeddings_selected: true,
+            summaries_selected: true,
+            summary_embeddings_selected: true,
+            initial_sync_task_id: None,
+            ingest_task_id: None,
+            follow_up_sync_task_id: None,
+            embeddings_bootstrap_task_id: None,
+            summary_bootstrap_task_id: None,
+            terminal_error: None,
+            sync_lane: lane("completed"),
+            ingest_lane: lane("running"),
+            code_embeddings_lane: lane("queued"),
+            summaries_lane: lane("running"),
+            summary_embeddings_lane: lane("queued"),
+        }
+    }
+
+    #[test]
+    fn session_summary_status_prefers_running_copy_when_semantic_lanes_are_active() {
+        assert_eq!(
+            session_summary_status_text(&session("waiting_for_top_level_work")),
+            "Building your project's Intelligence Layer"
+        );
+    }
+
+    #[test]
+    fn session_summary_status_keeps_waiting_copy_without_active_semantic_lanes() {
+        let mut session = session("waiting_for_top_level_work");
+        session.code_embeddings_lane = lane("waiting");
+        session.summaries_lane = lane("waiting");
+        session.summary_embeddings_lane = lane("waiting");
+
+        assert_eq!(
+            session_summary_status_text(&session),
+            "Waiting for codebase processing to stabilise"
+        );
+    }
 }
