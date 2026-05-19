@@ -27,7 +27,11 @@ impl LanguageTestSupport for CppTestSupport {
         supports_cpp_test_path(relative_path)
     }
 
-    fn discover_tests(&self, absolute_path: &Path, relative_path: &str) -> Result<DiscoveredTestFile> {
+    fn discover_tests(
+        &self,
+        absolute_path: &Path,
+        relative_path: &str,
+    ) -> Result<DiscoveredTestFile> {
         let content = std::fs::read_to_string(absolute_path)?;
         Ok(discover_cpp_tests_from_source(relative_path, &content))
     }
@@ -46,8 +50,8 @@ fn discover_cpp_tests_from_source(relative_path: &str, content: &str) -> Discove
 
     for (index, line) in content.lines().enumerate() {
         let trimmed = line.trim();
-        if let Some(args) = extract_macro_args(trimmed, "TEST")
-            .or_else(|| extract_macro_args(trimmed, "TEST_F"))
+        if let Some(args) =
+            extract_macro_args(trimmed, "TEST").or_else(|| extract_macro_args(trimmed, "TEST_F"))
         {
             let mut parts = args.split(',').map(str::trim);
             let suite = parts.next().unwrap_or("suite");
@@ -67,8 +71,14 @@ fn discover_cpp_tests_from_source(relative_path: &str, content: &str) -> Discove
     } else {
         vec![DiscoveredTestSuite {
             name: "cpp_tests".to_string(),
-            start_line: scenarios.first().map(|scenario| scenario.start_line).unwrap_or(1),
-            end_line: scenarios.last().map(|scenario| scenario.end_line).unwrap_or(1),
+            start_line: scenarios
+                .first()
+                .map(|scenario| scenario.start_line)
+                .unwrap_or(1),
+            end_line: scenarios
+                .last()
+                .map(|scenario| scenario.end_line)
+                .unwrap_or(1),
             scenarios,
         }]
     };
@@ -115,7 +125,13 @@ TEST_F(UserServiceFixture, SavesUser) {
         assert_eq!(discovered.language, "cpp");
         assert_eq!(discovered.suites.len(), 1);
         assert_eq!(discovered.suites[0].scenarios.len(), 2);
-        assert_eq!(discovered.suites[0].scenarios[0].name, "UserServiceTest.ReturnsUser");
-        assert_eq!(discovered.suites[0].scenarios[1].name, "UserServiceFixture.SavesUser");
+        assert_eq!(
+            discovered.suites[0].scenarios[0].name,
+            "UserServiceTest.ReturnsUser"
+        );
+        assert_eq!(
+            discovered.suites[0].scenarios[1].name,
+            "UserServiceFixture.SavesUser"
+        );
     }
 }

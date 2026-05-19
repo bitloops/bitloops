@@ -1192,15 +1192,24 @@ public:
     let include = artefact_by_language_kind(&artefacts, LanguageKind::cpp(CppKind::PreprocInclude));
     assert_eq!(canonical_kind(include), Some("import"));
 
-    let namespace =
-        artefact_by_name_and_language_kind(&artefacts, LanguageKind::cpp(CppKind::NamespaceDefinition), "app");
+    let namespace = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::cpp(CppKind::NamespaceDefinition),
+        "app",
+    );
     assert_eq!(canonical_kind(namespace), Some("namespace"));
 
-    let class =
-        artefact_by_name_and_language_kind(&artefacts, LanguageKind::cpp(CppKind::ClassSpecifier), "UserService");
+    let class = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::cpp(CppKind::ClassSpecifier),
+        "UserService",
+    );
     assert_eq!(canonical_kind(class), Some("type"));
 
-    let method =
-        artefact_by_name_and_language_kind(&artefacts, LanguageKind::cpp(CppKind::FunctionDefinition), "run");
+    let method = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::cpp(CppKind::FunctionDefinition),
+        "run",
+    );
     assert_eq!(canonical_kind(method), Some("method"));
 }

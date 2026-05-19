@@ -457,7 +457,9 @@ public:
         .extract_artefacts(cpp_content, "src/main.cpp")
         .expect("extract cpp artefacts via language adapter registry");
     assert!(
-        cpp_artefacts.iter().any(|artefact| artefact.name == "Child"),
+        cpp_artefacts
+            .iter()
+            .any(|artefact| artefact.name == "Child"),
         "cpp built-in registry pack should surface type artefacts"
     );
     let cpp_edges = cpp_pack

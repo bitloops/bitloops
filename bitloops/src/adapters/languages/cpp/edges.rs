@@ -86,7 +86,15 @@ fn collect_cpp_edges_recursive(
             }
         }
         "call_expression" => {
-            collect_call_edge(node, content, path, artefacts, callable_name_to_fqn, edges, seen_calls);
+            collect_call_edge(
+                node,
+                content,
+                path,
+                artefacts,
+                callable_name_to_fqn,
+                edges,
+                seen_calls,
+            );
         }
         "base_class_clause" => {
             collect_extends_edges(node, content, artefacts, type_targets, edges, seen_extends);
@@ -141,13 +149,16 @@ fn collect_call_edge(
         .map(str::to_string)
         .unwrap_or(raw_name.clone());
 
-    let (to_target_symbol_fqn, to_symbol_ref, resolution) = if let Some(target_fqn) = callable_name_to_fqn
-        .get(&call_name)
-    {
-        (Some(target_fqn.clone()), None, Resolution::Local)
-    } else {
-        (None, Some(format!("{path}::{raw_name}")), Resolution::Unresolved)
-    };
+    let (to_target_symbol_fqn, to_symbol_ref, resolution) =
+        if let Some(target_fqn) = callable_name_to_fqn.get(&call_name) {
+            (Some(target_fqn.clone()), None, Resolution::Local)
+        } else {
+            (
+                None,
+                Some(format!("{path}::{raw_name}")),
+                Resolution::Unresolved,
+            )
+        };
 
     let key = format!(
         "{}|{}|{}|{}",
@@ -279,7 +290,10 @@ fn trimmed_node_text(node: Node<'_>, content: &str) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
-fn smallest_enclosing_symbol(line_no: i32, artefacts: &[LanguageArtefact]) -> Option<LanguageArtefact> {
+fn smallest_enclosing_symbol(
+    line_no: i32,
+    artefacts: &[LanguageArtefact],
+) -> Option<LanguageArtefact> {
     artefacts
         .iter()
         .filter(|artefact| artefact.start_line <= line_no && artefact.end_line >= line_no)
@@ -287,7 +301,10 @@ fn smallest_enclosing_symbol(line_no: i32, artefacts: &[LanguageArtefact]) -> Op
         .cloned()
 }
 
-fn smallest_enclosing_type(line_no: i32, artefacts: &[LanguageArtefact]) -> Option<LanguageArtefact> {
+fn smallest_enclosing_type(
+    line_no: i32,
+    artefacts: &[LanguageArtefact],
+) -> Option<LanguageArtefact> {
     artefacts
         .iter()
         .filter(|artefact| artefact.start_line <= line_no && artefact.end_line >= line_no)

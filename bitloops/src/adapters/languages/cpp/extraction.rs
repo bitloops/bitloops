@@ -310,7 +310,10 @@ fn function_name(node: Node<'_>, content: &str) -> Option<String> {
 }
 
 fn function_name_from_declarator(node: Node<'_>, content: &str) -> Option<String> {
-    if matches!(node.kind(), "identifier" | "field_identifier" | "qualified_identifier") {
+    if matches!(
+        node.kind(),
+        "identifier" | "field_identifier" | "qualified_identifier"
+    ) {
         return trimmed_node_text(node, content);
     }
 

@@ -44,12 +44,13 @@ public:
     let class = extraction
         .artefacts
         .iter()
-        .find(|artefact| {
-            artefact.language_kind == "class_specifier" && artefact.name == "Child"
-        })
+        .find(|artefact| artefact.language_kind == "class_specifier" && artefact.name == "Child")
         .expect("expected class artefact");
 
-    assert_eq!(class.parent_artifact_key.as_deref(), Some(file.artifact_key.as_str()));
+    assert_eq!(
+        class.parent_artifact_key.as_deref(),
+        Some(file.artifact_key.as_str())
+    );
     assert!(
         extraction
             .edges
