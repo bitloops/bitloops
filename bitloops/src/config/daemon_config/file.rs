@@ -234,6 +234,135 @@ pub fn persist_dashboard_tls_hint(enabled: bool) -> Result<PathBuf> {
     Ok(path)
 }
 
+pub(crate) fn persist_daemon_store_backend_selection(
+    source_path: &Path,
+    target_path: &Path,
+) -> Result<PathBuf> {
+    let source = load_daemon_settings(Some(source_path))
+        .with_context(|| format!("loading source daemon config {}", source_path.display()))?;
+    ensure_parent_dir(target_path)?;
+
+    let mut doc = match fs::read_to_string(target_path) {
+        Ok(existing) => existing
+            .parse::<DocumentMut>()
+            .with_context(|| format!("parsing Bitloops daemon config {}", target_path.display()))?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("reading Bitloops daemon config {}", target_path.display())
+            });
+        }
+    };
+
+    let stores_root = source.settings.stores.as_ref().and_then(Value::as_object);
+    let relational_root = stores_root
+        .and_then(|stores| stores.get("relational"))
+        .and_then(Value::as_object);
+    let events_root = stores_root
+        .and_then(|stores| stores.get("events").or_else(|| stores.get("event")))
+        .and_then(Value::as_object);
+    let blob_root = stores_root
+        .and_then(|stores| stores.get("blobs").or_else(|| stores.get("blob")))
+        .and_then(Value::as_object);
+
+    let stores = ensure_table(&mut doc, "stores");
+
+    {
+        let relational = ensure_child_table(stores, "relational");
+        set_or_remove_toml_string(
+            relational,
+            "postgres_dsn",
+            relational_root
+                .and_then(|root| root.get("postgres_dsn").or_else(|| root.get("pg_dsn")))
+                .and_then(Value::as_str),
+        );
+    }
+
+    {
+        let events = ensure_child_table(stores, "events");
+        set_or_remove_toml_string(
+            events,
+            "clickhouse_url",
+            events_root
+                .and_then(|root| root.get("clickhouse_url"))
+                .and_then(Value::as_str),
+        );
+        set_or_remove_toml_string(
+            events,
+            "clickhouse_user",
+            events_root
+                .and_then(|root| root.get("clickhouse_user"))
+                .and_then(Value::as_str),
+        );
+        set_or_remove_toml_string(
+            events,
+            "clickhouse_password",
+            events_root
+                .and_then(|root| root.get("clickhouse_password"))
+                .and_then(Value::as_str),
+        );
+        set_or_remove_toml_string(
+            events,
+            "clickhouse_database",
+            events_root
+                .and_then(|root| root.get("clickhouse_database"))
+                .and_then(Value::as_str),
+        );
+    }
+
+    {
+        let blobs = ensure_child_table(stores, "blob");
+        set_or_remove_toml_string(
+            blobs,
+            "s3_bucket",
+            blob_root
+                .and_then(|root| root.get("s3_bucket"))
+                .and_then(Value::as_str),
+        );
+        set_or_remove_toml_string(
+            blobs,
+            "s3_region",
+            blob_root
+                .and_then(|root| root.get("s3_region"))
+                .and_then(Value::as_str),
+        );
+        set_or_remove_toml_string(
+            blobs,
+            "s3_access_key_id",
+            blob_root
+                .and_then(|root| root.get("s3_access_key_id"))
+                .and_then(Value::as_str),
+        );
+        set_or_remove_toml_string(
+            blobs,
+            "s3_secret_access_key",
+            blob_root
+                .and_then(|root| root.get("s3_secret_access_key"))
+                .and_then(Value::as_str),
+        );
+        set_or_remove_toml_string(
+            blobs,
+            "gcs_bucket",
+            blob_root
+                .and_then(|root| root.get("gcs_bucket"))
+                .and_then(Value::as_str),
+        );
+        set_or_remove_toml_string(
+            blobs,
+            "gcs_credentials_path",
+            blob_root
+                .and_then(|root| root.get("gcs_credentials_path"))
+                .and_then(Value::as_str),
+        );
+    }
+
+    fs::write(target_path, doc.to_string())
+        .with_context(|| format!("writing Bitloops daemon config {}", target_path.display()))?;
+    Ok(target_path
+        .canonicalize()
+        .unwrap_or_else(|_| target_path.to_path_buf()))
+}
+
 fn parse_daemon_config_text(data: &str, path: &Path) -> Result<DaemonTomlFile> {
     from_str::<DaemonTomlFile>(data)
         .with_context(|| format!("parsing Bitloops daemon config {}", path.display()))
@@ -241,6 +370,17 @@ fn parse_daemon_config_text(data: &str, path: &Path) -> Result<DaemonTomlFile> {
 
 pub(crate) fn validate_daemon_config_text(data: &str, path: &Path) -> Result<()> {
     parse_daemon_config_text(data, path).map(|_| ())
+}
+
+fn set_or_remove_toml_string(table: &mut Table, key: &str, value: Option<&str>) {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => {
+            table[key] = Item::Value(value.into());
+        }
+        None => {
+            table.remove(key);
+        }
+    }
 }
 
 fn persist_daemon_cli_settings_at(

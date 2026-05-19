@@ -347,61 +347,40 @@ async fn collect_source_watermarks(
         .map(|repo_id| (repo_id, RepoWatermark::default()))
         .collect::<BTreeMap<_, _>>();
 
-    merge_relational_watermarks(
-        &mut watermarks,
-        relational
-            .query_rows(&format!(
-                "SELECT repo_id, COALESCE(last_sync_completed_at, '') AS watermark \
+    let local_repo_sync_state_rows = relational
+        .query_rows(&format!(
+            "SELECT repo_id, COALESCE(last_sync_completed_at, '') AS watermark \
              FROM repo_sync_state WHERE repo_id IN ({})",
-                sql_in_list(&repo_ids, esc_pg)
-            ))
-            .await
-            .or_else(ignore_missing_table)?,
-        "watermark",
-        true,
-    );
-    merge_relational_watermarks(
-        &mut watermarks,
-        relational
-            .query_rows(&format!(
-                "SELECT repo_id, COALESCE(MAX(last_synced_at), '') AS watermark \
+            sql_in_list(&repo_ids, esc_pg)
+        ))
+        .await
+        .or_else(ignore_missing_table)?;
+    let local_current_file_state_rows = relational
+        .query_rows(&format!(
+            "SELECT repo_id, COALESCE(MAX(last_synced_at), '') AS watermark \
              FROM current_file_state WHERE repo_id IN ({}) GROUP BY repo_id",
+            sql_in_list(&repo_ids, esc_pg)
+        ))
+        .await
+        .or_else(ignore_missing_table)?;
+    let remote_repo_sync_state_rows = if backends.relational.has_postgres() {
+        relational
+            .query_rows_remote(&format!(
+                "SELECT repo_id, COALESCE(last_sync_completed_at::text, '') AS watermark \
+                 FROM repo_sync_state WHERE repo_id IN ({})",
                 sql_in_list(&repo_ids, esc_pg)
             ))
             .await
-            .or_else(ignore_missing_table)?,
-        "watermark",
-        true,
+            .or_else(ignore_missing_table)?
+    } else {
+        Vec::new()
+    };
+    merge_relational_source_watermarks(
+        &mut watermarks,
+        local_repo_sync_state_rows,
+        local_current_file_state_rows,
+        remote_repo_sync_state_rows,
     );
-
-    if backends.relational.has_postgres() {
-        merge_relational_watermarks(
-            &mut watermarks,
-            relational
-                .query_rows_remote(&format!(
-                    "SELECT repo_id, COALESCE(last_sync_completed_at::text, '') AS watermark \
-                     FROM repo_sync_state WHERE repo_id IN ({})",
-                    sql_in_list(&repo_ids, esc_pg)
-                ))
-                .await
-                .or_else(ignore_missing_table)?,
-            "watermark",
-            true,
-        );
-        merge_relational_watermarks(
-            &mut watermarks,
-            relational
-                .query_rows_remote(&format!(
-                    "SELECT repo_id, COALESCE(MAX(last_synced_at), '') AS watermark \
-                     FROM current_file_state WHERE repo_id IN ({}) GROUP BY repo_id",
-                    sql_in_list(&repo_ids, esc_pg)
-                ))
-                .await
-                .or_else(ignore_missing_table)?,
-            "watermark",
-            true,
-        );
-    }
 
     if backends.events.has_clickhouse() {
         merge_relational_watermarks(
@@ -508,6 +487,17 @@ async fn collect_source_watermarks(
     }
 
     Ok(watermarks)
+}
+
+fn merge_relational_source_watermarks(
+    target: &mut BTreeMap<String, RepoWatermark>,
+    local_repo_sync_state_rows: Vec<Value>,
+    local_current_file_state_rows: Vec<Value>,
+    remote_repo_sync_state_rows: Vec<Value>,
+) {
+    merge_relational_watermarks(target, local_repo_sync_state_rows, "watermark", true);
+    merge_relational_watermarks(target, local_current_file_state_rows, "watermark", true);
+    merge_relational_watermarks(target, remote_repo_sync_state_rows, "watermark", true);
 }
 
 fn merge_relational_watermarks(
@@ -720,5 +710,51 @@ fn cache_duckdb_value(value: Option<&Value>, kind: ColumnKind) -> duckdb::types:
             }
             _ => duckdb::types::Value::Null,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn merge_relational_source_watermarks_uses_local_current_file_state() {
+        let mut watermarks = BTreeMap::from([
+            ("repo-1".to_string(), RepoWatermark::default()),
+            ("repo-2".to_string(), RepoWatermark::default()),
+        ]);
+
+        merge_relational_source_watermarks(
+            &mut watermarks,
+            vec![json!({
+                "repo_id": "repo-1",
+                "watermark": "2026-04-22T09:05:00Z",
+            })],
+            vec![
+                json!({
+                    "repo_id": "repo-1",
+                    "watermark": "2026-04-22T09:06:00Z",
+                }),
+                json!({
+                    "repo_id": "repo-2",
+                    "watermark": "2026-04-22T09:08:00Z",
+                }),
+            ],
+            vec![json!({
+                "repo_id": "repo-1",
+                "watermark": "2026-04-22T09:07:00Z",
+            })],
+        );
+
+        assert_eq!(
+            watermarks["repo-1"].relational,
+            "2026-04-22T09:07:00Z".to_string()
+        );
+        assert_eq!(
+            watermarks["repo-2"].relational,
+            "2026-04-22T09:08:00Z".to_string()
+        );
     }
 }

@@ -16,6 +16,7 @@ use tokio::runtime::{Builder, Runtime};
 
 use crate::config::{BlobStorageConfig, StoreBackendConfig, resolve_blob_local_path_for_repo};
 use crate::storage::SqliteConnectionPool;
+use crate::storage::{BlobStorageRole, StorageBackendKind, StorageRoleResolver};
 
 thread_local! {
     static BLOB_SYNC_RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) };
@@ -110,11 +111,33 @@ pub fn build_blob_key(
 pub fn create_blob_store_from_backend_config(
     cfg: &StoreBackendConfig,
 ) -> Result<Box<dyn BlobStore>> {
-    create_blob_store(&cfg.blobs)
+    create_blob_store_for_role(&cfg.blobs, BlobStorageRole::ProjectKnowledge)
 }
 
-pub fn create_blob_store(cfg: &BlobStorageConfig) -> Result<Box<dyn BlobStore>> {
-    Ok(create_blob_store_with_backend(cfg)?.store)
+pub fn create_blob_store_for_role(
+    cfg: &BlobStorageConfig,
+    role: BlobStorageRole,
+) -> Result<Box<dyn BlobStore>> {
+    Ok(create_blob_store_with_backend_for_role(cfg, role)?.store)
+}
+
+fn create_local_blob_store_with_backend(cfg: &BlobStorageConfig) -> Result<ResolvedBlobStore> {
+    Ok(ResolvedBlobStore {
+        store: Box::new(LocalBlobStore::from_config(cfg)?),
+        backend: "local",
+    })
+}
+
+fn create_local_blob_store_with_backend_for_repo(
+    cfg: &BlobStorageConfig,
+    repo_root: &Path,
+) -> Result<ResolvedBlobStore> {
+    let root = resolve_blob_local_path_for_repo(repo_root, cfg.local_path.as_deref())
+        .context("resolving local blob store path for repository")?;
+    Ok(ResolvedBlobStore {
+        store: Box::new(LocalBlobStore::new(root)?),
+        backend: "local",
+    })
 }
 
 fn reject_conflicting_remote_blob_backends(cfg: &BlobStorageConfig) -> Result<()> {
@@ -128,56 +151,96 @@ fn reject_conflicting_remote_blob_backends(cfg: &BlobStorageConfig) -> Result<()
 }
 
 pub fn create_blob_store_with_backend(cfg: &BlobStorageConfig) -> Result<ResolvedBlobStore> {
+    create_blob_store_with_backend_for_role(cfg, BlobStorageRole::ProjectKnowledge)
+}
+
+pub fn create_blob_store_with_backend_for_role(
+    cfg: &BlobStorageConfig,
+    role: BlobStorageRole,
+) -> Result<ResolvedBlobStore> {
     reject_conflicting_remote_blob_backends(cfg)?;
-    if cfg.s3_bucket.is_some() {
-        Ok(ResolvedBlobStore {
+    match blob_backend_for_role(cfg, role) {
+        StorageBackendKind::LocalDisk => create_local_blob_store_with_backend(cfg),
+        StorageBackendKind::S3 => Ok(ResolvedBlobStore {
             store: Box::new(
                 S3BlobStore::from_config(cfg).context("initialising S3 blob storage backend")?,
             ),
-            backend: "s3",
-        })
-    } else if cfg.gcs_bucket.is_some() {
-        Ok(ResolvedBlobStore {
+            backend: StorageBackendKind::S3.label(),
+        }),
+        StorageBackendKind::Gcs => Ok(ResolvedBlobStore {
             store: Box::new(
                 GcsBlobStore::from_config(cfg).context("initialising GCS blob storage backend")?,
             ),
-            backend: "gcs",
-        })
-    } else {
-        Ok(ResolvedBlobStore {
-            store: Box::new(LocalBlobStore::from_config(cfg)?),
-            backend: "local",
-        })
+            backend: StorageBackendKind::Gcs.label(),
+        }),
+        StorageBackendKind::Invalid => bail!(
+            "blob storage configuration conflict: both s3_bucket and gcs_bucket are set; \
+             configure exactly one remote backend (or neither for local storage)"
+        ),
+        other => bail!(
+            "unsupported blob backend for role {role:?}: {}",
+            other.label()
+        ),
     }
 }
 
-pub fn create_blob_store_with_backend_for_repo(
+pub fn create_runtime_blob_store_with_backend_for_repo(
     cfg: &BlobStorageConfig,
     repo_root: &Path,
 ) -> Result<ResolvedBlobStore> {
+    create_blob_store_with_backend_for_role_for_repo(
+        cfg,
+        repo_root,
+        BlobStorageRole::RuntimeSession,
+    )
+}
+
+pub fn create_project_blob_store_with_backend_for_repo(
+    cfg: &BlobStorageConfig,
+    repo_root: &Path,
+) -> Result<ResolvedBlobStore> {
+    create_blob_store_with_backend_for_role_for_repo(
+        cfg,
+        repo_root,
+        BlobStorageRole::ProjectKnowledge,
+    )
+}
+
+pub fn create_blob_store_with_backend_for_role_for_repo(
+    cfg: &BlobStorageConfig,
+    repo_root: &Path,
+    role: BlobStorageRole,
+) -> Result<ResolvedBlobStore> {
     reject_conflicting_remote_blob_backends(cfg)?;
-    if cfg.s3_bucket.is_some() {
-        Ok(ResolvedBlobStore {
+    match blob_backend_for_role(cfg, role) {
+        StorageBackendKind::LocalDisk => {
+            create_local_blob_store_with_backend_for_repo(cfg, repo_root)
+        }
+        StorageBackendKind::S3 => Ok(ResolvedBlobStore {
             store: Box::new(
                 S3BlobStore::from_config(cfg).context("initialising S3 blob storage backend")?,
             ),
-            backend: "s3",
-        })
-    } else if cfg.gcs_bucket.is_some() {
-        Ok(ResolvedBlobStore {
+            backend: StorageBackendKind::S3.label(),
+        }),
+        StorageBackendKind::Gcs => Ok(ResolvedBlobStore {
             store: Box::new(
                 GcsBlobStore::from_config(cfg).context("initialising GCS blob storage backend")?,
             ),
-            backend: "gcs",
-        })
-    } else {
-        let root = resolve_blob_local_path_for_repo(repo_root, cfg.local_path.as_deref())
-            .context("resolving local blob store path for repository")?;
-        Ok(ResolvedBlobStore {
-            store: Box::new(LocalBlobStore::new(root)?),
-            backend: "local",
-        })
+            backend: StorageBackendKind::Gcs.label(),
+        }),
+        StorageBackendKind::Invalid => bail!(
+            "blob storage configuration conflict: both s3_bucket and gcs_bucket are set; \
+             configure exactly one remote backend (or neither for local storage)"
+        ),
+        other => bail!(
+            "unsupported blob backend for role {role:?}: {}",
+            other.label()
+        ),
     }
+}
+
+fn blob_backend_for_role(cfg: &BlobStorageConfig, role: BlobStorageRole) -> StorageBackendKind {
+    StorageRoleResolver::from_blob_config(cfg).blob_backend_for(role)
 }
 
 pub fn upsert_checkpoint_blob_reference(
@@ -351,6 +414,45 @@ mod tests {
             err.to_string().contains("s3_bucket") && err.to_string().contains("gcs_bucket"),
             "error should name the conflicting fields, got: {err}"
         );
+    }
+
+    #[test]
+    fn runtime_blob_store_stays_local_when_remote_backend_is_configured() {
+        let temp = TempDir::new().expect("temp dir");
+        let repo_root = temp.path().join("repo");
+        std::fs::create_dir_all(&repo_root).expect("repo root");
+        let local_root = temp.path().join("blobs");
+        let mut cfg = test_blob_config(local_root.to_string_lossy().to_string());
+        cfg.s3_bucket = Some("test-bucket".to_string());
+
+        let resolved = create_runtime_blob_store_with_backend_for_repo(&cfg, &repo_root)
+            .expect("runtime-local blob dispatch should succeed");
+        assert_eq!(resolved.backend, "local");
+
+        let key = "repo-1/runtime/session/transcript.jsonl";
+        resolved
+            .store
+            .write(key, b"runtime-payload")
+            .expect("write runtime-local blob");
+
+        assert!(
+            local_root.join(key).exists(),
+            "runtime-local payload should be written under the local blob root"
+        );
+    }
+
+    #[test]
+    fn project_blob_store_uses_configured_remote_backend_when_present() {
+        let temp = TempDir::new().expect("temp dir");
+        let repo_root = temp.path().join("repo");
+        std::fs::create_dir_all(&repo_root).expect("repo root");
+        let mut cfg = test_blob_config(temp.path().join("blobs").to_string_lossy().to_string());
+        cfg.s3_bucket = Some("test-bucket".to_string());
+
+        let resolved = create_project_blob_store_with_backend_for_repo(&cfg, &repo_root)
+            .expect("configured project blob dispatch should succeed");
+
+        assert_eq!(resolved.backend, "s3");
     }
 
     #[test]

@@ -1,4 +1,7 @@
 use super::*;
+use crate::capability_packs::semantic_clones::{
+    RepoEmbeddingSyncAction, determine_repo_embedding_sync_action, embeddings,
+};
 
 #[tokio::test]
 #[ignore = "requires BITLOOPS_TEST_PG_DSN"]
@@ -274,6 +277,309 @@ async fn init_postgres_schema_preserves_existing_sync_rows_on_repeated_runs() {
         let count: i64 = row.get(0);
         assert_eq!(count, 1, "expected `{table}` rows to be preserved");
     }
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn ensure_repository_row_populates_local_current_projection_catalog_when_shared_authority_is_remote()
+ {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 {\n    1\n}\n",
+    )
+    .expect("write lib.rs");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "seed repo"]);
+    write_test_daemon_config(repo.path());
+
+    let repo_identity = resolve_repo_identity(repo.path()).expect("resolve repo identity");
+    let mut cfg = DevqlConfig::from_roots(
+        repo.path().to_path_buf(),
+        repo.path().to_path_buf(),
+        repo_identity,
+    )
+    .expect("build DevQL config");
+    cfg.pg_dsn = Some(dsn.clone());
+    cfg.repo.repo_id = deterministic_uuid("repo://postgres-local-current-projection-catalog");
+
+    let relational = postgres_relational_store(&cfg, &dsn).await;
+    init_sqlite_schema(&relational.local.path)
+        .await
+        .expect("initialise local sqlite schema");
+    init_postgres_schema(&cfg, &client)
+        .await
+        .expect("initialise postgres schema");
+
+    ensure_repository_row(&cfg, &relational)
+        .await
+        .expect("ensure repository row across both stores");
+
+    let local_conn = rusqlite::Connection::open(&relational.local.path).expect("open local sqlite");
+    let local_count: i64 = local_conn
+        .query_row(
+            "SELECT COUNT(*) FROM repositories WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id],
+            |row| row.get(0),
+        )
+        .expect("count local repository rows");
+    assert_eq!(
+        local_count, 1,
+        "expected local current/projection repo catalog row"
+    );
+
+    let remote_count: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM repositories WHERE repo_id = $1",
+            &[&cfg.repo.repo_id],
+        )
+        .await
+        .expect("count remote repository rows")
+        .get(0);
+    assert_eq!(remote_count, 1, "expected remote shared repository row");
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn remote_shared_repository_registration_allows_first_local_current_projection_sync_writes() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 {\n    1\n}\n",
+    )
+    .expect("write lib.rs");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "seed repo"]);
+    write_test_daemon_config(repo.path());
+
+    let repo_identity = resolve_repo_identity(repo.path()).expect("resolve repo identity");
+    let mut cfg = DevqlConfig::from_roots(
+        repo.path().to_path_buf(),
+        repo.path().to_path_buf(),
+        repo_identity,
+    )
+    .expect("build DevQL config");
+    cfg.pg_dsn = Some(dsn.clone());
+    cfg.repo.repo_id = deterministic_uuid("repo://remote-shared-first-local-sync-write");
+
+    let relational = postgres_relational_store(&cfg, &dsn).await;
+    init_sqlite_schema(&relational.local.path)
+        .await
+        .expect("initialise local sqlite schema");
+    init_postgres_schema(&cfg, &client)
+        .await
+        .expect("initialise postgres schema");
+
+    ensure_repository_row(&cfg, &relational)
+        .await
+        .expect("ensure repository row across both stores");
+
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO repo_sync_state (
+                repo_id, repo_root, active_branch, head_commit_sha, head_tree_sha,
+                parser_version, extractor_version, last_sync_started_at,
+                last_sync_completed_at, last_sync_status, last_sync_reason
+             ) VALUES (
+                '{repo_id}', '{repo_root}', 'main', 'commit-1', 'tree-1',
+                'parser-v1', 'extractor-v1', '2026-05-18T12:00:00Z',
+                '2026-05-18T12:01:00Z', 'completed', 'init-regression'
+             )",
+            repo_id = esc_pg(&cfg.repo.repo_id),
+            repo_root = esc_pg(&repo.path().display().to_string()),
+        ))
+        .await
+        .expect("insert first local repo sync row without fk failure");
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO current_file_state (
+                repo_id, path, analysis_mode, language, head_content_id, index_content_id,
+                worktree_content_id, effective_content_id, effective_source,
+                parser_version, extractor_version, exists_in_head,
+                exists_in_index, exists_in_worktree, last_synced_at
+             ) VALUES (
+                '{repo_id}', 'src/lib.rs', 'code', 'rust', 'blob-1', 'blob-1',
+                'blob-1', 'blob-1', 'head',
+                'parser-v1', 'extractor-v1', 1, 1, 1, '2026-05-18T12:02:00Z'
+             )",
+            repo_id = esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("insert first local current file row without fk failure");
+
+    let local_conn = rusqlite::Connection::open(&relational.local.path).expect("open local sqlite");
+    let local_repo_count: i64 = local_conn
+        .query_row(
+            "SELECT COUNT(*) FROM repositories WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id],
+            |row| row.get(0),
+        )
+        .expect("count local repository rows");
+    let local_sync_count: i64 = local_conn
+        .query_row(
+            "SELECT COUNT(*) FROM repo_sync_state WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id],
+            |row| row.get(0),
+        )
+        .expect("count local repo sync rows");
+    let local_file_count: i64 = local_conn
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id],
+            |row| row.get(0),
+        )
+        .expect("count local current file rows");
+    assert_eq!(local_repo_count, 1, "expected local repository row");
+    assert_eq!(local_sync_count, 1, "expected first local repo sync row");
+    assert_eq!(local_file_count, 1, "expected first local current file row");
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn summary_embedding_sync_action_uses_shared_summary_authority_without_local_historical_mirror()
+ {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let mut cfg = test_cfg();
+    cfg.pg_dsn = Some(dsn.clone());
+    cfg.repo.repo_id = deterministic_uuid("repo://summary-embedding-shared-authority");
+    init_postgres_schema(&cfg, &client).await.unwrap();
+    let relational = postgres_relational_store(&cfg, &dsn).await;
+    init_sqlite_schema(&relational.local.path)
+        .await
+        .expect("initialise local sqlite schema");
+    ensure_repository_row(&cfg, &relational)
+        .await
+        .expect("ensure repository row across both stores");
+
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO current_file_state (
+                repo_id, path, analysis_mode, language, head_content_id, index_content_id,
+                worktree_content_id, effective_content_id, effective_source,
+                parser_version, extractor_version, exists_in_head,
+                exists_in_index, exists_in_worktree, last_synced_at
+             ) VALUES (
+                '{repo_id}', 'src/lib.rs', 'code', 'rust', 'blob-1', 'blob-1',
+                'blob-1', 'blob-1', 'head',
+                'parser-v1', 'extractor-v1', 1, 1, 1, '2026-05-18T12:00:00Z'
+             )",
+            repo_id = esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("insert local current file state");
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, parent_symbol_id,
+                parent_artefact_id, start_line, end_line, start_byte, end_byte,
+                signature, modifiers, docstring, updated_at
+             ) VALUES (
+                '{repo_id}', 'src/lib.rs', 'blob-1', '{symbol_id}', '{artefact_id}', 'rust',
+                'function', 'function_item', 'src/lib.rs::render', NULL,
+                NULL, 1, 3, 0, 48, 'fn render() -> String', '[]', NULL, '2026-05-18T12:00:00Z'
+             )",
+            repo_id = esc_pg(&cfg.repo.repo_id),
+            symbol_id = esc_pg(&deterministic_uuid("summary-sync-action-symbol")),
+            artefact_id = esc_pg(&deterministic_uuid("summary-sync-action-artefact")),
+        ))
+        .await
+        .expect("insert local current artefact");
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO symbol_features_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+             ) VALUES (
+                '{artefact_id}', '{repo_id}', 'src/lib.rs', 'blob-1', '{symbol_id}', 'feature-hash-1',
+                'render', NULL, '[]', '[]', '[]', NULL, '[]'
+             )",
+            artefact_id = esc_pg(&deterministic_uuid("summary-sync-action-artefact")),
+            repo_id = esc_pg(&cfg.repo.repo_id),
+            symbol_id = esc_pg(&deterministic_uuid("summary-sync-action-symbol")),
+        ))
+        .await
+        .expect("insert local current semantic features");
+
+    let setup = embeddings::EmbeddingSetup::new("test-provider", "test-summary-model", 3);
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO symbol_embeddings_current (
+                artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
+                setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
+             ) VALUES (
+                '{artefact_id}', '{repo_id}', 'src/lib.rs', 'blob-1', '{symbol_id}', 'summary',
+                '{setup_fingerprint}', '{provider}', '{model}', 3, 'embed-hash-1', '[0.1,0.2,0.3]'
+             )",
+            artefact_id = esc_pg(&deterministic_uuid("summary-sync-action-artefact")),
+            repo_id = esc_pg(&cfg.repo.repo_id),
+            symbol_id = esc_pg(&deterministic_uuid("summary-sync-action-symbol")),
+            setup_fingerprint = esc_pg(&setup.setup_fingerprint),
+            provider = esc_pg(&setup.provider),
+            model = esc_pg(&setup.model),
+        ))
+        .await
+        .expect("insert local current summary embedding");
+
+    postgres_exec(
+        &client,
+        &format!(
+            "INSERT INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+             ) VALUES (
+                '{artefact_id}', '{repo_id}', 'blob-1', 'feature-hash-1',
+                NULL, NULL, 'Template summary.', 'Remote shared summary.', NULL, NULL
+             )",
+            artefact_id = esc_pg(&deterministic_uuid("summary-sync-action-artefact")),
+            repo_id = esc_pg(&cfg.repo.repo_id),
+        ),
+    )
+    .await
+    .expect("insert remote shared summary");
+
+    let action = determine_repo_embedding_sync_action(
+        &relational,
+        &cfg.repo.repo_id,
+        embeddings::EmbeddingRepresentationKind::Summary,
+        &setup,
+    )
+    .await
+    .expect("determine sync action");
+
+    assert_eq!(action, RepoEmbeddingSyncAction::AdoptExisting);
 }
 
 #[tokio::test]

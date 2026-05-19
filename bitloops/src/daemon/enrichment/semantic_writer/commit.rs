@@ -147,6 +147,73 @@ pub(super) fn execute_summary_commit(
             ));
         }
     }
+    if !request.remote_semantic_statements.is_empty() {
+        let backends = match resolve_store_backend_config_for_repo(&request.repo.config_root) {
+            Ok(backends) => backends,
+            Err(err) => {
+                timings.summary_sql_ms = elapsed_ms(stage_started);
+                return Err(SummaryCommitFailure::new(
+                    SummaryCommitPhase::SummarySql,
+                    timings,
+                    runtime_store_writes_succeeded_in_tx,
+                    err.context("resolving backend config for remote semantic summary commit"),
+                ));
+            }
+        };
+        let dsn = match backends.relational.postgres_dsn {
+            Some(dsn) => dsn,
+            None => {
+                timings.summary_sql_ms = elapsed_ms(stage_started);
+                return Err(SummaryCommitFailure::new(
+                    SummaryCommitPhase::SummarySql,
+                    timings,
+                    runtime_store_writes_succeeded_in_tx,
+                    anyhow!("remote semantic summary commit requires Postgres DSN"),
+                ));
+            }
+        };
+        let remote_connection = match PostgresSyncConnection::connect(dsn) {
+            Ok(connection) => connection,
+            Err(err) => {
+                timings.summary_sql_ms = elapsed_ms(stage_started);
+                return Err(SummaryCommitFailure::new(
+                    SummaryCommitPhase::SummarySql,
+                    timings,
+                    runtime_store_writes_succeeded_in_tx,
+                    err.context("connecting Postgres for remote semantic summary commit"),
+                ));
+            }
+        };
+        if let Err(err) = remote_connection.with_client_timeout(Duration::from_secs(30), |client| {
+            let statements = request.remote_semantic_statements.clone();
+            Box::pin(async move {
+                let tx = client
+                    .transaction()
+                    .await
+                    .context("starting remote semantic summary transaction")?;
+                for statement in &statements {
+                    if statement.trim().is_empty() {
+                        continue;
+                    }
+                    tx.batch_execute(statement)
+                        .await
+                        .context("executing remote semantic summary SQL")?;
+                }
+                tx.commit()
+                    .await
+                    .context("committing remote semantic summary transaction")?;
+                Ok(())
+            })
+        }) {
+            timings.summary_sql_ms = elapsed_ms(stage_started);
+            return Err(SummaryCommitFailure::new(
+                SummaryCommitPhase::SummarySql,
+                timings,
+                runtime_store_writes_succeeded_in_tx,
+                err.context("mirroring semantic summary batch to Postgres"),
+            ));
+        }
+    }
     timings.summary_sql_ms = elapsed_ms(stage_started);
 
     let stage_started = Instant::now();

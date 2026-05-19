@@ -1160,6 +1160,96 @@ async fn semantic_embedding_sync_action_refreshes_when_only_historical_rows_exis
 }
 
 #[tokio::test]
+async fn semantic_embedding_sync_action_adopts_existing_summary_rows_when_historical_summary_matches_current_blob()
+ {
+    let relational = sqlite_relational_with_schema(&format!(
+        "{}\n{}\nCREATE TABLE artefacts_current (
+            repo_id TEXT NOT NULL,
+            artefact_id TEXT PRIMARY KEY,
+            path TEXT NOT NULL,
+            content_id TEXT NOT NULL,
+            canonical_kind TEXT,
+            language_kind TEXT
+        );
+        CREATE TABLE current_file_state (
+            repo_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            analysis_mode TEXT NOT NULL
+        );",
+        schema::semantic_embeddings_sqlite_schema_sql(),
+        crate::capability_packs::semantic_clones::semantic_features_sqlite_schema_sql(),
+    ))
+    .await;
+    let setup_fingerprint =
+        test_setup_fingerprint(TEST_EMBEDDINGS_DRIVER, TEST_EMBEDDINGS_MODEL, 3);
+    relational
+        .exec(
+            "INSERT INTO artefacts_current (repo_id, artefact_id, path, content_id, canonical_kind, language_kind)
+             VALUES ('repo-1', 'artefact-1', 'src/a.ts', 'blob-1', 'function', 'function')",
+        )
+        .await
+        .expect("insert current artefact");
+    relational
+        .exec(
+            "INSERT INTO current_file_state (repo_id, path, analysis_mode)
+             VALUES ('repo-1', 'src/a.ts', 'code')",
+        )
+        .await
+        .expect("insert current file state");
+    relational
+        .exec(
+            "INSERT INTO symbol_features_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+             ) VALUES (
+                'artefact-1', 'repo-1', 'src/a.ts', 'blob-1', 'sym-1', 'feature-hash-1',
+                'handler', NULL, '[]', '[]', '[]', NULL, '[]'
+             )",
+        )
+        .await
+        .expect("insert current feature row");
+    relational
+        .exec(&format!(
+            "INSERT INTO symbol_embeddings_current (
+                artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
+                setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
+             ) VALUES (
+                'artefact-1', 'repo-1', 'src/a.ts', 'blob-1', 'sym-1', 'summary',
+                '{setup_fingerprint}', '{provider}', '{model}', 3, 'embed-hash-1', '[0.1,0.2,0.3]'
+             )",
+            setup_fingerprint = esc_pg(&setup_fingerprint),
+            provider = esc_pg(TEST_EMBEDDINGS_DRIVER),
+            model = esc_pg(TEST_EMBEDDINGS_MODEL),
+        ))
+        .await
+        .expect("insert current summary embedding row");
+    relational
+        .exec(
+            "INSERT INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+             ) VALUES (
+                'artefact-1', 'repo-1', 'blob-1', 'feature-hash-1',
+                NULL, NULL, 'Template summary.', 'Historical summary.', NULL, NULL
+             )",
+        )
+        .await
+        .expect("insert historical summary row");
+
+    let action = determine_repo_embedding_sync_action(
+        &relational,
+        "repo-1",
+        embeddings::EmbeddingRepresentationKind::Summary,
+        &embeddings::EmbeddingSetup::new(TEST_EMBEDDINGS_DRIVER, TEST_EMBEDDINGS_MODEL, 3),
+    )
+    .await
+    .expect("sync action");
+
+    assert_eq!(action, RepoEmbeddingSyncAction::AdoptExisting);
+}
+
+#[tokio::test]
 async fn semantic_embedding_sync_action_refreshes_when_current_repo_coverage_is_partial() {
     let relational = sqlite_relational_with_embedding_state_schema().await;
     insert_fully_indexed_current_artefact(
