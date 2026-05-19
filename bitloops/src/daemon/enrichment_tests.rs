@@ -3305,6 +3305,85 @@ fn clone_rebuild_pool_only_claims_clone_rebuild_jobs() {
 }
 
 #[test]
+fn clone_rebuild_pool_defers_while_repo_has_active_embedding_backlog() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let _config_path = configure_embeddings_for_repo(&target, "local_code");
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: None,
+            job_id: "clone-a",
+            updated_at_unix: 2,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "embedding-pending",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("code-a"),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "embedding-leased",
+            representation_kind: "summary",
+            status: SemanticMailboxItemStatus::Leased,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("summary-a"),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 1,
+            lease_token: Some("embedding-lease"),
+            lease_expires_at_unix: Some(unix_timestamp_now() + 300),
+            last_error: None,
+        },
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::CloneRebuild,
+    )
+    .expect("attempt clone rebuild claim while embeddings are active");
+
+    assert!(claimed.is_none());
+    let pending_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    assert_eq!(
+        pending_jobs
+            .iter()
+            .filter(|job| job.mailbox_name == SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX)
+            .count(),
+        1,
+        "clone rebuild should stay pending until embeddings drain",
+    );
+}
+
+#[test]
 fn embeddings_pool_does_not_borrow_summary_or_clone_rebuild_work() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);

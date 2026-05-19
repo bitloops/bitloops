@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::capability_packs::semantic_clones::embeddings;
 use crate::host::devql::{
@@ -191,30 +191,73 @@ pub(crate) fn build_sqlite_current_vec_upsert_statements(
     path: &str,
     row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<Vec<String>> {
-    let table_name = sqlite_current_vec_table_name(row.dimension);
-    Ok(vec![
-        format!(
+    build_sqlite_current_vec_batch_upsert_statements(&[SqliteCurrentVecUpsertRow {
+        path: path.to_string(),
+        row: row.clone(),
+    }])
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SqliteCurrentVecUpsertRow {
+    pub path: String,
+    pub row: embeddings::SymbolEmbeddingRow,
+}
+
+pub(crate) fn build_sqlite_current_vec_batch_upsert_statements(
+    rows: &[SqliteCurrentVecUpsertRow],
+) -> Result<Vec<String>> {
+    let mut groups =
+        BTreeMap::<(String, String, String, String), Vec<&SqliteCurrentVecUpsertRow>>::new();
+    for entry in rows {
+        groups
+            .entry((
+                sqlite_current_vec_table_name(entry.row.dimension),
+                entry.row.repo_id.clone(),
+                entry.row.representation_kind.to_string(),
+                entry.row.setup_fingerprint.clone(),
+            ))
+            .or_default()
+            .push(entry);
+    }
+
+    let mut statements = Vec::new();
+    for ((table_name, repo_id, representation_kind, setup_fingerprint), group_rows) in groups {
+        let artefact_ids = group_rows
+            .iter()
+            .map(|entry| entry.row.artefact_id.clone())
+            .collect::<Vec<_>>();
+        statements.push(format!(
             "DELETE FROM {table_name} \
              WHERE repo_id = '{repo_id}' \
                AND representation_kind = '{representation_kind}' \
                AND setup_fingerprint = '{setup_fingerprint}' \
-               AND artefact_id = '{artefact_id}'",
-            repo_id = esc_pg(&row.repo_id),
-            representation_kind = esc_pg(&row.representation_kind.to_string()),
-            setup_fingerprint = esc_pg(&row.setup_fingerprint),
-            artefact_id = esc_pg(&row.artefact_id),
-        ),
-        format!(
+               AND artefact_id IN ({artefact_ids})",
+            repo_id = esc_pg(&repo_id),
+            representation_kind = esc_pg(&representation_kind),
+            setup_fingerprint = esc_pg(&setup_fingerprint),
+            artefact_ids = sql_string_list_pg(&artefact_ids),
+        ));
+        let values = group_rows
+            .iter()
+            .map(|entry| {
+                Ok(format!(
+                    "(vec_f32('{embedding_json}'), '{repo_id}', '{representation_kind}', '{setup_fingerprint}', '{artefact_id}', '{path}')",
+                    embedding_json = vector_json_string(&entry.row.embedding)?,
+                    repo_id = esc_pg(&entry.row.repo_id),
+                    representation_kind = esc_pg(&entry.row.representation_kind.to_string()),
+                    setup_fingerprint = esc_pg(&entry.row.setup_fingerprint),
+                    artefact_id = esc_pg(&entry.row.artefact_id),
+                    path = esc_pg(&entry.path),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        statements.push(format!(
             "INSERT INTO {table_name} (embedding, repo_id, representation_kind, setup_fingerprint, artefact_id, path) \
-             VALUES (vec_f32('{embedding_json}'), '{repo_id}', '{representation_kind}', '{setup_fingerprint}', '{artefact_id}', '{path}')",
-            embedding_json = vector_json_string(&row.embedding)?,
-            repo_id = esc_pg(&row.repo_id),
-            representation_kind = esc_pg(&row.representation_kind.to_string()),
-            setup_fingerprint = esc_pg(&row.setup_fingerprint),
-            artefact_id = esc_pg(&row.artefact_id),
-            path = esc_pg(path),
-        ),
-    ])
+             VALUES {}",
+            values.join(", ")
+        ));
+    }
+    Ok(statements)
 }
 
 pub(crate) async fn build_sqlite_stale_current_rows_for_path_delete_statements(
