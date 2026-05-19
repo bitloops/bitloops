@@ -95,7 +95,7 @@ fn load_representation_kind_counts_for_repo(
 
 fn load_semantic_clone_table_snapshot(world: &QatWorld) -> Result<SemanticCloneTableSnapshot> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     Ok(SemanticCloneTableSnapshot {
         historical: SemanticCloneHistoricalTableSnapshot {
             artefacts_historical: count_rows_for_repo(&conn, "artefacts_historical", &repo_id)?,

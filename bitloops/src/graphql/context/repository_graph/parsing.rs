@@ -171,6 +171,7 @@ fn parse_embedding_representation_field(
     for value in parse_string_array_field(row, key) {
         let mapped = match value.trim().to_ascii_lowercase().as_str() {
             "identity" | "locator" => Some(EmbeddingRepresentationKind::Identity),
+            "architecture" => Some(EmbeddingRepresentationKind::Architecture),
             "code" | "baseline" | "enriched" => Some(EmbeddingRepresentationKind::Code),
             "summary" => Some(EmbeddingRepresentationKind::Summary),
             _ => None,
@@ -185,8 +186,9 @@ fn parse_embedding_representation_field(
 
     parsed.sort_by_key(|kind| match kind {
         EmbeddingRepresentationKind::Identity => 0,
-        EmbeddingRepresentationKind::Code => 1,
-        EmbeddingRepresentationKind::Summary => 2,
+        EmbeddingRepresentationKind::Architecture => 1,
+        EmbeddingRepresentationKind::Code => 2,
+        EmbeddingRepresentationKind::Summary => 3,
     });
     parsed
 }

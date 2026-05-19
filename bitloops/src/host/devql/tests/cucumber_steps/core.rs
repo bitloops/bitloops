@@ -327,6 +327,9 @@ fn build_fixture_embedding_provider(
                 semantic_embeddings::EmbeddingRepresentationKind::Identity => {
                     code_embeddings_by_artefact_id
                 }
+                semantic_embeddings::EmbeddingRepresentationKind::Architecture => {
+                    code_embeddings_by_artefact_id
+                }
                 semantic_embeddings::EmbeddingRepresentationKind::Summary => {
                     summary_embeddings_by_artefact_id
                 }
@@ -3026,6 +3029,7 @@ fn invalid_embedding_gateway(
                     base_url: None,
                     temperature: None,
                     max_output_tokens: None,
+                    thinking_level: None,
                     cache_dir: None,
                 },
             );

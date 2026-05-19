@@ -1,3 +1,4 @@
+mod architecture;
 mod hash;
 mod identity;
 mod input;
@@ -8,6 +9,7 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+pub use self::architecture::load_architecture_roles_for_embedding_inputs;
 pub use self::hash::{build_symbol_embedding_input_hash, symbol_embeddings_require_reindex};
 pub use self::input::build_symbol_embedding_inputs;
 pub use self::rows::{
@@ -15,7 +17,7 @@ pub use self::rows::{
 };
 pub use self::text::build_symbol_embedding_text;
 pub use self::types::{
-    ActiveEmbeddingRepresentationState, EmbeddingRepresentationKind, EmbeddingSetup,
-    SymbolEmbeddingIndexState, SymbolEmbeddingIngestionStats, SymbolEmbeddingInput,
+    ActiveEmbeddingRepresentationState, ArchitectureRoleEmbeddingRole, EmbeddingRepresentationKind,
+    EmbeddingSetup, SymbolEmbeddingIndexState, SymbolEmbeddingIngestionStats, SymbolEmbeddingInput,
     SymbolEmbeddingRow,
 };

@@ -148,7 +148,7 @@ impl DaemonSqliteRuntimeStore {
         sqlite.with_connection(operation)
     }
 
-    pub(crate) fn with_write_connection<T>(
+    pub fn with_write_connection<T>(
         &self,
         operation: impl FnOnce(&rusqlite::Connection) -> Result<T>,
     ) -> Result<T> {

@@ -78,6 +78,78 @@ pub(super) async fn load_assertions(
         .collect()
 }
 
+pub(super) fn graph_context_available_sql(
+    repo_id: &str,
+    artefact_ids: &[String],
+    symbol_ids: &[String],
+    paths: &[String],
+) -> Option<String> {
+    let filters = graph_context_available_target_filters(artefact_ids, symbol_ids, paths);
+    if filters.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "SELECT 1 AS graph_context_available \
+           FROM architecture_graph_nodes_current node \
+          WHERE node.repo_id = {} \
+            AND ({}) \
+          LIMIT 1",
+        sql_text(repo_id),
+        filters.join(" OR "),
+    ))
+}
+
+pub(super) async fn graph_context_available_for_targets(
+    context: &DevqlGraphqlContext,
+    repo_id: &str,
+    artefact_ids: &[String],
+    symbol_ids: &[String],
+    paths: &[String],
+) -> Result<bool> {
+    let Some(sql) = graph_context_available_sql(repo_id, artefact_ids, symbol_ids, paths) else {
+        return Ok(false);
+    };
+
+    match context.query_devql_sqlite_rows(&sql).await {
+        Ok(rows) => Ok(!rows.is_empty()),
+        Err(err) if is_missing_architecture_graph_table_error(&err) => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
+fn graph_context_available_target_filters(
+    artefact_ids: &[String],
+    symbol_ids: &[String],
+    paths: &[String],
+) -> Vec<String> {
+    let mut filters = Vec::new();
+    if !artefact_ids.is_empty() {
+        filters.push(format!(
+            "node.artefact_id IN ({})",
+            sql_string_list(artefact_ids)
+        ));
+    }
+    if !symbol_ids.is_empty() {
+        filters.push(format!(
+            "node.symbol_id IN ({})",
+            sql_string_list(symbol_ids)
+        ));
+    }
+    if !paths.is_empty() {
+        filters.push(format!("node.path IN ({})", sql_string_list(paths)));
+    }
+    filters
+}
+
+fn sql_string_list(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| sql_text(value))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub(super) fn apply_assertions(
     nodes: &mut BTreeMap<String, ArchitectureGraphNode>,
     edges: &mut BTreeMap<String, ArchitectureGraphEdge>,

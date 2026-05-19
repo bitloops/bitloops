@@ -414,8 +414,9 @@ fn ordered_representation_kinds(kinds: BTreeSet<String>) -> Vec<String> {
     let mut ordered = kinds.into_iter().collect::<Vec<_>>();
     ordered.sort_by_key(|kind| match kind.as_str() {
         "identity" => 0,
-        "code" => 1,
-        "summary" => 2,
+        "architecture" => 1,
+        "code" => 2,
+        "summary" => 3,
         _ => 9,
     });
     ordered
@@ -424,6 +425,7 @@ fn ordered_representation_kinds(kinds: BTreeSet<String>) -> Vec<String> {
 fn canonical_representation_kind(raw: &str) -> Option<&'static str> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "identity" | "locator" => Some("identity"),
+        "architecture" => Some("architecture"),
         "code" | "baseline" | "enriched" => Some("code"),
         "summary" => Some("summary"),
         _ => None,
@@ -524,6 +526,7 @@ mod tests {
                 "INSERT INTO symbol_semantics_current (artefact_id, repo_id, content_id, summary) VALUES ('artefact-1', 'repo-1', 'blob-1', 'current summary')".to_string(),
                 "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, summary) VALUES ('artefact-2', 'repo-1', 'blob-2', 'shared summary')".to_string(),
                 "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, content_id, representation_kind) VALUES ('artefact-1', 'repo-1', 'blob-1', 'identity')".to_string(),
+                "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, content_id, representation_kind) VALUES ('artefact-1', 'repo-1', 'blob-1', 'architecture')".to_string(),
                 "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, representation_kind) VALUES ('artefact-1', 'repo-1', 'blob-1', 'summary')".to_string(),
             ])
             .await
@@ -538,7 +541,7 @@ mod tests {
                     "artefact_id": "artefact-1",
                     "blob_sha": "blob-1",
                     "summary": Value::Null,
-                    "embedding_representations": "[]"
+                    "embedding_representations": ["baseline"]
                 }),
                 serde_json::json!({
                     "artefact_id": "artefact-2",
@@ -557,7 +560,7 @@ mod tests {
         );
         assert_eq!(
             rows[0]["embedding_representations"],
-            serde_json::json!(["identity", "summary"])
+            serde_json::json!(["identity", "architecture", "code", "summary"])
         );
         assert_eq!(
             rows[1]["summary"],

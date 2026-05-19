@@ -8,11 +8,13 @@ use crate::graphql::{ResolverScope, bad_user_input_error};
 
 use super::{Artefact, LineRangeInput};
 
+#[allow(unused_imports)]
 pub use stages::{
-    CheckpointStageResult, CloneExpandHint, CloneStageResult, DependencyExpandHint,
-    DependencyStageResult, HistoricalContextItem, HistoricalContextStageResult,
-    HistoricalEvidenceKind, HistoricalMatchReason, HistoricalMatchStrength, HistoricalToolEvent,
-    TestsStageResult,
+    ArchitectureGraphContextStageResult, ArchitectureRoleAssignmentItem, ArchitectureRoleInfo,
+    ArchitectureRoleStageResult, ArchitectureRoleTarget, CheckpointStageResult, CloneExpandHint,
+    CloneStageResult, DependencyExpandHint, DependencyStageResult, HistoricalContextItem,
+    HistoricalContextStageResult, HistoricalEvidenceKind, HistoricalMatchReason,
+    HistoricalMatchStrength, HistoricalToolEvent, TestsStageResult,
 };
 pub(crate) use support::captured_preview;
 use support::{dedup_strings, saturating_i32};
@@ -35,6 +37,7 @@ pub enum SearchMode {
     #[default]
     Auto,
     Identity,
+    Architecture,
     Code,
     Summary,
     Lexical,
@@ -139,10 +142,17 @@ enum ArtefactSelectionMode {
     DirectoryEntries,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchitectureTargetScope {
+    ExactArtefacts,
+    PathContext,
+}
+
 #[derive(Debug, Clone, SimpleObject)]
 pub struct SearchBreakdown {
     pub lexical: Vec<Artefact>,
     pub identity: Vec<Artefact>,
+    pub architecture: Vec<Artefact>,
     pub code: Vec<Artefact>,
     pub summary: Vec<Artefact>,
 }
@@ -163,15 +173,36 @@ pub struct ArtefactSelection {
     pub(crate) search_query: Option<String>,
     #[graphql(skip)]
     pub(crate) scope: ResolverScope,
+    #[graphql(skip)]
+    architecture_target_scope: ArchitectureTargetScope,
 }
 
 pub type IntCount = i32;
 
 impl ArtefactSelection {
-    pub(crate) fn new(
+    pub(crate) fn from_exact_artefacts(artefacts: Vec<Artefact>, scope: ResolverScope) -> Self {
+        Self::new_with_architecture_target_scope(
+            artefacts,
+            Vec::new(),
+            scope,
+            ArchitectureTargetScope::ExactArtefacts,
+        )
+    }
+
+    pub(crate) fn from_path_artefacts(artefacts: Vec<Artefact>, scope: ResolverScope) -> Self {
+        Self::new_with_architecture_target_scope(
+            artefacts,
+            Vec::new(),
+            scope,
+            ArchitectureTargetScope::PathContext,
+        )
+    }
+
+    fn new_with_architecture_target_scope(
         artefacts: Vec<Artefact>,
         directory_entries: Vec<DirectoryEntry>,
         scope: ResolverScope,
+        architecture_target_scope: ArchitectureTargetScope,
     ) -> Self {
         Self {
             count: saturating_i32(artefacts.len()),
@@ -181,6 +212,7 @@ impl ArtefactSelection {
             search_breakdown: None,
             search_query: None,
             scope,
+            architecture_target_scope,
         }
     }
 
@@ -198,6 +230,7 @@ impl ArtefactSelection {
             search_breakdown,
             search_query: Some(search_query),
             scope,
+            architecture_target_scope: ArchitectureTargetScope::ExactArtefacts,
         }
     }
 
@@ -213,6 +246,7 @@ impl ArtefactSelection {
             search_breakdown: None,
             search_query: None,
             scope,
+            architecture_target_scope: ArchitectureTargetScope::ExactArtefacts,
         }
     }
 
@@ -230,6 +264,13 @@ impl ArtefactSelection {
 
     fn paths(&self) -> Vec<String> {
         dedup_strings(self.artefacts.iter().map(|artefact| artefact.path.as_str()))
+    }
+
+    fn architecture_context_paths(&self) -> Vec<String> {
+        match self.architecture_target_scope {
+            ArchitectureTargetScope::ExactArtefacts => Vec::new(),
+            ArchitectureTargetScope::PathContext => self.paths(),
+        }
     }
 }
 

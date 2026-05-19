@@ -111,6 +111,7 @@ runtime = "codex"
 model = "gpt-5.4-mini"
 temperature = "0.1"
 max_output_tokens = 4096
+thinking_level = "xhigh"
 "#,
     )
     .expect("write temp config");
@@ -123,6 +124,15 @@ max_output_tokens = 4096
                 "fact_synthesis": "local_agent"
             }
         }))
+    );
+    assert_eq!(
+        loaded
+            .settings
+            .inference
+            .as_ref()
+            .and_then(|value| value.pointer("/profiles/local_agent/thinking_level"))
+            .and_then(serde_json::Value::as_str),
+        Some("xhigh")
     );
 }
 

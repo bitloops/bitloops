@@ -9,7 +9,8 @@ use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::embeddings::{
     ActiveEmbeddingRepresentationState, EmbeddingRepresentationKind,
     build_symbol_embedding_input_hash, build_symbol_embedding_inputs, build_symbol_embedding_rows,
-    resolve_embedding_setup, symbol_embeddings_require_reindex,
+    load_architecture_roles_for_embedding_inputs, resolve_embedding_setup,
+    symbol_embeddings_require_reindex,
 };
 use crate::capability_packs::semantic_clones::features::{
     SemanticFeatureHashKey, build_symbol_feature_rows,
@@ -138,6 +139,7 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         EmbeddingRepresentationKind::Code | EmbeddingRepresentationKind::Identity => {
             mailbox_intent.code_embeddings_active
         }
+        EmbeddingRepresentationKind::Architecture => mailbox_intent.architecture_embeddings_active,
         EmbeddingRepresentationKind::Summary => mailbox_intent.summary_embeddings_active,
     };
     if !representation_active {
@@ -175,6 +177,9 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     let config_ms = elapsed_ms(config_started);
 
     let input_started = Instant::now();
+    let contains_repo_wide_backfill = batch.items.iter().any(|item| {
+        item.item_kind == SemanticMailboxItemKind::RepoBackfill && item.payload_json.is_none()
+    });
     let requested_artefact_ids = requested_current_semantic_input_artefact_ids(
         &batch.items,
         SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE,
@@ -312,6 +317,12 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     let input_ms = elapsed_ms(input_started);
 
     let summary_started = Instant::now();
+    let path_cleanup_paths = batch
+        .items
+        .iter()
+        .filter_map(|item| item.payload_json.as_ref())
+        .filter_map(path_cleanup_path_from_payload)
+        .collect::<Vec<_>>();
     let summary_map = load_current_semantic_summary_map(
         &relational,
         &expanded_inputs
@@ -321,12 +332,29 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         batch.representation_kind,
     )
     .await?;
-    let embedding_inputs =
+    let mut embedding_inputs =
         build_symbol_embedding_inputs(&expanded_inputs, batch.representation_kind, &summary_map);
+    if batch.representation_kind == EmbeddingRepresentationKind::Architecture {
+        let roles_by_artefact = load_architecture_roles_for_embedding_inputs(
+            &relational,
+            &batch.repo_id,
+            &expanded_inputs,
+        )
+        .await?;
+        for input in &mut embedding_inputs {
+            input.architecture_roles = roles_by_artefact
+                .get(&input.artefact_id)
+                .cloned()
+                .unwrap_or_default();
+        }
+        embedding_inputs.retain(|input| !input.architecture_roles.is_empty());
+    }
     let should_prune_stale_current_rows = batch
         .items
         .iter()
-        .all(|item| item.item_kind == SemanticMailboxItemKind::Artefact);
+        .all(|item| item.item_kind == SemanticMailboxItemKind::Artefact)
+        || (batch.representation_kind == EmbeddingRepresentationKind::Architecture
+            && !contains_repo_wide_backfill);
     let mut current_paths_by_content = BTreeSet::<(String, String)>::new();
     let mut keep_current_artefact_ids_by_path_content =
         BTreeMap::<(String, String), Vec<String>>::new();
@@ -335,18 +363,26 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
             current_paths_by_content.insert((input.path.clone(), input.blob_sha.clone()));
         }
         for (path, content_id) in &current_paths_by_content {
-            keep_current_artefact_ids_by_path_content
-                .entry((path.clone(), content_id.clone()))
-                .or_default()
-                .extend(
+            let keep_artefact_ids =
+                if batch.representation_kind == EmbeddingRepresentationKind::Architecture {
+                    embedding_inputs
+                        .iter()
+                        .filter(|input| input.path == *path && input.blob_sha == *content_id)
+                        .map(|input| input.artefact_id.clone())
+                        .collect::<Vec<_>>()
+                } else {
                     load_current_embedding_artefact_ids_for_path_content(
                         &relational,
                         &batch.repo_id,
                         path,
                         content_id,
                     )
-                    .await?,
-                );
+                    .await?
+                };
+            keep_current_artefact_ids_by_path_content
+                .entry((path.clone(), content_id.clone()))
+                .or_default()
+                .extend(keep_artefact_ids);
         }
         for keep_artefact_ids in keep_current_artefact_ids_by_path_content.values_mut() {
             keep_artefact_ids.sort();
@@ -370,6 +406,17 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
             }
         };
     let mut repaired_feature_projection = false;
+    if batch.representation_kind == EmbeddingRepresentationKind::Architecture {
+        let cleanup_statements = build_architecture_path_cleanup_statements(
+            &relational,
+            &batch.repo_id,
+            batch.representation_kind,
+            &path_cleanup_paths,
+        )
+        .await?;
+        embedding_statements.extend(cleanup_statements.local);
+        remote_embedding_statements.extend(cleanup_statements.remote);
+    }
     if batch.representation_kind == EmbeddingRepresentationKind::Code {
         let feature_hash_provider = code_feature_hash_provider
             .as_ref()
@@ -608,6 +655,53 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     })
 }
 
+struct ArchitecturePathCleanupStatements {
+    local: Vec<String>,
+    remote: Vec<String>,
+}
+
+async fn build_architecture_path_cleanup_statements(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    representation_kind: EmbeddingRepresentationKind,
+    path_cleanup_paths: &[String],
+) -> Result<ArchitecturePathCleanupStatements> {
+    let mut local = Vec::new();
+    for path in path_cleanup_paths {
+        let delete_sql = build_delete_stale_current_symbol_embedding_rows_for_path_sql(
+            repo_id,
+            path,
+            "",
+            representation_kind,
+            &[],
+        );
+        local.push(delete_sql);
+        local.extend(
+            build_sqlite_stale_current_rows_for_path_delete_statements(
+                relational,
+                repo_id,
+                path,
+                representation_kind,
+                &[],
+            )
+            .await?,
+        );
+    }
+    Ok(ArchitecturePathCleanupStatements {
+        local,
+        remote: Vec::new(),
+    })
+}
+
+fn path_cleanup_path_from_payload(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("path_cleanup")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+}
+
 async fn load_current_embedding_backfill_artefact_ids(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -668,4 +762,46 @@ ORDER BY current.artefact_id",
 
 fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn architecture_path_cleanup_keeps_current_projection_cleanup_local() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let sqlite_path = temp.path().join("semantic.sqlite");
+        drop(rusqlite::Connection::open(&sqlite_path).expect("create sqlite db"));
+        let relational = RelationalStorage::primary_backend_for_tests(
+            sqlite_path,
+            crate::host::devql::RelationalPrimaryBackend::Postgres,
+        );
+        let paths = vec!["src/api.rs".to_string()];
+        let statements = build_architecture_path_cleanup_statements(
+            &relational,
+            "repo-1",
+            EmbeddingRepresentationKind::Architecture,
+            &paths,
+        )
+        .await
+        .expect("build architecture path cleanup statements");
+
+        assert!(
+            statements
+                .local
+                .iter()
+                .any(|statement| statement.contains("DELETE FROM symbol_embeddings_current"))
+        );
+        assert!(
+            statements
+                .local
+                .iter()
+                .any(|statement| statement.contains("path = 'src/api.rs'"))
+        );
+        assert!(
+            statements.remote.is_empty(),
+            "current projection cleanup must stay in local SQLite even when the shared backend is remote"
+        );
+    }
 }

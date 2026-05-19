@@ -1,5 +1,6 @@
 use super::*;
 use crate::capability_packs::semantic_clones::features::NoopSemanticSummaryProvider;
+use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX;
 use crate::cli::inference::{managed_inference_binary_path, platform_summary_gateway_url_override};
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{
@@ -3384,6 +3385,61 @@ fn clone_rebuild_pool_defers_while_repo_has_active_embedding_backlog() {
 }
 
 #[test]
+fn clone_rebuild_pool_defers_while_repo_has_active_architecture_embedding_job() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let _config_path = configure_embeddings_for_repo(&target, "local_code");
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: None,
+            job_id: "clone-a",
+            updated_at_unix: 2,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("architecture-a"),
+            job_id: "architecture-a",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::CloneRebuild,
+    )
+    .expect("attempt clone rebuild claim while architecture embeddings are active");
+
+    assert!(claimed.is_none());
+    let pending_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    assert_eq!(
+        pending_jobs
+            .iter()
+            .filter(|job| job.mailbox_name == SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX)
+            .count(),
+        1,
+        "clone rebuild should stay pending until architecture embeddings drain",
+    );
+}
+
+#[test]
 fn embeddings_pool_does_not_borrow_summary_or_clone_rebuild_work() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
@@ -4444,6 +4500,89 @@ fn requeue_running_jobs_moves_stale_running_jobs_back_to_pending() {
             .as_deref(),
         Some("requeue_running")
     );
+}
+
+#[test]
+fn startup_recovery_requeues_running_non_clone_workplane_jobs() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+
+    coordinator
+        .workplane_store
+        .with_write_connection(|conn| {
+            conn.execute(
+                "INSERT INTO capability_workplane_jobs (
+                    job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                    dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                    started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                    lease_expires_at_unix, last_error
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15, ?16, NULL)",
+                rusqlite::params![
+                    "running-role-adjudication",
+                    repo_id,
+                    target.repo_root.to_string_lossy().to_string(),
+                    target.config_root.to_string_lossy().to_string(),
+                    crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+                    "repo-1:1:file:src/main.rs:unknown",
+                    json!({"request": {"repo_id": repo_id}}).to_string(),
+                    WorkplaneJobStatus::Running.as_str(),
+                    1u32,
+                    sql_i64(10)?,
+                    sql_i64(10)?,
+                    sql_i64(11)?,
+                    sql_i64(11)?,
+                    Some("manual-validation"),
+                    Some(sql_i64(70)?),
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO capability_workplane_jobs (
+                    job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                    dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                    started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                    lease_expires_at_unix, last_error
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, NULL)",
+                rusqlite::params![
+                    "completed-role-adjudication",
+                    repo_id,
+                    target.repo_root.to_string_lossy().to_string(),
+                    target.config_root.to_string_lossy().to_string(),
+                    crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+                    "repo-1:1:file:src/lib.rs:unknown",
+                    json!({"request": {"repo_id": repo_id}}).to_string(),
+                    WorkplaneJobStatus::Completed.as_str(),
+                    1u32,
+                    sql_i64(10)?,
+                    sql_i64(10)?,
+                    sql_i64(11)?,
+                    sql_i64(12)?,
+                    sql_i64(13)?,
+                    Option::<String>::None,
+                    Option::<i64>::None,
+                ],
+            )
+            .map(|_| ())
+            .map_err(anyhow::Error::from)
+        })
+        .expect("insert running role adjudication job");
+
+    let recovered = super::workplane::requeue_running_workplane_jobs(&coordinator.workplane_store)
+        .expect("recover running jobs");
+
+    assert_eq!(recovered, 1);
+    let pending_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    assert_eq!(pending_jobs.len(), 1);
+    assert_eq!(pending_jobs[0].job_id, "running-role-adjudication");
+    assert_eq!(pending_jobs[0].started_at_unix, None);
+    assert_eq!(pending_jobs[0].lease_owner, None);
+    assert_eq!(pending_jobs[0].lease_expires_at_unix, None);
+
+    let completed_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Completed);
+    assert_eq!(completed_jobs.len(), 1);
+    assert_eq!(completed_jobs[0].job_id, "completed-role-adjudication");
+    assert_eq!(completed_jobs[0].completed_at_unix, Some(13));
 }
 
 #[test]

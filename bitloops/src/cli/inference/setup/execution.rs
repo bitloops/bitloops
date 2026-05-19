@@ -20,6 +20,10 @@ use super::profiles::{
     write_context_guidance_profile, write_platform_context_guidance_profile,
     write_platform_summary_profile, write_summary_profile,
 };
+#[cfg(test)]
+use super::profiles::{
+    write_local_bitloops_inference_profiles, write_platform_bitloops_inference_profiles,
+};
 use super::types::{
     ContextGuidanceSetupOutcome, OllamaAvailability, PreparedSummarySetupAction,
     PreparedSummarySetupPlan, SummarySetupExecutionResult, SummarySetupOutcome, SummarySetupPhase,
@@ -110,13 +114,142 @@ pub(crate) fn configure_cloud_context_guidance_generation(
     Ok(execution.1)
 }
 
+#[cfg(test)]
+pub(crate) fn configure_local_bitloops_inference(
+    repo_root: &Path,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    interactive: bool,
+) -> Result<SummarySetupOutcome> {
+    let plan = prepare_local_bitloops_inference_plan(out, input, interactive)?;
+    let lines = install_or_bootstrap_inference(repo_root)?;
+    for line in lines {
+        writeln!(out, "{line}")?;
+    }
+
+    let execution = apply_prepared_bitloops_inference_setup(repo_root, plan)?;
+    writeln!(out, "{}", execution.message)?;
+    Ok(execution.outcome)
+}
+
+#[cfg(test)]
+pub(crate) fn configure_cloud_bitloops_inference(
+    repo_root: &Path,
+    gateway_url_override: Option<&str>,
+    api_key_env: Option<&str>,
+) -> Result<String> {
+    let _ = install_or_bootstrap_inference(repo_root)?;
+    let execution = apply_prepared_bitloops_inference_setup(
+        repo_root,
+        prepare_cloud_bitloops_inference_plan(gateway_url_override, api_key_env),
+    )?;
+    Ok(execution.message)
+}
+
 pub(crate) fn prepare_cloud_summary_generation_plan(
     gateway_url_override: Option<&str>,
 ) -> PreparedSummarySetupPlan {
     PreparedSummarySetupPlan {
         action: PreparedSummarySetupAction::ConfigureCloud {
             gateway_url_override: gateway_url_override.map(str::to_string),
+            api_key_env: None,
         },
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_cloud_bitloops_inference_plan(
+    gateway_url_override: Option<&str>,
+    api_key_env: Option<&str>,
+) -> PreparedSummarySetupPlan {
+    PreparedSummarySetupPlan {
+        action: PreparedSummarySetupAction::ConfigureCloud {
+            gateway_url_override: gateway_url_override.map(str::to_string),
+            api_key_env: Some(
+                api_key_env
+                    .map(str::to_string)
+                    .unwrap_or_else(|| DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV.to_string()),
+            ),
+        },
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_local_bitloops_inference_plan(
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    interactive: bool,
+) -> Result<PreparedSummarySetupPlan> {
+    let mut availability = probe_ollama_availability()?;
+    loop {
+        match availability {
+            OllamaAvailability::MissingCli => {
+                return Ok(PreparedSummarySetupPlan {
+                    action: PreparedSummarySetupAction::InstallRuntimeOnly {
+                        message: "Ollama was not found on PATH; installed `bitloops-inference` but skipped Bitloops inference setup.".to_string(),
+                    },
+                });
+            }
+            OllamaAvailability::NotRunning if interactive => {
+                writeln!(
+                    out,
+                    "Ollama is installed but not responding at {DEFAULT_OLLAMA_BASE_URL}."
+                )?;
+                writeln!(
+                    out,
+                    "Retry Bitloops inference setup or skip it for now? (r/S)"
+                )?;
+                write!(out, "> ")?;
+                out.flush()?;
+                let mut line = String::new();
+                input
+                    .read_line(&mut line)
+                    .context("reading Ollama retry prompt response")?;
+                match line.trim().to_ascii_lowercase().as_str() {
+                    "r" | "retry" => {
+                        availability = probe_ollama_availability()?;
+                        continue;
+                    }
+                    "" | "s" | "skip" => {
+                        return Ok(PreparedSummarySetupPlan {
+                            action: PreparedSummarySetupAction::InstallRuntimeOnly {
+                                message: "Installed `bitloops-inference`; skipped Bitloops inference setup because Ollama is not running.".to_string(),
+                            },
+                        });
+                    }
+                    _ => {
+                        writeln!(out, "Please answer `r` to retry or `s` to skip.")?;
+                        continue;
+                    }
+                }
+            }
+            OllamaAvailability::NotRunning => {
+                return Ok(PreparedSummarySetupPlan {
+                    action: PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe {
+                        message: "Installed `bitloops-inference`; skipped Bitloops inference setup because Ollama is not running.".to_string(),
+                    },
+                });
+            }
+            OllamaAvailability::Running { ref models } => {
+                let model_name = select_ollama_model_for_label(
+                    models,
+                    "Bitloops inference",
+                    out,
+                    input,
+                    interactive,
+                )?;
+                let Some(model_name) = model_name else {
+                    return Ok(PreparedSummarySetupPlan {
+                        action: PreparedSummarySetupAction::InstallRuntimeOnly {
+                            message: "Installed `bitloops-inference`; skipped Bitloops inference profile setup.".to_string(),
+                        },
+                    });
+                };
+                return Ok(PreparedSummarySetupPlan {
+                    action: PreparedSummarySetupAction::ConfigureLocal { model_name },
+                });
+            }
+        }
     }
 }
 
@@ -330,6 +463,69 @@ fn apply_prepared_context_guidance_setup(
     }
 }
 
+#[cfg(test)]
+fn apply_prepared_bitloops_inference_setup(
+    repo_root: &Path,
+    plan: PreparedSummarySetupPlan,
+) -> Result<SummarySetupExecutionResult> {
+    match plan.action {
+        PreparedSummarySetupAction::InstallRuntimeOnly { message } => {
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::InstalledRuntimeOnly,
+                message,
+            })
+        }
+        PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe { message } => {
+            if let Some(model_name) = auto_configured_ollama_model_name()? {
+                write_local_bitloops_inference_profiles(repo_root, &model_name)?;
+                return Ok(SummarySetupExecutionResult {
+                    outcome: SummarySetupOutcome::Configured {
+                        model_name: model_name.clone(),
+                    },
+                    message: format!(
+                        "Configured Bitloops inference to use Ollama model `{model_name}`."
+                    ),
+                });
+            }
+
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::InstalledRuntimeOnly,
+                message,
+            })
+        }
+        PreparedSummarySetupAction::ConfigureLocal { model_name } => {
+            write_local_bitloops_inference_profiles(repo_root, &model_name)?;
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::Configured {
+                    model_name: model_name.clone(),
+                },
+                message: format!(
+                    "Configured Bitloops inference to use Ollama model `{model_name}`."
+                ),
+            })
+        }
+        PreparedSummarySetupAction::ConfigureCloud {
+            gateway_url_override,
+            api_key_env,
+        } => {
+            let api_key_env = api_key_env
+                .as_deref()
+                .unwrap_or(DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV);
+            write_platform_bitloops_inference_profiles(
+                repo_root,
+                gateway_url_override.as_deref(),
+                api_key_env,
+            )?;
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::Configured {
+                    model_name: DEFAULT_PLATFORM_CONTEXT_GUIDANCE_MODEL.to_string(),
+                },
+                message: "Configured Bitloops inference to use Bitloops cloud.".to_string(),
+            })
+        }
+    }
+}
+
 fn apply_prepared_summary_setup(
     repo_root: &Path,
     plan: PreparedSummarySetupPlan,
@@ -372,6 +568,7 @@ fn apply_prepared_summary_setup(
         }
         PreparedSummarySetupAction::ConfigureCloud {
             gateway_url_override,
+            api_key_env: _,
         } => {
             write_platform_summary_profile(repo_root, gateway_url_override.as_deref())?;
             Ok(SummarySetupExecutionResult {
@@ -446,6 +643,7 @@ where
         }
         PreparedSummarySetupAction::ConfigureCloud {
             gateway_url_override,
+            api_key_env: _,
         } => {
             report(SummarySetupProgress {
                 phase: SummarySetupPhase::WritingProfile,

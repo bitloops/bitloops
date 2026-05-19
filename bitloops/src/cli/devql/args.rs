@@ -24,6 +24,8 @@ pub enum DevqlCommand {
     ConnectionStatus(DevqlConnectionStatusArgs),
     /// List registered capability packs, migrations, and host policy (optional health checks).
     Packs(DevqlPacksArgs),
+    /// Manage repository-scoped architecture metadata and role taxonomy proposals.
+    Architecture(DevqlArchitectureArgs),
     /// Manage repository-scoped external knowledge.
     Knowledge(DevqlKnowledgeArgs),
     /// Inspect and rebaseline codebase navigation context views.
@@ -253,6 +255,236 @@ pub struct DevqlPacksArgs {
     /// Include `CoreExtensionHost` (language packs + extension capability descriptors, readiness, diagnostics).
     #[arg(long, default_value_t = false)]
     pub with_extensions: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureArgs {
+    #[command(subcommand)]
+    pub command: DevqlArchitectureCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevqlArchitectureCommand {
+    /// Manage architecture role taxonomy, rules, aliases, and proposals.
+    Roles(DevqlArchitectureRolesArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesArgs {
+    #[command(subcommand)]
+    pub command: DevqlArchitectureRolesCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevqlArchitectureRolesCommand {
+    /// Seed a repository-specific architecture role taxonomy.
+    Seed(DevqlArchitectureRolesSeedArgs),
+    /// Seed roles, activate seed-owned rules, and run full classification.
+    Bootstrap(DevqlArchitectureRolesBootstrapArgs),
+    /// Re-run architecture role classification from current canonical state.
+    Classify(DevqlArchitectureRolesClassifyArgs),
+    /// Show ambiguous role adjudication queue and needs-review assignments.
+    Status(DevqlArchitectureRolesStatusArgs),
+    /// Rename a role's display name.
+    Rename(DevqlArchitectureRolesRenameArgs),
+    /// Deprecate a role, optionally pointing at a replacement role.
+    Deprecate(DevqlArchitectureRolesDeprecateArgs),
+    /// Remove a role, optionally migrating assignments to a replacement role.
+    Remove(DevqlArchitectureRolesRemoveArgs),
+    /// Merge one role into another role.
+    Merge(DevqlArchitectureRolesMergeArgs),
+    /// Split one role using a spec file.
+    Split(DevqlArchitectureRolesSplitArgs),
+    /// Manage role aliases.
+    Alias(DevqlArchitectureRolesAliasArgs),
+    /// Manage architecture role detection rules.
+    Rules(DevqlArchitectureRolesRulesArgs),
+    /// Inspect and apply pending role change proposals.
+    Proposal(DevqlArchitectureRolesProposalArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct DevqlArchitectureRolesSeedArgs {
+    /// Activate seed-owned draft rules after seeding.
+    #[arg(long = "activate-rules", default_value_t = false)]
+    pub activate_rules: bool,
+
+    /// Run a full deterministic classification after activating seed-owned rules.
+    #[arg(long, default_value_t = false)]
+    pub classify: bool,
+
+    /// Enqueue ambiguous/high-impact classification results for asynchronous LLM adjudication.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub enqueue_adjudication: bool,
+
+    /// Emit JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesBootstrapArgs {
+    /// Use existing seed-owned draft rules instead of generating a fresh taxonomy.
+    #[arg(long, default_value_t = false)]
+    pub skip_seed: bool,
+
+    /// Enqueue ambiguous/high-impact classification results for asynchronous LLM adjudication.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub enqueue_adjudication: bool,
+
+    /// Emit JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesClassifyArgs {
+    /// Reclassify all current files and artefacts.
+    #[arg(long, conflicts_with = "paths")]
+    pub full: bool,
+
+    /// Reclassify selected paths from current canonical state.
+    #[arg(long, value_delimiter = ',', conflicts_with = "full")]
+    pub paths: Option<Vec<String>>,
+
+    /// Mark active role assignments whose paths no longer exist in current canonical state as stale.
+    #[arg(long, default_value_t = false)]
+    pub repair_stale: bool,
+
+    /// Enqueue ambiguous/high-impact results for asynchronous LLM adjudication.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub enqueue_adjudication: bool,
+
+    /// Emit JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesStatusArgs {
+    /// Limit returned queue and review items.
+    #[arg(long, default_value_t = 50)]
+    pub limit: u32,
+
+    /// Emit JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesRenameArgs {
+    pub role_ref: String,
+
+    #[arg(long = "display-name")]
+    pub display_name: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesDeprecateArgs {
+    pub role_ref: String,
+
+    #[arg(long)]
+    pub replacement: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesRemoveArgs {
+    pub role_ref: String,
+
+    #[arg(long)]
+    pub replacement: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesMergeArgs {
+    pub source_role_ref: String,
+
+    #[arg(long = "into")]
+    pub target_role_ref: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesSplitArgs {
+    pub role_ref: String,
+
+    #[arg(long)]
+    pub spec: std::path::PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesAliasArgs {
+    #[command(subcommand)]
+    pub command: DevqlArchitectureRolesAliasCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevqlArchitectureRolesAliasCommand {
+    /// Create a role alias that resolves to an existing role.
+    Create(DevqlArchitectureRolesAliasCreateArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesAliasCreateArgs {
+    pub alias_key: String,
+
+    #[arg(long = "role")]
+    pub role_ref: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesRulesArgs {
+    #[command(subcommand)]
+    pub command: DevqlArchitectureRolesRulesCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevqlArchitectureRolesRulesCommand {
+    /// Draft a new rule from a spec file.
+    Draft(DevqlArchitectureRolesRulesDraftArgs),
+    /// Edit an existing rule from a spec file.
+    Edit(DevqlArchitectureRolesRulesEditArgs),
+    /// Activate a rule.
+    Activate(DevqlArchitectureRolesRulesRefArgs),
+    /// Disable a rule.
+    Disable(DevqlArchitectureRolesRulesRefArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesRulesDraftArgs {
+    #[arg(long)]
+    pub spec: std::path::PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesRulesEditArgs {
+    pub rule_ref: String,
+
+    #[arg(long)]
+    pub spec: std::path::PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesRulesRefArgs {
+    pub rule_ref: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesProposalArgs {
+    #[command(subcommand)]
+    pub command: DevqlArchitectureRolesProposalCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevqlArchitectureRolesProposalCommand {
+    /// Show a pending proposal.
+    Show(DevqlArchitectureRolesProposalRefArgs),
+    /// Apply a pending proposal.
+    Apply(DevqlArchitectureRolesProposalRefArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesProposalRefArgs {
+    pub proposal_id: String,
 }
 
 #[derive(Args, Debug, Clone)]

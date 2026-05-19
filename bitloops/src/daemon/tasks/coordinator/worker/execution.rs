@@ -448,6 +448,7 @@ fn prepared_summary_setup_plan_from_request(
         },
         SummaryBootstrapAction::ConfigureCloud => PreparedSummarySetupAction::ConfigureCloud {
             gateway_url_override: request.gateway_url_override.clone(),
+            api_key_env: request.api_key_env.clone(),
         },
     })
 }

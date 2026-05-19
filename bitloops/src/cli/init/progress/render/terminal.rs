@@ -200,6 +200,6 @@ pub(super) fn humanise_summary_setup_phase(
         crate::cli::inference::SummarySetupPhase::DownloadingRuntime => "downloading runtime",
         crate::cli::inference::SummarySetupPhase::ExtractingRuntime => "extracting runtime",
         crate::cli::inference::SummarySetupPhase::RewritingRuntime => "updating runtime config",
-        crate::cli::inference::SummarySetupPhase::WritingProfile => "writing summary profile",
+        crate::cli::inference::SummarySetupPhase::WritingProfile => "writing inference profiles",
     }
 }

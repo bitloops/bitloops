@@ -9,7 +9,8 @@ use crate::capability_packs::semantic_clones::runtime_config::{
     resolve_selected_summary_slot, resolve_semantic_clones_config,
 };
 use crate::capability_packs::semantic_clones::types::{
-    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::daemon::types::BlockedMailboxStatus;
@@ -21,6 +22,15 @@ use crate::host::runtime_store::{
     DaemonSqliteRuntimeStore, SemanticEmbeddingMailboxItemRecord, SemanticMailboxItemStatus,
     SemanticSummaryMailboxItemRecord, WorkplaneJobRecord, WorkplaneJobStatus,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MailboxInferenceKind {
+    TextGeneration,
+    OptionalTextGeneration,
+    StructuredGeneration,
+    OptionalStructuredGeneration,
+    Embeddings,
+}
 
 use super::super::WorkplaneMailboxReadiness;
 use super::jobs::load_workplane_jobs_by_status;
@@ -161,12 +171,17 @@ fn summary_mailbox_item_as_readiness_job(
 fn embedding_mailbox_item_as_readiness_job(
     item: SemanticEmbeddingMailboxItemRecord,
 ) -> WorkplaneJobRecord {
-    let mailbox_name =
-        if item.representation_kind == EmbeddingRepresentationKind::Summary.to_string() {
-            SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
-        } else {
-            SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
-        };
+    let mailbox_name = if item.representation_kind
+        == EmbeddingRepresentationKind::Summary.to_string()
+    {
+        SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+    } else if item.representation_kind == EmbeddingRepresentationKind::Identity.to_string() {
+        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+    } else if item.representation_kind == EmbeddingRepresentationKind::Architecture.to_string() {
+        SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
+    } else {
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+    };
     WorkplaneJobRecord {
         job_id: item.item_id,
         repo_id: item.repo_id,
@@ -235,13 +250,44 @@ pub(crate) fn mailbox_claim_readiness_for_registration(
     let readiness = match registration.readiness_policy {
         CapabilityMailboxReadinessPolicy::None => WorkplaneMailboxReadiness::default(),
         CapabilityMailboxReadinessPolicy::TextGenerationSlot(slot_name) => {
-            resolve_mailbox_provider_readiness(runtime_store, job, slot_name, true)?
+            resolve_mailbox_provider_readiness(
+                runtime_store,
+                job,
+                slot_name,
+                MailboxInferenceKind::TextGeneration,
+            )?
         }
         CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot(slot_name) => {
-            resolve_optional_text_generation_readiness(runtime_store, job, slot_name)?
+            resolve_mailbox_provider_readiness(
+                runtime_store,
+                job,
+                slot_name,
+                MailboxInferenceKind::OptionalTextGeneration,
+            )?
+        }
+        CapabilityMailboxReadinessPolicy::StructuredGenerationSlot(slot_name) => {
+            resolve_mailbox_provider_readiness(
+                runtime_store,
+                job,
+                slot_name,
+                MailboxInferenceKind::StructuredGeneration,
+            )?
+        }
+        CapabilityMailboxReadinessPolicy::OptionalStructuredGenerationSlot(slot_name) => {
+            resolve_mailbox_provider_readiness(
+                runtime_store,
+                job,
+                slot_name,
+                MailboxInferenceKind::OptionalStructuredGeneration,
+            )?
         }
         CapabilityMailboxReadinessPolicy::EmbeddingsSlot(slot_name) => {
-            resolve_mailbox_provider_readiness(runtime_store, job, slot_name, false)?
+            resolve_mailbox_provider_readiness(
+                runtime_store,
+                job,
+                slot_name,
+                MailboxInferenceKind::Embeddings,
+            )?
         }
     };
     cache.insert(key, readiness.clone());
@@ -252,9 +298,9 @@ fn resolve_mailbox_provider_readiness(
     runtime_store: &DaemonSqliteRuntimeStore,
     job: &WorkplaneJobRecord,
     slot_name: &str,
-    text_generation: bool,
+    kind: MailboxInferenceKind,
 ) -> Result<WorkplaneMailboxReadiness> {
-    if !text_generation {
+    if matches!(kind, MailboxInferenceKind::Embeddings) {
         let gate_status = crate::daemon::embeddings_bootstrap::gate_status_for_config_path(
             runtime_store,
             &job.config_root
@@ -270,7 +316,7 @@ fn resolve_mailbox_provider_readiness(
 
     let repo = repo_identity_from_runtime_metadata(&job.repo_root, &job.repo_id);
     let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
-    if text_generation
+    if matches!(kind, MailboxInferenceKind::TextGeneration)
         && job.capability_id == SEMANTIC_CLONES_CAPABILITY_ID
         && job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
         && slot_name == SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT
@@ -286,23 +332,31 @@ fn resolve_mailbox_provider_readiness(
     }
     let inference = capability_host.inference_for_capability(&job.capability_id);
     let Some(_slot) = inference.describe(slot_name) else {
+        if matches!(
+            kind,
+            MailboxInferenceKind::OptionalTextGeneration
+                | MailboxInferenceKind::OptionalStructuredGeneration
+        ) {
+            return Ok(WorkplaneMailboxReadiness::default());
+        }
         return Ok(WorkplaneMailboxReadiness {
             blocked: true,
             reason: Some(format!(
                 "{} slot `{slot_name}` is not configured yet",
-                if text_generation {
-                    "text-generation"
-                } else {
-                    "embedding"
-                }
+                readiness_kind_label(kind)
             )),
         });
     };
 
-    let resolution = if text_generation {
-        inference.text_generation(slot_name).map(|_| ())
-    } else {
-        inference.embeddings(slot_name).map(|_| ())
+    let resolution = match kind {
+        MailboxInferenceKind::TextGeneration | MailboxInferenceKind::OptionalTextGeneration => {
+            inference.text_generation(slot_name).map(|_| ())
+        }
+        MailboxInferenceKind::StructuredGeneration
+        | MailboxInferenceKind::OptionalStructuredGeneration => {
+            inference.structured_generation(slot_name).map(|_| ())
+        }
+        MailboxInferenceKind::Embeddings => inference.embeddings(slot_name).map(|_| ()),
     };
     match resolution {
         Ok(()) => Ok(WorkplaneMailboxReadiness::default()),
@@ -313,25 +367,14 @@ fn resolve_mailbox_provider_readiness(
     }
 }
 
-fn resolve_optional_text_generation_readiness(
-    _runtime_store: &DaemonSqliteRuntimeStore,
-    job: &WorkplaneJobRecord,
-    slot_name: &str,
-) -> Result<WorkplaneMailboxReadiness> {
-    let repo = repo_identity_from_runtime_metadata(&job.repo_root, &job.repo_id);
-    let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
-    let inference = capability_host.inference_for_capability(&job.capability_id);
-
-    if inference.describe(slot_name).is_none() {
-        return Ok(WorkplaneMailboxReadiness::default());
-    }
-
-    match inference.text_generation(slot_name).map(|_| ()) {
-        Ok(()) => Ok(WorkplaneMailboxReadiness::default()),
-        Err(err) => Ok(WorkplaneMailboxReadiness {
-            blocked: true,
-            reason: Some(format!("{err:#}")),
-        }),
+fn readiness_kind_label(kind: MailboxInferenceKind) -> &'static str {
+    match kind {
+        MailboxInferenceKind::TextGeneration | MailboxInferenceKind::OptionalTextGeneration => {
+            "text-generation"
+        }
+        MailboxInferenceKind::StructuredGeneration
+        | MailboxInferenceKind::OptionalStructuredGeneration => "structured-generation",
+        MailboxInferenceKind::Embeddings => "embedding",
     }
 }
 

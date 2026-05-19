@@ -8,27 +8,30 @@ use crate::config::{
     SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode,
     resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
 };
-use crate::host::capability_host::gateways::CapabilityWorkplaneGateway;
+use crate::host::capability_host::gateways::{CapabilityWorkplaneGateway, CapabilityWorkplaneJob};
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
 
 use super::runtime_config::{embedding_slot_for_representation, resolve_selected_summary_slot};
 use super::types::{
-    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
-    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_CAPABILITY_ID,
+    SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 
-pub const SEMANTIC_CLONES_EMBEDDING_PIPELINE_MAILBOXES: [&str; 4] = [
+pub const SEMANTIC_CLONES_EMBEDDING_PIPELINE_MAILBOXES: [&str; 5] = [
     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
 ];
 
-pub const SEMANTIC_CLONES_DEFERRED_PIPELINE_MAILBOXES: [&str; 5] = [
+pub const SEMANTIC_CLONES_DEFERRED_PIPELINE_MAILBOXES: [&str; 6] = [
     SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
 ];
@@ -41,6 +44,9 @@ pub const REPO_BACKFILL_MAILBOX_CHUNK_SIZE: usize = 32;
 pub enum SemanticClonesMailboxPayload {
     Artefact {
         artefact_id: String,
+    },
+    PathCleanup {
+        path: String,
     },
     RepoBackfill {
         #[serde(default)]
@@ -61,6 +67,7 @@ enum LegacySemanticClonesMailboxPayload {
 pub struct SemanticClonesMailboxIntentState {
     pub summary_refresh_active: bool,
     pub code_embeddings_active: bool,
+    pub architecture_embeddings_active: bool,
     pub summary_embeddings_active: bool,
     pub clone_rebuild_active: bool,
 }
@@ -69,12 +76,16 @@ impl SemanticClonesMailboxIntentState {
     pub fn has_any_pipeline_intent(&self) -> bool {
         self.summary_refresh_active
             || self.code_embeddings_active
+            || self.architecture_embeddings_active
             || self.summary_embeddings_active
             || self.clone_rebuild_active
     }
 
     pub fn has_any_embedding_intent(&self) -> bool {
-        self.code_embeddings_active || self.summary_embeddings_active || self.clone_rebuild_active
+        self.code_embeddings_active
+            || self.architecture_embeddings_active
+            || self.summary_embeddings_active
+            || self.clone_rebuild_active
     }
 }
 
@@ -124,6 +135,7 @@ pub fn activate_selected_pipeline_mailboxes(
     if code_embeddings_active {
         mailboxes.push(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX);
         mailboxes.push(SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX);
+        mailboxes.push(SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX);
     }
     if summary_embeddings_active {
         mailboxes.push(SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX);
@@ -197,6 +209,8 @@ fn resolve_effective_mailbox_intent_from_status(
 
     SemanticClonesMailboxIntentState {
         summary_refresh_active: summary_refresh_live,
+        architecture_embeddings_active: repo_intent(SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX)
+            || code_live,
         code_embeddings_active: stored_code_intent || code_live,
         summary_embeddings_active: summary_embedding_live,
         clone_rebuild_active: stored_clone_rebuild_intent || code_live || summary_embedding_live,
@@ -210,6 +224,9 @@ pub fn payload_artefact_id(payload: &serde_json::Value) -> Option<String> {
         ) => Some(artefact_id),
         LegacySemanticClonesMailboxPayload::Structured(
             SemanticClonesMailboxPayload::RepoBackfill { .. },
+        ) => None,
+        LegacySemanticClonesMailboxPayload::Structured(
+            SemanticClonesMailboxPayload::PathCleanup { .. },
         ) => None,
         LegacySemanticClonesMailboxPayload::LegacyArtefact { artefact_id } => Some(artefact_id),
     }
@@ -229,6 +246,9 @@ pub fn payload_repo_backfill_artefact_ids(payload: &serde_json::Value) -> Option
         LegacySemanticClonesMailboxPayload::Structured(
             SemanticClonesMailboxPayload::RepoBackfill { artefact_ids, .. },
         ) => artefact_ids,
+        LegacySemanticClonesMailboxPayload::Structured(
+            SemanticClonesMailboxPayload::PathCleanup { .. },
+        ) => None,
         _ => None,
     }
 }
@@ -239,6 +259,9 @@ pub fn payload_work_item_count(payload: &serde_json::Value, mailbox_name: &str) 
             SemanticClonesMailboxPayload::Artefact { .. },
         ))
         | Ok(LegacySemanticClonesMailboxPayload::LegacyArtefact { .. }) => 1,
+        Ok(LegacySemanticClonesMailboxPayload::Structured(
+            SemanticClonesMailboxPayload::PathCleanup { .. },
+        )) => 1,
         Ok(LegacySemanticClonesMailboxPayload::Structured(
             SemanticClonesMailboxPayload::RepoBackfill {
                 work_item_count,
@@ -256,6 +279,9 @@ pub fn payload_representation_kind(mailbox_name: &str) -> Option<EmbeddingRepres
     match mailbox_name {
         SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX => Some(EmbeddingRepresentationKind::Code),
         SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX => Some(EmbeddingRepresentationKind::Identity),
+        SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX => {
+            Some(EmbeddingRepresentationKind::Architecture)
+        }
         SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => Some(EmbeddingRepresentationKind::Summary),
         _ => None,
     }
@@ -279,6 +305,108 @@ pub fn repo_backfill_chunk_dedupe_key(mailbox_name: &str, artefact_ids: &[String
     }
 
     format!("{mailbox_name}:{REPO_BACKFILL_DEDUPE_SUFFIX}:chunk:{suffix}")
+}
+
+pub fn architecture_embedding_jobs_for_artefacts(
+    artefact_ids: &[String],
+) -> Result<Vec<CapabilityWorkplaneJob>> {
+    embedding_jobs_for_artefacts(SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX, artefact_ids)
+}
+
+pub fn architecture_embedding_path_cleanup_jobs(
+    paths: &[String],
+) -> Result<Vec<CapabilityWorkplaneJob>> {
+    paths
+        .iter()
+        .map(|path| {
+            Ok(CapabilityWorkplaneJob::new_for_capability(
+                SEMANTIC_CLONES_CAPABILITY_ID,
+                SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX,
+                Some(format!(
+                    "{}:path_cleanup:{path}",
+                    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
+                )),
+                serde_json::to_value(SemanticClonesMailboxPayload::PathCleanup {
+                    path: path.clone(),
+                })?,
+            ))
+        })
+        .collect()
+}
+
+fn embedding_jobs_for_artefacts(
+    mailbox_name: &str,
+    artefact_ids: &[String],
+) -> Result<Vec<CapabilityWorkplaneJob>> {
+    if artefact_ids.len() > REPO_BACKFILL_MAILBOX_CHUNK_SIZE {
+        return repo_backfill_jobs(mailbox_name, artefact_ids);
+    }
+
+    artefact_ids
+        .iter()
+        .map(|artefact_id| artefact_job(mailbox_name, artefact_id))
+        .collect()
+}
+
+fn artefact_job(mailbox_name: &str, artefact_id: &str) -> Result<CapabilityWorkplaneJob> {
+    Ok(CapabilityWorkplaneJob::new_for_capability(
+        SEMANTIC_CLONES_CAPABILITY_ID,
+        mailbox_name,
+        Some(format!("{mailbox_name}:{artefact_id}")),
+        serde_json::to_value(SemanticClonesMailboxPayload::Artefact {
+            artefact_id: artefact_id.to_string(),
+        })?,
+    ))
+}
+
+fn repo_backfill_jobs(
+    mailbox_name: &str,
+    artefact_ids: &[String],
+) -> Result<Vec<CapabilityWorkplaneJob>> {
+    if artefact_ids.is_empty() {
+        return Ok(vec![repo_backfill_job(
+            mailbox_name,
+            Some(0),
+            Some(Vec::new()),
+            repo_backfill_dedupe_key(mailbox_name),
+        )?]);
+    }
+
+    let mut jobs = Vec::new();
+    let use_chunk_dedupe_keys = artefact_ids.len() > REPO_BACKFILL_MAILBOX_CHUNK_SIZE;
+    for chunk in artefact_ids.chunks(REPO_BACKFILL_MAILBOX_CHUNK_SIZE) {
+        let chunk_ids = chunk.to_vec();
+        let dedupe_key = if use_chunk_dedupe_keys {
+            repo_backfill_chunk_dedupe_key(mailbox_name, &chunk_ids)
+        } else {
+            repo_backfill_dedupe_key(mailbox_name)
+        };
+        jobs.push(repo_backfill_job(
+            mailbox_name,
+            Some(chunk_ids.len() as u64),
+            Some(chunk_ids),
+            dedupe_key,
+        )?);
+    }
+
+    Ok(jobs)
+}
+
+fn repo_backfill_job(
+    mailbox_name: &str,
+    work_item_count: Option<u64>,
+    artefact_ids: Option<Vec<String>>,
+    dedupe_key: String,
+) -> Result<CapabilityWorkplaneJob> {
+    Ok(CapabilityWorkplaneJob::new_for_capability(
+        SEMANTIC_CLONES_CAPABILITY_ID,
+        mailbox_name,
+        Some(dedupe_key),
+        serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill {
+            work_item_count,
+            artefact_ids,
+        })?,
+    ))
 }
 
 fn default_work_item_count_for_mailbox(mailbox_name: &str) -> u64 {
@@ -409,6 +537,14 @@ mod tests {
         assert_eq!(
             payload_representation_kind(SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX),
             Some(EmbeddingRepresentationKind::Identity)
+        );
+    }
+
+    #[test]
+    fn architecture_embedding_mailbox_maps_to_architecture_representation() {
+        assert_eq!(
+            payload_representation_kind(SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX),
+            Some(EmbeddingRepresentationKind::Architecture)
         );
     }
 }

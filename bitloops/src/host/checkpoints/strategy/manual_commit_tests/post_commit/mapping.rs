@@ -1,6 +1,6 @@
 use super::*;
 use crate::host::checkpoints::session::state::PendingCheckpointState;
-use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
 
 fn rewrite_post_commit_events_path(repo_root: &Path, replacement: &Path) {
     let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
@@ -18,6 +18,154 @@ fn rewrite_post_commit_events_path(repo_root: &Path, replacement: &Path) {
         .join("\n")
         + "\n";
     fs::write(&config_path, updated).expect("rewrite post-commit events path");
+}
+
+fn interaction_queue_count(repo_root: &Path) -> i64 {
+    open_test_spool(repo_root)
+        .with_connection(|conn| {
+            let count =
+                conn.query_row("SELECT COUNT(*) FROM interaction_spool_queue", [], |row| {
+                    row.get::<_, i64>(0)
+                })?;
+            Ok(count)
+        })
+        .expect("count interaction spool queue rows")
+}
+
+fn event_duckdb_path(repo_root: &Path) -> PathBuf {
+    crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve store backend config")
+        .events
+        .resolve_duckdb_db_path_for_repo(repo_root)
+}
+
+fn rewrite_events_path_to_blocked_file(repo_root: &Path) {
+    let blocked_parent = repo_root.join("blocked-events-parent");
+    fs::write(&blocked_parent, "not a directory").unwrap();
+    rewrite_post_commit_events_path(repo_root, &blocked_parent.join("events.duckdb"));
+}
+
+#[test]
+pub(crate) fn post_commit_derives_checkpoint_from_local_spool_when_event_duckdb_is_locked() {
+    let dir = tempfile::tempdir().unwrap();
+    let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    let backend = session_backend(dir.path());
+    backend
+        .save_session(&SessionState {
+            session_id: "pc-duckdb-locked".to_string(),
+            phase: SessionPhase::Idle,
+            base_commit: head,
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["locked.txt".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "pc-duckdb-locked",
+        "pc-duckdb-locked-turn",
+        &["locked.txt"],
+    );
+    assert!(
+        interaction_queue_count(dir.path()) > 0,
+        "seeded interaction spool should have queued canonical mutations"
+    );
+
+    fs::write(dir.path().join("locked.txt"), "locked").unwrap();
+    git_ok(dir.path(), &["add", "locked.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "locked event store"]);
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+
+    rewrite_events_path_to_blocked_file(dir.path());
+
+    ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
+
+    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+        .expect("post_commit should map HEAD from the local spool fallback");
+    assert!(
+        read_committed(dir.path(), &checkpoint_id)
+            .unwrap()
+            .is_some(),
+        "local spool fallback should persist checkpoint session metadata"
+    );
+    let turns = open_test_spool(dir.path())
+        .list_turns_for_session("pc-duckdb-locked", 10)
+        .expect("list local spool turns after fallback derivation");
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0].checkpoint_id.as_deref(),
+        Some(checkpoint_id.as_str())
+    );
+    assert!(
+        interaction_queue_count(dir.path()) > 0,
+        "local fallback should leave queued mutations for later canonical flush"
+    );
+}
+
+#[test]
+pub(crate) fn local_spool_checkpoint_assignment_flushes_to_event_repository_after_duckdb_unlock() {
+    let dir = tempfile::tempdir().unwrap();
+    let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    let original_event_path = event_duckdb_path(dir.path());
+    let backend = session_backend(dir.path());
+    backend
+        .save_session(&SessionState {
+            session_id: "pc-duckdb-unlock".to_string(),
+            phase: SessionPhase::Idle,
+            base_commit: head,
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["unlock.txt".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "pc-duckdb-unlock",
+        "pc-duckdb-unlock-turn",
+        &["unlock.txt"],
+    );
+
+    fs::write(dir.path().join("unlock.txt"), "unlock").unwrap();
+    git_ok(dir.path(), &["add", "unlock.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "unlock event store"]);
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+
+    rewrite_events_path_to_blocked_file(dir.path());
+    ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
+
+    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+        .expect("fallback post_commit should map HEAD");
+    rewrite_post_commit_events_path(dir.path(), &original_event_path);
+    let spool = open_test_spool(dir.path());
+    let event_repo = open_test_event_repository(dir.path());
+    let flushed = spool
+        .flush(&event_repo)
+        .expect("flush fallback checkpoint assignment into canonical events");
+    assert!(flushed > 0, "spool flush should apply queued mutations");
+
+    let canonical_turns = event_repo
+        .list_turns_for_session("pc-duckdb-unlock", 10)
+        .expect("list canonical interaction turns after flush");
+    assert_eq!(canonical_turns.len(), 1);
+    assert_eq!(
+        canonical_turns[0].checkpoint_id.as_deref(),
+        Some(checkpoint_id.as_str())
+    );
+
+    ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
+    assert_eq!(
+        query_commit_checkpoint_count(dir.path(), &head_sha),
+        1,
+        "already mapped HEAD should remain idempotent after canonical flush"
+    );
 }
 
 #[test]
@@ -123,16 +271,11 @@ pub(crate) fn post_commit_devql_refresh_disabled_env_still_maps_checkpoint() {
 }
 
 #[test]
-pub(crate) fn post_commit_errors_when_interaction_repository_is_unavailable() {
+pub(crate) fn post_commit_errors_when_interaction_repository_is_unavailable_without_local_spool_data()
+ {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     init_devql_schema(dir.path());
-    seed_interaction_turn(
-        dir.path(),
-        "pc-fallback",
-        "pc-fallback-turn",
-        &["src/change.rs"],
-    );
 
     let blocked_parent = dir.path().join("blocked-events-parent");
     fs::write(&blocked_parent, "not a directory").unwrap();
@@ -165,15 +308,6 @@ pub(crate) fn post_commit_errors_when_interaction_repository_is_unavailable() {
             || err_text.contains("event repository")
             || err_text.contains("interaction"),
         "expected interaction storage failure context, got: {err_text}"
-    );
-    let turns = open_test_spool(dir.path())
-        .list_turns_for_session("pc-fallback", 10)
-        .expect("list turns after failed post_commit derivation");
-    assert_eq!(turns.len(), 1);
-    assert_eq!(
-        turns[0].checkpoint_id.as_deref(),
-        None,
-        "local spool should remain staging-only when canonical interaction storage is unavailable"
     );
 }
 

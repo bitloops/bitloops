@@ -11,4 +11,4 @@ pub use roles::{
     BlobStorageRole, EventStorageRole, StorageAuthority, StorageBackendKind, StorageRole,
     StorageRoleResolver,
 };
-pub use sqlite::SqliteConnectionPool;
+pub use sqlite::{ReadOnlySqliteConnectionPool, SqliteConnectionPool};

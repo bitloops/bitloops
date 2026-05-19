@@ -271,6 +271,8 @@ pub(crate) struct RuntimeSummaryBootstrapRequestObject {
     pub model_name: Option<String>,
     #[graphql(name = "gatewayUrlOverride")]
     pub gateway_url_override: Option<String>,
+    #[graphql(name = "apiKeyEnv")]
+    pub api_key_env: Option<String>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -426,6 +428,7 @@ impl From<SummaryBootstrapRunRecord> for RuntimeSummaryBootstrapRunObject {
                 message: value.request.message,
                 model_name: value.request.model_name,
                 gateway_url_override: value.request.gateway_url_override,
+                api_key_env: value.request.api_key_env,
             },
             result: value.result.map(Into::into),
             error: value.error,

@@ -207,6 +207,9 @@ fn build_slot_bindings(
     if let Some(profile) = config.architecture.inference.fact_synthesis.as_ref() {
         architecture_graph.insert("fact_synthesis".to_string(), profile.clone());
     }
+    if let Some(profile) = config.architecture.inference.role_adjudication.as_ref() {
+        architecture_graph.insert("role_adjudication".to_string(), profile.clone());
+    }
     bindings.insert("architecture_graph".to_string(), architecture_graph);
     bindings
 }
@@ -247,6 +250,7 @@ mod tests {
             architecture: ArchitectureConfig {
                 inference: ArchitectureInferenceBindings {
                     fact_synthesis: Some("local_agent".to_string()),
+                    role_adjudication: Some("local_role_adjudicator".to_string()),
                 },
             },
             ..Default::default()
@@ -260,6 +264,13 @@ mod tests {
                 .and_then(|slots| slots.get("fact_synthesis"))
                 .map(String::as_str),
             Some("local_agent")
+        );
+        assert_eq!(
+            bindings
+                .get("architecture_graph")
+                .and_then(|slots| slots.get("role_adjudication"))
+                .map(String::as_str),
+            Some("local_role_adjudicator")
         );
     }
 }

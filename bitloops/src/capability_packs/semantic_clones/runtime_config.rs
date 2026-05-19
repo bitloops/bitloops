@@ -89,7 +89,9 @@ pub fn embedding_slot_for_representation(
     }
 
     match representation_kind {
-        EmbeddingRepresentationKind::Code | EmbeddingRepresentationKind::Identity => {
+        EmbeddingRepresentationKind::Code
+        | EmbeddingRepresentationKind::Identity
+        | EmbeddingRepresentationKind::Architecture => {
             configured_slot_name(config.inference.code_embeddings.as_deref())
                 .map(|_| SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT.to_string())
         }
@@ -258,6 +260,7 @@ mod tests {
                 driver: Some("bitloops_platform_chat".to_string()),
                 runtime: Some("bitloops_inference".to_string()),
                 model: Some("ministral-3-3b-instruct".to_string()),
+                thinking_level: None,
             })
         }
     }

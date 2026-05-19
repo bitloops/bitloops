@@ -425,6 +425,7 @@ where
         DevqlCommand::NavigationContext(args) => run_navigation_context_command(&scope, args).await,
         DevqlCommand::Schema(_) => unreachable!("handled before repo setup"),
         DevqlCommand::ConnectionStatus(_) => unreachable!("handled before repo setup"),
+        DevqlCommand::Architecture(_) => unreachable!("handled before repo setup"),
         DevqlCommand::Knowledge(_) => unreachable!("handled before cfg setup"),
         DevqlCommand::TestHarness(_) => unreachable!("handled before cfg setup"),
     }

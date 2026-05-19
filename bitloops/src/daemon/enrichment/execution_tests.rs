@@ -1310,6 +1310,64 @@ async fn workplane_embedding_mailbox_job_stays_incremental_without_active_state_
     assert_eq!(load_active_setup_row(&sqlite_path, &cfg.repo.repo_id), None);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn architecture_role_adjudication_workplane_job_loads_db_state_without_cancelled_sqlite_task()
+{
+    use crate::capability_packs::architecture_graph::types::{
+        ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+    };
+
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let cfg = daemon_test_cfg_for_repo(repo.path());
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    fs::create_dir_all(sqlite_path.parent().expect("sqlite parent")).expect("create sqlite parent");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("create relational sqlite");
+    conn.execute_batch(
+        crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql(),
+    )
+    .expect("initialise architecture graph schema");
+    drop(conn);
+
+    let job = WorkplaneJobRecord {
+        job_id: "workplane-job-architecture-role-adjudication".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: ARCHITECTURE_GRAPH_CAPABILITY_ID.to_string(),
+        mailbox_name: ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX.to_string(),
+        init_session_id: None,
+        dedupe_key: Some(format!("{}:1:file:src/main.rs:unknown", cfg.repo.repo_id)),
+        payload: serde_json::json!({
+            "request": {
+                "repo_id": cfg.repo.repo_id,
+                "generation": 1,
+                "target_kind": "file",
+                "path": "src/main.rs",
+                "reason": "unknown",
+                "candidate_role_ids": []
+            }
+        }),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let outcome = execute_workplane_job(&job).await;
+
+    assert!(
+        outcome.error.is_none(),
+        "adjudication should complete without cancelled SQLite task, got {:?}",
+        outcome.error
+    );
+}
+
 #[tokio::test]
 async fn repo_backfill_workplane_inputs_exclude_historical_only_artefacts() {
     use std::collections::BTreeSet;
@@ -2380,6 +2438,127 @@ async fn prepare_embedding_mailbox_batch_artefact_batch_keeps_sibling_current_ro
         after_count, baseline_count,
         "single-artefact embedding refresh should not delete sibling current rows from the same path"
     );
+}
+
+#[tokio::test]
+async fn prepare_embedding_mailbox_batch_deletes_stale_architecture_row_when_role_is_lost() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "architecture-pruning-model",
+        "3",
+    )
+    .await;
+    let selected = inputs
+        .first()
+        .expect("fixture should include at least one semantic input");
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let count_current_architecture_rows = || {
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite db");
+        conn.query_row(
+            "SELECT COUNT(*)
+             FROM symbol_embeddings_current
+             WHERE repo_id = ?1
+               AND representation_kind = 'architecture'
+               AND artefact_id = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), selected.artefact_id.as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("count current architecture rows")
+    };
+    relational
+        .exec(&format!(
+            "INSERT INTO architecture_roles (
+                repo_id, role_id, family, canonical_key, display_name, description, lifecycle_status
+             ) VALUES ('{repo_id}', 'role-api', 'interface', 'api_endpoint', 'API Endpoint', 'Handles HTTP API requests.', 'active');
+             INSERT INTO architecture_role_assignments_current (
+                repo_id, assignment_id, role_id, target_kind, artefact_id, symbol_id, path,
+                priority, status, source, confidence, classifier_version, rule_version, generation_seq
+             ) VALUES (
+                '{repo_id}', 'assignment-api', 'role-api', 'artefact', '{artefact_id}', '{symbol_id}', '{path}',
+                'primary', 'active', 'rule', 0.91, 'test', 1, 1
+             )",
+            repo_id = crate::host::devql::esc_pg(&cfg.repo.repo_id),
+            artefact_id = crate::host::devql::esc_pg(&selected.artefact_id),
+            symbol_id = crate::host::devql::esc_pg(selected.symbol_id.as_deref().unwrap_or("")),
+            path = crate::host::devql::esc_pg(&selected.path),
+        ))
+        .await
+        .expect("insert active architecture role assignment");
+
+    let batch = architecture_embedding_batch(&cfg, selected, "architecture-prune-seed");
+    let prepared = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("prepare architecture embedding batch with active role");
+    relational
+        .exec_serialized_batch_transactional(&prepared.commit.embedding_statements)
+        .await
+        .expect("persist architecture embedding statements");
+    assert_eq!(count_current_architecture_rows(), 1);
+
+    relational
+        .exec(&format!(
+            "UPDATE architecture_role_assignments_current
+             SET status = 'stale'
+             WHERE repo_id = '{}' AND assignment_id = 'assignment-api'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("mark architecture role assignment stale");
+
+    let prepared = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("prepare architecture embedding batch after role loss");
+    relational
+        .exec_serialized_batch_transactional(&prepared.commit.embedding_statements)
+        .await
+        .expect("persist architecture stale prune statements");
+
+    assert_eq!(count_current_architecture_rows(), 0);
+}
+
+fn architecture_embedding_batch(
+    cfg: &DevqlConfig,
+    selected: &semantic_features::SemanticFeatureInput,
+    lease_token: &str,
+) -> super::super::workplane::ClaimedEmbeddingMailboxBatch {
+    super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Architecture,
+        lease_token: lease_token.to_string(),
+        items: vec![SemanticEmbeddingMailboxItemRecord {
+            item_id: format!("{lease_token}-item"),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Architecture
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some(selected.artefact_id.clone()),
+            payload_json: None,
+            dedupe_key: Some(format!(
+                "{}:{}",
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX,
+                selected.artefact_id
+            )),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some(lease_token.to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    }
 }
 
 #[tokio::test]
