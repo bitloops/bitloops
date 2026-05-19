@@ -21,7 +21,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Structured-generation configuration now documents architecture slots and CLI-agent thinking levels**: the configuration reference covers `[architecture.inference].fact_synthesis`, `[architecture.inference].role_adjudication`, and optional `thinking_level` values for local CLI-agent drivers.
 - **Repo-local DevQL guidance now includes architecture search patterns**: managed guidance surfaces mention `searchMode: ARCHITECTURE` and compact architecture-role query shapes.
 
-
 ### Fixed
 
 - **Architecture role status can inspect runtime queue state read-only**: `bitloops devql architecture roles status` reads queued adjudication jobs and review items without requiring current-state classification context.
