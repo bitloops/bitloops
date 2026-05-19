@@ -866,6 +866,114 @@ fn choose_summary_setup_during_init_skips_when_summary_mode_is_off() {
 }
 
 #[test]
+fn choose_summary_setup_interactive_does_not_resolve_cloud_login_status() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let mut out = Vec::new();
+    let mut input = Cursor::new("\n");
+
+    let selection = with_test_tty_override(true, || {
+        with_summary_generation_configured_hook(
+            |_| false,
+            || {
+                with_cloud_login_status_hook(
+                    || panic!("interactive summary setup should not resolve cloud login status"),
+                    || {
+                        test_runtime().block_on(choose_summary_setup_during_init(
+                            repo.path(),
+                            false,
+                            false,
+                            &mut out,
+                            &mut input,
+                        ))
+                    },
+                )
+            },
+        )
+    })
+    .expect("choose summary setup");
+
+    assert_eq!(
+        selection,
+        crate::cli::inference::SummarySetupSelection::Skip
+    );
+    let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(rendered.contains("Configure semantic summaries"));
+}
+
+#[test]
+fn choose_summary_setup_noninteractive_treats_login_error_as_not_logged_in() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let mut out = Vec::new();
+    let mut input = Cursor::new("");
+
+    let selection = with_test_tty_override(false, || {
+        with_summary_generation_configured_hook(
+            |_| false,
+            || {
+                with_cloud_login_status_hook(
+                    || Err(anyhow::anyhow!("keyring unavailable")),
+                    || {
+                        test_runtime().block_on(choose_summary_setup_during_init(
+                            repo.path(),
+                            false,
+                            false,
+                            &mut out,
+                            &mut input,
+                        ))
+                    },
+                )
+            },
+        )
+    })
+    .expect("choose summary setup");
+
+    assert_eq!(
+        selection,
+        crate::cli::inference::SummarySetupSelection::Skip
+    );
+}
+
+#[test]
+fn choose_context_guidance_setup_interactive_does_not_resolve_cloud_login_status() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let parsed = Cli::try_parse_from(["bitloops", "init"]).expect("parse init");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    let mut out = Vec::new();
+    let mut input = Cursor::new("\n");
+
+    let selection = with_test_tty_override(true, || {
+        with_context_guidance_generation_configured_hook(
+            |_| false,
+            || {
+                with_cloud_login_status_hook(
+                    || {
+                        panic!("interactive context guidance setup should not resolve cloud login status")
+                    },
+                    || {
+                        test_runtime().block_on(choose_context_guidance_setup_during_init(
+                            repo.path(),
+                            &args,
+                            &mut out,
+                            &mut input,
+                        ))
+                    },
+                )
+            },
+        )
+    })
+    .expect("choose context guidance setup");
+
+    assert_eq!(
+        selection,
+        crate::cli::inference::ContextGuidanceSetupSelection::Skip
+    );
+    let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(rendered.contains("Configure context guidance"));
+}
+
+#[test]
 fn init_args_reject_conflicting_no_embeddings_and_runtime_flags() {
     let err = Cli::try_parse_from([
         "bitloops",

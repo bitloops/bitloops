@@ -39,15 +39,5 @@ pub(crate) async fn choose_context_guidance_setup_during_init(
         return Ok(ContextGuidanceSetupSelection::Skip);
     }
 
-    let cloud_logged_in = crate::daemon::resolve_workos_session_status()
-        .await?
-        .is_some();
-
-    prompt_context_guidance_setup_selection(
-        out,
-        input,
-        true,
-        args.install_default_daemon,
-        cloud_logged_in,
-    )
+    prompt_context_guidance_setup_selection(out, input, true, args.install_default_daemon, false)
 }
