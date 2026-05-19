@@ -352,8 +352,12 @@ fn summary_embedding_follow_up_for(
     input: &SemanticFeatureInput,
     init_session_ids: Option<&BTreeSet<String>>,
 ) -> SemanticEmbeddingMailboxItemInsert {
+    let init_session_id = match init_session_ids {
+        Some(session_ids) if session_ids.len() == 1 => session_ids.iter().next().cloned(),
+        _ => None,
+    };
     SemanticEmbeddingMailboxItemInsert::new(
-        init_session_ids.and_then(|session_ids| session_ids.iter().next().cloned()),
+        init_session_id,
         EmbeddingRepresentationKind::Summary.to_string(),
         SemanticMailboxItemKind::Artefact,
         Some(input.artefact_id.clone()),
@@ -421,14 +425,25 @@ mod tests {
     }
 
     #[test]
-    fn summary_embedding_follow_up_uses_first_init_session_id_when_available() {
-        let session_ids = ["init-session-2".to_string(), "init-session-1".to_string()]
+    fn summary_embedding_follow_up_keeps_single_init_session_id_when_available() {
+        let session_ids = ["init-session-1".to_string()]
             .into_iter()
             .collect::<BTreeSet<_>>();
 
         let follow_up = summary_embedding_follow_up_for(&test_input(), Some(&session_ids));
 
         assert_eq!(follow_up.init_session_id.as_deref(), Some("init-session-1"));
+    }
+
+    #[test]
+    fn summary_embedding_follow_up_stays_sessionless_with_multiple_init_session_ids() {
+        let session_ids = ["init-session-2".to_string(), "init-session-1".to_string()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        let follow_up = summary_embedding_follow_up_for(&test_input(), Some(&session_ids));
+
+        assert_eq!(follow_up.init_session_id, None);
     }
 
     #[test]

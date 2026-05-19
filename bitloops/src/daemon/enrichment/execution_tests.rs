@@ -1728,6 +1728,109 @@ WHERE repo_id = '{}' AND path = '{}'",
 }
 
 #[tokio::test]
+async fn prepare_embedding_mailbox_batch_with_explicit_repo_backfill_ids_keeps_remaining_ids_as_follow_up()
+ {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let generated_dir = repo.path().join("src/generated");
+    fs::create_dir_all(&generated_dir).expect("create generated source dir");
+    for index in 0..48 {
+        fs::write(
+            generated_dir.join(format!("embedding_follow_up_{index:02}.ts")),
+            format!(
+                "export function generatedEmbeddingFollowUp{index:02}(input: string): string {{\n  return `${{input}}:{index}`;\n}}\n"
+            ),
+        )
+        .expect("write generated source");
+    }
+    git_ok(repo.path(), &["add", "src/generated"]);
+    git_ok(
+        repo.path(),
+        &["commit", "-m", "add explicit embedding backfill sources"],
+    );
+
+    let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    let requested = inputs
+        .iter()
+        .take(super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE * 2)
+        .map(|input| input.artefact_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requested.len(),
+        super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE * 2,
+        "fixture should provide two explicit embedding mailbox batches"
+    );
+
+    let batch = super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        lease_token: "explicit-repo-backfill-embedding-follow-up-lease".to_string(),
+        items: vec![SemanticEmbeddingMailboxItemRecord {
+            item_id: "explicit-repo-backfill-embedding-follow-up-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            payload_json: Some(serde_json::to_value(requested.clone()).expect("payload json")),
+            dedupe_key: Some(
+                crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                ),
+            ),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some(
+                "explicit-repo-backfill-embedding-follow-up-lease".to_string(),
+            ),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("explicit embedding repo backfill should preserve remaining ids");
+
+    assert_eq!(
+        prepared.expanded_count,
+        super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE
+    );
+    let replacement = prepared
+        .commit
+        .replacement_backfill_item
+        .as_ref()
+        .expect("remaining explicit repo backfill ids should stay queued");
+    assert_eq!(
+        replacement.payload_json,
+        Some(
+            serde_json::to_value(
+                requested[super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE..]
+                    .to_vec()
+            )
+            .expect("remaining payload json")
+        )
+    );
+}
+
+#[tokio::test]
 async fn prepare_embedding_mailbox_batch_acks_when_repo_policy_disables_embeddings() {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
     let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(

@@ -209,10 +209,35 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
                     .as_ref()
                     .map(payload_artefact_ids_from_value);
                 let mut selected = match requested_ids {
-                    Some(requested_ids) => requested_ids
-                        .iter()
-                        .filter_map(|artefact_id| current_by_artefact.get(artefact_id).cloned())
-                        .collect::<Vec<_>>(),
+                    Some(requested_ids) => {
+                        let (selected_ids, remaining_ids) = if requested_ids.len()
+                            > SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE
+                        {
+                            (
+                                requested_ids[..SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE].to_vec(),
+                                Some(
+                                    requested_ids[SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE..].to_vec(),
+                                ),
+                            )
+                        } else {
+                            (requested_ids, None)
+                        };
+                        if let Some(remaining_ids) = remaining_ids {
+                            replacement_backfill_item =
+                                Some(SemanticEmbeddingMailboxItemInsert::new(
+                                    item.init_session_id.clone(),
+                                    batch.representation_kind.to_string(),
+                                    SemanticMailboxItemKind::RepoBackfill,
+                                    None,
+                                    Some(serde_json::to_value(remaining_ids)?),
+                                    item.dedupe_key.clone(),
+                                ));
+                        }
+                        selected_ids
+                            .iter()
+                            .filter_map(|artefact_id| current_by_artefact.get(artefact_id).cloned())
+                            .collect::<Vec<_>>()
+                    }
                     None => {
                         let artefact_ids = match repo_wide_artefact_ids.as_ref() {
                             Some(ids) => ids,

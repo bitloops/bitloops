@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use tokio::sync::oneshot;
@@ -29,6 +29,8 @@ enum SemanticWriterRequest {
 pub(super) struct RepoSemanticWriterActor {
     sender: Sender<SemanticWriterRequest>,
 }
+
+const MAX_PENDING_REQUEST_DRAIN_PER_ITER: usize = 32;
 
 #[derive(Debug, Default)]
 struct PendingSemanticWriterRequests {
@@ -184,9 +186,7 @@ fn writer_loop(
             };
             pending.push(request);
         }
-        while let Ok(request) = receiver.try_recv() {
-            pending.push(request);
-        }
+        drain_pending_requests(&receiver, &mut pending, MAX_PENDING_REQUEST_DRAIN_PER_ITER);
         let Some(request) = pending.pop_next() else {
             continue;
         };
@@ -256,6 +256,24 @@ pub(super) fn with_semantic_writer_sqlite_locks<T>(
     with_semantic_writer_sqlite_locks_map(runtime_db_path, relational_db_path, |err| err, operation)
 }
 
+fn drain_pending_requests(
+    receiver: &Receiver<SemanticWriterRequest>,
+    pending: &mut PendingSemanticWriterRequests,
+    max_to_drain: usize,
+) -> usize {
+    let mut drained = 0;
+    while drained < max_to_drain {
+        match receiver.try_recv() {
+            Ok(request) => {
+                pending.push(request);
+                drained += 1;
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+        }
+    }
+    drained
+}
+
 fn with_semantic_writer_sqlite_locks_map<T, E>(
     runtime_db_path: &Path,
     relational_db_path: &Path,
@@ -293,10 +311,11 @@ fn canonical_lock_order_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{PendingSemanticWriterRequests, SemanticWriterRequest};
+    use super::{PendingSemanticWriterRequests, SemanticWriterRequest, drain_pending_requests};
     use crate::daemon::enrichment::semantic_writer::{
         CommitEmbeddingBatchRequest, CommitSummaryBatchRequest, SemanticBatchRepoContext,
     };
+    use std::sync::mpsc;
     use tokio::sync::oneshot;
 
     fn repo() -> SemanticBatchRepoContext {
@@ -383,5 +402,26 @@ mod tests {
             Some(SemanticWriterRequest::Summary { .. })
         ));
         assert!(pending.pop_next().is_none());
+    }
+
+    #[test]
+    fn drain_pending_requests_limits_non_blocking_batch_size() {
+        let (sender, receiver) = mpsc::channel();
+        for _ in 0..5 {
+            sender
+                .send(summary_request())
+                .expect("queue summary request");
+        }
+
+        let mut pending = PendingSemanticWriterRequests::default();
+        let drained = drain_pending_requests(&receiver, &mut pending, 2);
+
+        assert_eq!(drained, 2);
+        assert_eq!(pending.summaries.len(), 2);
+        assert_eq!(pending.embeddings.len(), 0);
+        assert!(
+            receiver.try_recv().is_ok(),
+            "drain should leave queued work behind"
+        );
     }
 }
