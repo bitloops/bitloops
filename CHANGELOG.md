@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- **DevQL sync now handles Vite's package fixtures and duplicate Vitest names** (`CLI-1858`): project-aware classification now accepts `package.json` files with a leading UTF-8 BOM and reports the package path on parse failures. Test-harness materialization now keeps semantic `symbol_id`s independent of source line spans, collapses repeated source suite containers into one logical suite, then applies duplicate-aware tokens when repeated case or doctest identities collide. Current-state sync reuses prior duplicate tokens by source order so legal repeated Vitest `it` names and Rust doctests no longer collapse to the same test artefact ID when line numbers shift.
+- **DevQL sync now handles Vite's package fixtures and duplicate test names** (`CLI-1858`, `CLI-1859`, `CLI-1866`): project-aware classification now accepts `package.json` files with a leading UTF-8 BOM and reports the package path on parse failures. Test-harness materialization now keeps semantic `symbol_id`s independent of source line spans, collapses repeated source suite containers into one logical suite, then applies duplicate-aware tokens when repeated case or doctest identities collide. Current-state sync reuses prior duplicate tokens by source order so legal repeated Vitest `it` names, Gitea tests, NestJS specs, and Rust doctests no longer collapse to the same test artefact ID when line numbers shift.
 
 ## [0.0.28] - 2026-05-18
 
