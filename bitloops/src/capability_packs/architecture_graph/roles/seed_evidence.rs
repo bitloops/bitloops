@@ -289,16 +289,16 @@ where
     let items = ranked_items(full_evidence, roles);
     let mut accepted = std::collections::BTreeSet::new();
     for section in ARRAY_SECTIONS {
-        if let Some(item) = items.iter().find(|item| item.section == section) {
-            if try_append_item(
+        if let Some(item) = items.iter().find(|item| item.section == section)
+            && try_append_item(
                 &mut candidate,
                 item,
                 prompt_budget_bytes,
                 &original,
                 &render_prompt,
-            )? {
-                accepted.insert((item.section, item.source_index));
-            }
+            )?
+        {
+            accepted.insert((item.section, item.source_index));
         }
     }
 
@@ -558,9 +558,12 @@ mod tests {
     fn rule_generation_evidence_is_role_scoped_and_keeps_prompt_under_budget() {
         let scope = test_scope();
         let role = runtime_role();
-        let budgeted =
-            budget_rule_generation_evidence(&scope, &large_seed_evidence(), &[role.clone()])
-                .expect("budget rule generation evidence");
+        let budgeted = budget_rule_generation_evidence(
+            &scope,
+            &large_seed_evidence(),
+            std::slice::from_ref(&role),
+        )
+        .expect("budget rule generation evidence");
         let prompt =
             architecture_roles_seed_rules_user_prompt(&scope, budgeted.evidence(), &[role]);
 
