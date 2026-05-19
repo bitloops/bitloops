@@ -69,7 +69,7 @@ pub(super) async fn load_existing_test_artefact_identity_rows(
         esc_pg(repo_id),
         path_filter,
     );
-    let rows = storage.query_rows_primary(&sql).await?;
+    let rows = storage.query_rows(&sql).await?;
     rows.into_iter()
         .map(existing_test_row_from_json)
         .collect::<Result<Vec<_>>>()
