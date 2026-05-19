@@ -158,6 +158,25 @@ pub(crate) const PHP_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescrip
     compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
 };
 
+pub(crate) const CPP_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
+    id: "cpp-language-pack",
+    version: "1.0.0",
+    api_version: 1,
+    display_name: "C++ Language Pack",
+    aliases: &["cpp-pack", "cxx-pack"],
+    supported_languages: &["cpp", "c++", "cxx"],
+    language_profiles: &[LanguageProfileDescriptor {
+        id: "cpp-standard",
+        display_name: "C++ Standard",
+        language_id: "cpp",
+        dialect: Some("cpp"),
+        aliases: &["c++", "cxx"],
+        file_extensions: &["cpp", "cc", "cxx", "hpp", "hh", "hxx", "h++"],
+        supported_source_versions: &["^17", "^20", "^23"],
+    }],
+    compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
+};
+
 const KNOWLEDGE_CAPABILITY_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
     id: "knowledge-capability-pack",
     display_name: "Knowledge Capability Pack",
