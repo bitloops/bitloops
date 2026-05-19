@@ -18,7 +18,7 @@ use crate::host::runtime_store::{
     SemanticMailboxItemStatus, SemanticSummaryMailboxItemRecord,
 };
 
-use super::super::EnrichmentControlState;
+use super::super::{EnrichmentControlState, effective_worker_budgets};
 use super::mailbox_persistence::{
     load_embedding_mailbox_items_by_ids, load_summary_mailbox_items_by_ids,
 };
@@ -47,6 +47,14 @@ pub(crate) struct ClaimedEmbeddingMailboxBatch {
     pub representation_kind: EmbeddingRepresentationKind,
     pub lease_token: String,
     pub items: Vec<SemanticEmbeddingMailboxItemRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct EmbeddingMailboxRepoCandidate {
+    repo_id: String,
+    repo_root: PathBuf,
+    config_root: PathBuf,
+    representation_kind: EmbeddingRepresentationKind,
 }
 
 pub(crate) fn claim_summary_mailbox_batch(
@@ -93,8 +101,20 @@ pub(crate) fn claim_embedding_mailbox_batch(
     }
     workplane_store.with_write_connection(|conn| {
         let candidates = load_embedding_mailbox_repo_candidates(conn, unix_timestamp_now())?;
+        let candidates = prioritize_embedding_mailbox_repo_candidates(
+            conn,
+            workplane_store,
+            control_state,
+            candidates,
+        )?;
         let mut readiness_cache = BTreeMap::new();
-        for (repo_id, repo_root, config_root, representation_kind) in candidates {
+        for candidate in candidates {
+            let EmbeddingMailboxRepoCandidate {
+                repo_id,
+                repo_root,
+                config_root,
+                representation_kind,
+            } = candidate;
             let mailbox_name = match representation_kind {
                 EmbeddingRepresentationKind::Summary => SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
                 EmbeddingRepresentationKind::Identity => SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
@@ -188,7 +208,7 @@ fn load_summary_mailbox_repo_candidates(
 fn load_embedding_mailbox_repo_candidates(
     conn: &rusqlite::Connection,
     now: u64,
-) -> Result<Vec<(String, PathBuf, PathBuf, EmbeddingRepresentationKind)>> {
+) -> Result<Vec<EmbeddingMailboxRepoCandidate>> {
     let limit = i64::try_from(WORKPLANE_JOB_CLAIM_CANDIDATE_LIMIT)
         .context("converting embedding mailbox claim candidate limit")?;
     let mut stmt = conn.prepare(
@@ -213,12 +233,12 @@ fn load_embedding_mailbox_repo_candidates(
                 "architecture" => EmbeddingRepresentationKind::Architecture,
                 _ => EmbeddingRepresentationKind::Code,
             };
-            Ok((
-                row.get::<_, String>(0)?,
-                PathBuf::from(row.get::<_, String>(1)?),
-                PathBuf::from(row.get::<_, String>(2)?),
+            Ok(EmbeddingMailboxRepoCandidate {
+                repo_id: row.get::<_, String>(0)?,
+                repo_root: PathBuf::from(row.get::<_, String>(1)?),
+                config_root: PathBuf::from(row.get::<_, String>(2)?),
                 representation_kind,
-            ))
+            })
         },
     )?;
     let mut values = Vec::new();
@@ -226,6 +246,304 @@ fn load_embedding_mailbox_repo_candidates(
         values.push(row?);
     }
     Ok(values)
+}
+
+fn prioritize_embedding_mailbox_repo_candidates(
+    conn: &rusqlite::Connection,
+    workplane_store: &DaemonSqliteRuntimeStore,
+    control_state: &EnrichmentControlState,
+    values: Vec<EmbeddingMailboxRepoCandidate>,
+) -> Result<Vec<EmbeddingMailboxRepoCandidate>> {
+    if values.is_empty() {
+        return Ok(values);
+    }
+    let has_summary_candidates = values
+        .iter()
+        .any(|candidate| candidate.representation_kind == EmbeddingRepresentationKind::Summary);
+    let has_summary_overlap_candidates = values.iter().any(|candidate| {
+        candidate.representation_kind == EmbeddingRepresentationKind::Summary
+            && repo_has_active_summary_refresh_work(conn, &candidate.repo_id).unwrap_or(false)
+    });
+    let has_non_summary_candidates = values
+        .iter()
+        .any(|candidate| candidate.representation_kind != EmbeddingRepresentationKind::Summary);
+    let fallback_config_root = values
+        .first()
+        .map(|candidate| candidate.config_root.as_path())
+        .expect("checked non-empty candidates");
+    let embeddings_budget =
+        effective_worker_budgets(workplane_store, fallback_config_root)?.embeddings;
+    let preferred_non_summary_kind = preferred_non_summary_representation_kind(conn, &values)?;
+    if embeddings_budget == 1
+        && has_summary_overlap_candidates
+        && has_summary_candidates
+        && has_non_summary_candidates
+    {
+        return Ok(prioritize_single_worker_summary_overlap_candidates(
+            values,
+            control_state.last_embedding_claim_kind,
+            preferred_non_summary_kind,
+        ));
+    }
+    if has_summary_overlap_candidates && has_summary_candidates && has_non_summary_candidates {
+        let leased_summary_batches =
+            leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Summary)?;
+        let leased_code_batches =
+            leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Code)?;
+        let leased_identity_batches =
+            leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Identity)?;
+        return Ok(prioritize_multi_worker_summary_overlap_candidates(
+            values,
+            preferred_non_summary_kind,
+            leased_summary_batches,
+            leased_code_batches.saturating_add(leased_identity_batches),
+            embeddings_budget,
+        ));
+    }
+    let can_prioritize_summary = if has_summary_candidates && has_non_summary_candidates {
+        let summary_priority_worker_limit = summary_embedding_priority_worker_limit(
+            embeddings_budget,
+            has_summary_overlap_candidates,
+        );
+        let leased_summary_batches =
+            leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Summary)?;
+        leased_summary_batches < summary_priority_worker_limit
+    } else {
+        false
+    };
+
+    Ok(prioritize_multi_worker_candidates(
+        values,
+        preferred_non_summary_kind,
+        can_prioritize_summary,
+    ))
+}
+
+fn prioritize_multi_worker_candidates(
+    values: Vec<EmbeddingMailboxRepoCandidate>,
+    preferred_non_summary_kind: Option<EmbeddingRepresentationKind>,
+    prioritize_summary: bool,
+) -> Vec<EmbeddingMailboxRepoCandidate> {
+    let CandidateBuckets {
+        summary,
+        preferred_non_summary,
+        fallback_non_summary,
+    } = split_embedding_candidates(values, preferred_non_summary_kind);
+    let mut prioritized = Vec::new();
+    if prioritize_summary {
+        prioritized.extend(summary);
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+    } else {
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+        prioritized.extend(summary);
+    }
+    prioritized
+}
+
+fn prioritize_multi_worker_summary_overlap_candidates(
+    values: Vec<EmbeddingMailboxRepoCandidate>,
+    preferred_non_summary_kind: Option<EmbeddingRepresentationKind>,
+    leased_summary_batches: usize,
+    leased_non_summary_batches: usize,
+    embeddings_budget: usize,
+) -> Vec<EmbeddingMailboxRepoCandidate> {
+    let CandidateBuckets {
+        summary,
+        preferred_non_summary,
+        fallback_non_summary,
+    } = split_embedding_candidates(values, preferred_non_summary_kind);
+    let has_non_summary = !(preferred_non_summary.is_empty() && fallback_non_summary.is_empty());
+    let summary_lease_limit = summary_embedding_priority_worker_limit(embeddings_budget, true);
+    let non_summary_lease_limit = embeddings_budget.saturating_sub(summary_lease_limit);
+    let total_leased_batches = leased_summary_batches.saturating_add(leased_non_summary_batches);
+    let should_start_summary_first = leased_summary_batches == 0 && total_leased_batches == 0;
+    let should_fill_non_summary =
+        has_non_summary && leased_non_summary_batches < non_summary_lease_limit;
+    let should_reclaim_summary =
+        leased_summary_batches < summary_lease_limit && !should_fill_non_summary;
+
+    let mut prioritized = Vec::new();
+    if should_start_summary_first {
+        prioritized.extend(summary);
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+        return prioritized;
+    }
+    if should_fill_non_summary {
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+        prioritized.extend(summary);
+        return prioritized;
+    }
+    if should_reclaim_summary {
+        prioritized.extend(summary);
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+        return prioritized;
+    }
+    prioritized
+}
+
+fn prioritize_single_worker_summary_overlap_candidates(
+    values: Vec<EmbeddingMailboxRepoCandidate>,
+    last_embedding_claim_kind: Option<EmbeddingRepresentationKind>,
+    preferred_non_summary_kind: Option<EmbeddingRepresentationKind>,
+) -> Vec<EmbeddingMailboxRepoCandidate> {
+    let Some(last_embedding_claim_kind) = last_embedding_claim_kind else {
+        return values;
+    };
+    let CandidateBuckets {
+        summary,
+        preferred_non_summary,
+        fallback_non_summary,
+    } = split_embedding_candidates(values, preferred_non_summary_kind);
+    let mut prioritized = Vec::new();
+    if last_embedding_claim_kind == EmbeddingRepresentationKind::Summary {
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+        prioritized.extend(summary);
+    } else {
+        prioritized.extend(summary);
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+    }
+    prioritized
+}
+
+struct CandidateBuckets {
+    summary: Vec<EmbeddingMailboxRepoCandidate>,
+    preferred_non_summary: Vec<EmbeddingMailboxRepoCandidate>,
+    fallback_non_summary: Vec<EmbeddingMailboxRepoCandidate>,
+}
+
+fn summary_embedding_priority_worker_limit(
+    embeddings_budget: usize,
+    _has_active_summary_overlap: bool,
+) -> usize {
+    if embeddings_budget <= 1 {
+        return 0;
+    }
+    // Keep summary overlap alive without letting summary batches claim multiple
+    // priority slots ahead of code and identity work.
+    1
+}
+
+fn split_embedding_candidates(
+    values: Vec<EmbeddingMailboxRepoCandidate>,
+    preferred_non_summary_kind: Option<EmbeddingRepresentationKind>,
+) -> CandidateBuckets {
+    let mut summary = Vec::new();
+    let mut preferred_non_summary = Vec::new();
+    let mut fallback_non_summary = Vec::new();
+    for candidate in values {
+        if candidate.representation_kind == EmbeddingRepresentationKind::Summary {
+            summary.push(candidate);
+        } else if preferred_non_summary_kind
+            .is_some_and(|kind| candidate.representation_kind == kind)
+        {
+            preferred_non_summary.push(candidate);
+        } else {
+            fallback_non_summary.push(candidate);
+        }
+    }
+    CandidateBuckets {
+        summary,
+        preferred_non_summary,
+        fallback_non_summary,
+    }
+}
+
+fn preferred_non_summary_representation_kind(
+    conn: &rusqlite::Connection,
+    values: &[EmbeddingMailboxRepoCandidate],
+) -> Result<Option<EmbeddingRepresentationKind>> {
+    let has_code = values
+        .iter()
+        .any(|candidate| candidate.representation_kind == EmbeddingRepresentationKind::Code);
+    let has_identity = values
+        .iter()
+        .any(|candidate| candidate.representation_kind == EmbeddingRepresentationKind::Identity);
+    if !has_code || !has_identity {
+        return Ok(None);
+    }
+
+    let leased_code_batches =
+        leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Code)?;
+    let leased_identity_batches =
+        leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Identity)?;
+    Ok(match leased_code_batches.cmp(&leased_identity_batches) {
+        std::cmp::Ordering::Greater => Some(EmbeddingRepresentationKind::Identity),
+        std::cmp::Ordering::Less => Some(EmbeddingRepresentationKind::Code),
+        std::cmp::Ordering::Equal => None,
+    })
+}
+
+fn leased_embedding_mailbox_batch_count(
+    conn: &rusqlite::Connection,
+    representation_kind: EmbeddingRepresentationKind,
+) -> Result<usize> {
+    let count = conn.query_row(
+        "SELECT COUNT(DISTINCT COALESCE(lease_token, item_id))
+         FROM semantic_embedding_mailbox_items
+         WHERE representation_kind = ?1
+           AND status = ?2",
+        params![
+            representation_kind.to_string(),
+            SemanticMailboxItemStatus::Leased.as_str(),
+        ],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(usize::try_from(count).unwrap_or_default())
+}
+
+fn repo_has_active_summary_refresh_work(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+) -> Result<bool> {
+    Ok(summary_mailbox_work_is_active(conn, repo_id)?
+        || summary_workplane_jobs_are_active(conn, repo_id)?)
+}
+
+fn summary_mailbox_work_is_active(conn: &rusqlite::Connection, repo_id: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1
+             FROM semantic_summary_mailbox_items
+             WHERE repo_id = ?1
+               AND status IN (?2, ?3)
+             LIMIT 1",
+            params![
+                repo_id,
+                SemanticMailboxItemStatus::Pending.as_str(),
+                SemanticMailboxItemStatus::Leased.as_str(),
+            ],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn summary_workplane_jobs_are_active(conn: &rusqlite::Connection, repo_id: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1
+             FROM capability_workplane_jobs
+             WHERE repo_id = ?1
+               AND mailbox_name = ?2
+               AND status IN (?3, ?4)
+             LIMIT 1",
+            params![
+                repo_id,
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                crate::host::runtime_store::WorkplaneJobStatus::Pending.as_str(),
+                crate::host::runtime_store::WorkplaneJobStatus::Running.as_str(),
+            ],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 fn lease_summary_mailbox_batch_for_repo(
@@ -451,3 +769,7 @@ fn load_selected_embedding_item_ids(
     }
     Ok(values)
 }
+
+#[cfg(test)]
+#[path = "mailbox_claim_tests.rs"]
+mod tests;

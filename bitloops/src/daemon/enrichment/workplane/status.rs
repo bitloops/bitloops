@@ -160,6 +160,42 @@ pub(crate) fn iter_workplane_job_config_roots(
     })
 }
 
+pub(crate) fn iter_workplane_job_repo_roots(
+    workplane_store: &DaemonSqliteRuntimeStore,
+) -> Result<Vec<PathBuf>> {
+    workplane_store.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT repo_root
+             FROM capability_workplane_jobs
+             WHERE status IN (?1, ?2)
+             UNION
+             SELECT DISTINCT repo_root
+             FROM semantic_summary_mailbox_items
+             WHERE status IN (?3, ?4)
+             UNION
+             SELECT DISTINCT repo_root
+             FROM semantic_embedding_mailbox_items
+             WHERE status IN (?5, ?6)",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                WorkplaneJobStatus::Pending.as_str(),
+                WorkplaneJobStatus::Running.as_str(),
+                SemanticMailboxItemStatus::Pending.as_str(),
+                SemanticMailboxItemStatus::Leased.as_str(),
+                SemanticMailboxItemStatus::Pending.as_str(),
+                SemanticMailboxItemStatus::Leased.as_str(),
+            ],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut values = Vec::new();
+        for row in rows {
+            values.push(PathBuf::from(row?));
+        }
+        Ok(values)
+    })
+}
+
 pub(crate) fn last_failed_embedding_job_from_workplane(
     workplane_store: &DaemonSqliteRuntimeStore,
 ) -> Result<Option<FailedEmbeddingJobSummary>> {

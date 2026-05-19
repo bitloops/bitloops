@@ -55,7 +55,7 @@ pub(crate) fn collect_rust_doctest_scenarios(
                 suite_start_line,
                 suite_end_line,
                 scenario: DiscoveredTestScenario {
-                    name: format!("{item_name}[doctest:{}]", block.start_line),
+                    name: item_name.clone(),
                     start_line: block.start_line,
                     end_line: block.end_line,
                     reference_candidates: vec![

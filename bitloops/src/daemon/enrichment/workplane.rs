@@ -62,6 +62,6 @@ pub(crate) use sql::repo_identity_from_runtime_metadata;
 #[cfg(test)]
 pub(crate) use sql::sql_i64;
 pub(crate) use status::{
-    iter_workplane_job_config_roots, last_failed_embedding_job_from_workplane,
-    project_workplane_status,
+    iter_workplane_job_config_roots, iter_workplane_job_repo_roots,
+    last_failed_embedding_job_from_workplane, project_workplane_status,
 };

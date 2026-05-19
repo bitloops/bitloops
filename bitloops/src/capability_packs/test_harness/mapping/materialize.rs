@@ -112,8 +112,11 @@ pub(crate) fn materialize_source_discovery(
                     scenario,
                 ) {
                     let link_key = format!(
-                        "{}::{}::tests",
-                        scenario_record.symbol_id, production_artefact.symbol_id
+                        "{}::{}-{}::{}::tests",
+                        scenario_record.symbol_id,
+                        scenario_record.start_line,
+                        scenario_record.end_line,
+                        production_artefact.symbol_id
                     );
                     if !context.link_keys.insert(link_key) {
                         continue;
@@ -233,8 +236,11 @@ pub(crate) fn materialize_enumerated_scenarios(
             &synthetic_scenario,
         ) {
             let link_key = format!(
-                "{}::{}::tests",
-                scenario_record.symbol_id, production_artefact.symbol_id
+                "{}::{}-{}::{}::tests",
+                scenario_record.symbol_id,
+                scenario_record.start_line,
+                scenario_record.end_line,
+                production_artefact.symbol_id
             );
             if !context.link_keys.insert(link_key) {
                 continue;

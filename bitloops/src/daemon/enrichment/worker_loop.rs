@@ -19,6 +19,11 @@ use super::workplane::{
 };
 
 impl EnrichmentCoordinator {
+    #[cfg(test)]
+    pub(crate) async fn process_next_summary_batch_for_test(&self) -> Result<bool> {
+        self.process_next_summary_batch().await
+    }
+
     pub(crate) async fn run_loop(self: std::sync::Arc<Self>, pool: EnrichmentWorkerPool) {
         loop {
             match self.process_next_job(pool).await {
@@ -136,6 +141,10 @@ impl EnrichmentCoordinator {
             });
             self.save_state(&mut state)?;
         }
+        if flush_succeeded {
+            self.refresh_worker_capacity_after_enqueue();
+            self.notify.notify_waiters();
+        }
 
         match flush_result {
             Err(err) => {
@@ -196,6 +205,7 @@ impl EnrichmentCoordinator {
             else {
                 return Ok(false);
             };
+            state.last_embedding_claim_kind = Some(batch.representation_kind);
             state.last_action = Some("running:embeddings".to_string());
             self.save_state(&mut state)?;
             batch
@@ -252,6 +262,10 @@ impl EnrichmentCoordinator {
                 "retry_scheduled".to_string()
             });
             self.save_state(&mut state)?;
+        }
+        if flush_result.is_ok() {
+            self.refresh_worker_capacity_after_enqueue();
+            self.notify.notify_waiters();
         }
 
         if let Err(err) = flush_result {

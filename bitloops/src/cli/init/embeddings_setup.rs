@@ -1,7 +1,7 @@
 use std::io::{BufRead, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use crate::cli::embeddings::{
     EmbeddingsInstallState, EmbeddingsRuntime, inspect_embeddings_install_state,
@@ -12,8 +12,6 @@ use crate::cli::terminal_picker::{
 };
 
 use super::InitArgs;
-
-pub(crate) const NON_INTERACTIVE_INIT_EMBEDDINGS_SELECTION_ERROR: &str = "`bitloops init --install-default-daemon` requires an explicit embeddings choice when not running interactively. Pass `--embeddings-runtime local`, `--embeddings-runtime platform`, or `--no-embeddings`.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InitEmbeddingsSetupSelection {
@@ -41,10 +39,6 @@ pub(crate) fn should_install_embeddings_during_init(
         });
     }
 
-    if !args.install_default_daemon {
-        return Ok(InitEmbeddingsSetupSelection::Unchanged);
-    }
-
     if !matches!(
         inspect_embeddings_install_state(repo_root),
         EmbeddingsInstallState::NotConfigured
@@ -53,7 +47,7 @@ pub(crate) fn should_install_embeddings_during_init(
     }
 
     if !telemetry_consent::can_prompt_interactively() {
-        bail!(NON_INTERACTIVE_INIT_EMBEDDINGS_SELECTION_ERROR);
+        return Ok(InitEmbeddingsSetupSelection::Unchanged);
     }
 
     prompt_install_embeddings_setup_selection(out, input)

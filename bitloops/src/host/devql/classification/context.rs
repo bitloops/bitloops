@@ -458,7 +458,7 @@ fn build_node_context<V: RepoContentView>(
         .collect::<Vec<_>>();
     let frameworks = package_content
         .as_deref()
-        .map(parse_package_frameworks)
+        .map(|content| parse_package_frameworks(&package_path, content))
         .transpose()?
         .unwrap_or_default();
     let runtime_profile = frameworks
@@ -524,12 +524,12 @@ fn build_typescript_context<V: RepoContentView>(
         .map(|entry| join_dir_file(dir, entry))
         .collect::<Vec<_>>();
     if package_content.is_some() {
-        config_files.push(package_path);
+        config_files.push(package_path.clone());
     }
     config_files.extend(next_configs.iter().map(|entry| join_dir_file(dir, entry)));
     let frameworks = package_content
         .as_deref()
-        .map(parse_package_frameworks)
+        .map(|content| parse_package_frameworks(&package_path, content))
         .transpose()?
         .unwrap_or_default();
     let runtime_profile = frameworks
@@ -811,7 +811,7 @@ fn optional_string_list(map: &Map<String, Value>, key: &str) -> Result<Vec<Strin
 }
 
 fn parse_package_dependency_version(content: &str) -> Option<String> {
-    let parsed = serde_json::from_str::<Value>(content).ok()?;
+    let parsed = serde_json::from_str::<Value>(strip_utf8_bom(content)).ok()?;
     parsed
         .get("dependencies")
         .and_then(Value::as_object)
@@ -828,8 +828,9 @@ fn parse_package_dependency_version(content: &str) -> Option<String> {
         })
 }
 
-fn parse_package_frameworks(content: &str) -> Result<Vec<String>> {
-    let parsed = serde_json::from_str::<Value>(content).context("parsing package.json")?;
+fn parse_package_frameworks(package_path: &str, content: &str) -> Result<Vec<String>> {
+    let parsed = serde_json::from_str::<Value>(strip_utf8_bom(content))
+        .with_context(|| format!("parsing package.json at `{package_path}`"))?;
     let mut frameworks = Vec::new();
     for dependency in ["react", "next"] {
         let version = parsed
@@ -849,6 +850,10 @@ fn parse_package_frameworks(content: &str) -> Result<Vec<String>> {
         }
     }
     Ok(sorted_dedup(frameworks))
+}
+
+fn strip_utf8_bom(content: &str) -> &str {
+    content.strip_prefix('\u{feff}').unwrap_or(content)
 }
 
 fn parse_rust_toolchain_channel(content: &str) -> Option<String> {

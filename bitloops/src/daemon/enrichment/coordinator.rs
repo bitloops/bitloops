@@ -25,6 +25,7 @@ pub struct EnrichmentCoordinator {
     pub(crate) runtime_store: DaemonSqliteRuntimeStore,
     pub(crate) workplane_store: DaemonSqliteRuntimeStore,
     pub(crate) daemon_config_root: PathBuf,
+    pub(crate) self_ref: OnceLock<std::sync::Weak<EnrichmentCoordinator>>,
     pub(crate) lock: Mutex<()>,
     pub(crate) notify: Notify,
     pub(crate) state_initialised: AtomicBool,
@@ -51,6 +52,7 @@ impl EnrichmentCoordinator {
                         )
                         .expect("opening repo runtime workplane store for enrichment queue"),
                         daemon_config_root: daemon_config.config_root.clone(),
+                        self_ref: OnceLock::new(),
                         lock: Mutex::new(()),
                         notify: Notify::new(),
                         state_initialised: AtomicBool::new(false),
@@ -73,6 +75,7 @@ impl EnrichmentCoordinator {
     }
 
     pub(crate) fn ensure_started(self: &Arc<Self>) {
+        let _ = self.self_ref.set(Arc::downgrade(self));
         if !self.state_initialised.swap(true, Ordering::AcqRel) {
             self.ensure_state_file();
             let _ = migrate_legacy_semantic_workplane_rows(&self.workplane_store);
@@ -91,6 +94,16 @@ impl EnrichmentCoordinator {
         }
         self.ensure_maintenance_loop();
         self.ensure_worker_capacity();
+    }
+
+    pub(crate) fn refresh_worker_capacity_after_enqueue(&self) {
+        let Some(weak) = self.self_ref.get() else {
+            return;
+        };
+        let Some(coordinator) = weak.upgrade() else {
+            return;
+        };
+        coordinator.ensure_worker_capacity();
     }
 
     fn ensure_maintenance_loop(self: &Arc<Self>) {

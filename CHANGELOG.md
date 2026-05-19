@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - **Architecture role status can inspect runtime queue state read-only**: `bitloops devql architecture roles status` reads queued adjudication jobs and review items without requiring current-state classification context.
+- **Interactive init now uses the same optional setup prompt path with or without the default daemon** (`CLI-1872`): `bitloops init` now offers embeddings, semantic summaries, and context guidance setup when those features are unconfigured, matching `bitloops init --install-default-daemon`; the daemon flag now only adds default-daemon bootstrap behavior.
+- **DevQL sync now handles Vite's package fixtures and duplicate test names** (`CLI-1858`, `CLI-1859`, `CLI-1866`): project-aware classification now accepts `package.json` files with a leading UTF-8 BOM and reports the package path on parse failures. Test-harness materialization now keeps semantic `symbol_id`s independent of source line spans, collapses repeated source suite containers into one logical suite, then applies duplicate-aware tokens when repeated case or doctest identities collide. Current-state sync reuses prior duplicate tokens by source order so legal repeated Vitest `it` names, Gitea tests, NestJS specs, and Rust doctests no longer collapse to the same test artefact ID when line numbers shift.
 
 ## [0.0.28] - 2026-05-18
 

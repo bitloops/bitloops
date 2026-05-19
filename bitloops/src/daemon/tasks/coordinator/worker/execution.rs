@@ -560,6 +560,7 @@ mod tests {
                 workplane_store: DaemonSqliteRuntimeStore::open_at(runtime_db_path)
                     .expect("open test workplane store"),
                 daemon_config_root: config_root.clone(),
+                self_ref: std::sync::OnceLock::new(),
                 lock: Mutex::new(()),
                 notify: Notify::new(),
                 state_initialised: AtomicBool::new(false),
