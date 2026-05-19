@@ -280,6 +280,21 @@ fn prioritize_embedding_mailbox_repo_candidates(
             preferred_non_summary_kind,
         ));
     }
+    if has_summary_overlap_candidates && has_summary_candidates && has_non_summary_candidates {
+        let leased_summary_batches =
+            leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Summary)?;
+        let leased_code_batches =
+            leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Code)?;
+        let leased_identity_batches =
+            leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Identity)?;
+        return Ok(prioritize_multi_worker_summary_overlap_candidates(
+            values,
+            preferred_non_summary_kind,
+            leased_summary_batches,
+            leased_code_batches.saturating_add(leased_identity_batches),
+            embeddings_budget,
+        ));
+    }
     let can_prioritize_summary = if has_summary_candidates && has_non_summary_candidates {
         let summary_priority_worker_limit = summary_embedding_priority_worker_limit(
             embeddings_budget,
@@ -322,6 +337,50 @@ fn prioritize_multi_worker_candidates(
     prioritized
 }
 
+fn prioritize_multi_worker_summary_overlap_candidates(
+    values: Vec<EmbeddingMailboxRepoCandidate>,
+    preferred_non_summary_kind: Option<EmbeddingRepresentationKind>,
+    leased_summary_batches: usize,
+    leased_non_summary_batches: usize,
+    embeddings_budget: usize,
+) -> Vec<EmbeddingMailboxRepoCandidate> {
+    let CandidateBuckets {
+        summary,
+        preferred_non_summary,
+        fallback_non_summary,
+    } = split_embedding_candidates(values, preferred_non_summary_kind);
+    let has_non_summary = !(preferred_non_summary.is_empty() && fallback_non_summary.is_empty());
+    let summary_lease_limit = summary_embedding_priority_worker_limit(embeddings_budget, true);
+    let non_summary_lease_limit = embeddings_budget.saturating_sub(summary_lease_limit);
+    let total_leased_batches = leased_summary_batches.saturating_add(leased_non_summary_batches);
+    let should_start_summary_first = leased_summary_batches == 0 && total_leased_batches == 0;
+    let should_fill_non_summary =
+        has_non_summary && leased_non_summary_batches < non_summary_lease_limit;
+    let should_reclaim_summary =
+        leased_summary_batches < summary_lease_limit && !should_fill_non_summary;
+
+    let mut prioritized = Vec::new();
+    if should_start_summary_first {
+        prioritized.extend(summary);
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+        return prioritized;
+    }
+    if should_fill_non_summary {
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+        prioritized.extend(summary);
+        return prioritized;
+    }
+    if should_reclaim_summary {
+        prioritized.extend(summary);
+        prioritized.extend(preferred_non_summary);
+        prioritized.extend(fallback_non_summary);
+        return prioritized;
+    }
+    prioritized
+}
+
 fn prioritize_single_worker_summary_overlap_candidates(
     values: Vec<EmbeddingMailboxRepoCandidate>,
     last_embedding_claim_kind: Option<EmbeddingRepresentationKind>,
@@ -356,14 +415,13 @@ struct CandidateBuckets {
 
 fn summary_embedding_priority_worker_limit(
     embeddings_budget: usize,
-    has_active_summary_overlap: bool,
+    _has_active_summary_overlap: bool,
 ) -> usize {
     if embeddings_budget <= 1 {
         return 0;
     }
-    if has_active_summary_overlap {
-        return embeddings_budget / 2;
-    }
+    // Keep summary overlap alive without letting summary batches claim multiple
+    // priority slots ahead of code and identity work.
     1
 }
 

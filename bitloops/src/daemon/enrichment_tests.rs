@@ -2183,9 +2183,9 @@ fn embedding_mailbox_batch_claim_balances_code_and_identity_after_summary_priori
         claimed_kinds,
         vec![
             "summary".to_string(),
-            "summary".to_string(),
             "code".to_string(),
             "identity".to_string(),
+            "code".to_string(),
         ],
     );
 }
@@ -2470,8 +2470,8 @@ fn embedding_mailbox_batch_claim_prioritises_summary_items_with_multiple_workers
 }
 
 #[test]
-fn embedding_mailbox_batch_claim_reserves_half_embeddings_pool_for_non_summary_work_during_summary_overlap()
- {
+fn embedding_mailbox_batch_claim_reserves_non_summary_overlap_capacity_before_extra_summary_claims()
+{
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
     let config_path = configure_summary_refresh_and_embeddings_for_repo(&target, "local_code");
@@ -2486,13 +2486,12 @@ fn embedding_mailbox_batch_claim_reserves_half_embeddings_pool_for_non_summary_w
     )
     .expect("write test daemon config with explicit embedding worker count");
 
-    let summary_priority_slots =
+    let summary_priority_slots = 1;
+    assert!(
         super::effective_worker_budgets(&coordinator.workplane_store, &target.config_root)
             .expect("load effective worker budgets")
             .embeddings
-            / 2;
-    assert!(
-        summary_priority_slots > 0,
+            > summary_priority_slots,
         "test requires at least two embeddings workers"
     );
 
@@ -4077,6 +4076,68 @@ async fn enqueue_embeddings_refreshes_worker_capacity_for_active_repo_policy() {
             .embeddings,
         4,
         "enqueueing active repo-local embedding work should refresh the worker budget",
+    );
+}
+
+#[tokio::test]
+async fn current_state_consumer_completion_refreshes_worker_capacity_for_direct_enqueue() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let coordinator = Arc::new(coordinator);
+    let _config_path = configure_repo_local_remote_embeddings_for_repo(&target, "platform_code");
+
+    coordinator.ensure_started();
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        1,
+        "startup should begin with the fallback daemon-config embedding worker budget",
+    );
+
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "code-item-1",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("artefact-001"),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        1,
+        "direct workplane writes should not refresh worker capacity on their own",
+    );
+
+    crate::daemon::capability_events::refresh_enrichment_capacity_after_current_state_consumer_completion(
+        &coordinator,
+    );
+
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        4,
+        "the current-state completion hook should promote repo-local remote embeddings capacity before the fresh backlog starts draining",
     );
 }
 

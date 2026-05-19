@@ -25,6 +25,8 @@ pub use self::types::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use self::instance::test_shared_instance_at;
+#[cfg(test)]
+pub(crate) use self::worker::refresh_enrichment_capacity_after_current_state_consumer_completion;
 
 // Items re-exported here so `coordinator_logging_tests.rs` (declared above as a
 // child of this facade) can keep using `use super::*;`.

@@ -10,6 +10,8 @@ mod tests;
 
 pub(crate) use self::coordinator::SyncGenerationInput;
 #[cfg(test)]
+pub(crate) use self::coordinator::refresh_enrichment_capacity_after_current_state_consumer_completion;
+#[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use self::coordinator::test_shared_instance_at;
 pub use self::coordinator::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};

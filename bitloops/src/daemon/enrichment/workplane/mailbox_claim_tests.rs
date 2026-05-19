@@ -354,6 +354,170 @@ fn multi_worker_summary_overlap_leases_summary_code_and_identity_in_parallel() -
 }
 
 #[test]
+fn multi_worker_summary_overlap_limits_summary_priority_to_one_worker_slot() -> Result<()> {
+    let _guard = enter_process_state(
+        None,
+        &[("BITLOOPS_SEMANTIC_CLONES_EMBEDDING_WORKERS", Some("4"))],
+    );
+    let (_temp, repo_store, workplane_store, runtime_store) = open_test_stores()?;
+
+    insert_active_summary_refresh_item(&workplane_store, &repo_store, "summary-refresh-1", 1)?;
+    insert_embedding_mailbox_item(
+        &workplane_store,
+        &repo_store,
+        "code-batch-1",
+        EmbeddingRepresentationKind::Code,
+        SemanticMailboxItemStatus::Pending,
+        10,
+    )?;
+    for index in 0..33 {
+        insert_embedding_mailbox_item(
+            &workplane_store,
+            &repo_store,
+            &format!("summary-batch-{index:02}"),
+            EmbeddingRepresentationKind::Summary,
+            SemanticMailboxItemStatus::Pending,
+            20 + index,
+        )?;
+    }
+    insert_embedding_mailbox_item(
+        &workplane_store,
+        &repo_store,
+        "identity-batch-1",
+        EmbeddingRepresentationKind::Identity,
+        SemanticMailboxItemStatus::Pending,
+        60,
+    )?;
+    assert_no_blocked_mailboxes(&workplane_store, &runtime_store)?;
+
+    let first = claim_embedding_mailbox_batch(
+        &workplane_store,
+        &runtime_store,
+        &EnrichmentControlState::default(),
+    )?
+    .expect("expected first embedding claim");
+    assert_eq!(
+        first.representation_kind,
+        EmbeddingRepresentationKind::Summary
+    );
+
+    let second = claim_embedding_mailbox_batch(
+        &workplane_store,
+        &runtime_store,
+        &EnrichmentControlState::default(),
+    )?
+    .expect("expected second embedding claim");
+    assert_eq!(
+        second.representation_kind,
+        EmbeddingRepresentationKind::Code,
+        "only one worker slot should prioritize summary while summary refresh is active",
+    );
+
+    let third = claim_embedding_mailbox_batch(
+        &workplane_store,
+        &runtime_store,
+        &EnrichmentControlState::default(),
+    )?
+    .expect("expected third embedding claim");
+    assert_eq!(
+        third.representation_kind,
+        EmbeddingRepresentationKind::Identity,
+        "remaining overlap workers should move to non-summary embeddings before another summary batch",
+    );
+    Ok(())
+}
+
+#[test]
+fn multi_worker_summary_overlap_refills_non_summary_before_reclaiming_summary_slot() -> Result<()> {
+    let _guard = enter_process_state(
+        None,
+        &[("BITLOOPS_SEMANTIC_CLONES_EMBEDDING_WORKERS", Some("4"))],
+    );
+    let (_temp, repo_store, workplane_store, runtime_store) = open_test_stores()?;
+
+    insert_active_summary_refresh_item(&workplane_store, &repo_store, "summary-refresh-1", 1)?;
+    for index in 0..64 {
+        insert_embedding_mailbox_item(
+            &workplane_store,
+            &repo_store,
+            &format!("code-batch-{index:02}"),
+            EmbeddingRepresentationKind::Code,
+            SemanticMailboxItemStatus::Pending,
+            10 + index,
+        )?;
+    }
+    for index in 0..32 {
+        insert_embedding_mailbox_item(
+            &workplane_store,
+            &repo_store,
+            &format!("identity-batch-{index:02}"),
+            EmbeddingRepresentationKind::Identity,
+            SemanticMailboxItemStatus::Pending,
+            100 + index,
+        )?;
+    }
+    for index in 0..64 {
+        insert_embedding_mailbox_item(
+            &workplane_store,
+            &repo_store,
+            &format!("summary-batch-{index:02}"),
+            EmbeddingRepresentationKind::Summary,
+            SemanticMailboxItemStatus::Pending,
+            200 + index,
+        )?;
+    }
+    assert_no_blocked_mailboxes(&workplane_store, &runtime_store)?;
+
+    let first = claim_embedding_mailbox_batch(
+        &workplane_store,
+        &runtime_store,
+        &EnrichmentControlState::default(),
+    )?
+    .expect("expected first embedding claim");
+    assert_eq!(
+        first.representation_kind,
+        EmbeddingRepresentationKind::Summary
+    );
+
+    let second = claim_embedding_mailbox_batch(
+        &workplane_store,
+        &runtime_store,
+        &EnrichmentControlState::default(),
+    )?
+    .expect("expected second embedding claim");
+    assert_eq!(
+        second.representation_kind,
+        EmbeddingRepresentationKind::Code
+    );
+
+    let third = claim_embedding_mailbox_batch(
+        &workplane_store,
+        &runtime_store,
+        &EnrichmentControlState::default(),
+    )?
+    .expect("expected third embedding claim");
+    assert_eq!(
+        third.representation_kind,
+        EmbeddingRepresentationKind::Identity
+    );
+
+    delete_embedding_batch(&workplane_store, &first.lease_token)?;
+
+    let fourth = claim_embedding_mailbox_batch(
+        &workplane_store,
+        &runtime_store,
+        &EnrichmentControlState::default(),
+    )?
+    .expect("expected fourth embedding claim");
+    assert_eq!(
+        fourth.representation_kind,
+        EmbeddingRepresentationKind::Code,
+        "summary should not reclaim its freed slot while non-summary overlap capacity is still below three leased batches",
+    );
+    Ok(())
+}
+
+#[test]
 fn single_worker_without_active_summary_refresh_keeps_fifo_code_backlog() -> Result<()> {
     let _guard = enter_process_state(
         None,

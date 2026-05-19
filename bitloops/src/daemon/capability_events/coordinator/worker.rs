@@ -12,6 +12,7 @@ use crate::daemon::capability_events::plan::{
     build_execution_plan, find_current_state_consumer, validate_consumer_result,
 };
 use crate::daemon::capability_events::queue::{StoredRunRecord, load_runs, sql_i64};
+use crate::daemon::enrichment::EnrichmentCoordinator;
 use crate::daemon::types::{
     CapabilityEventRunRecord, CapabilityEventRunStatus, unix_timestamp_now,
 };
@@ -196,6 +197,9 @@ impl CapabilityEventCoordinator {
         match outcome {
             Ok(Ok(result)) => match validate_consumer_result(&plan.request, &result) {
                 Ok(()) => {
+                    refresh_enrichment_capacity_after_current_state_consumer_completion(
+                        &EnrichmentCoordinator::shared(),
+                    );
                     log::info!(
                         "current-state consumer completed: repo_id={} capability_id={} consumer_id={} reconcile_mode={} from_generation_seq={} to_generation_seq={} metrics={}",
                         plan.record.repo_id,
@@ -221,6 +225,12 @@ impl CapabilityEventCoordinator {
             Err(_) => terminal_or_retry(plan.record, anyhow!("current-state consumer panicked")),
         }
     }
+}
+
+pub(crate) fn refresh_enrichment_capacity_after_current_state_consumer_completion(
+    enrichment: &Arc<EnrichmentCoordinator>,
+) {
+    enrichment.refresh_worker_capacity_after_enqueue();
 }
 
 fn reconcile_mode_for_log(mode: ReconcileMode) -> &'static str {
