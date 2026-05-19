@@ -6,9 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **C++ language support in the host-managed language adapter runtime**: added a built-in `cpp-language-pack` with extension-host profile resolution (`.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`, `.h++`), typed `CppKind` language kinds, canonical mappings, C++ artefact extraction, dependency-edge extraction, and source-level C++ `LanguageTestSupport` discovery. C++ now participates in built-in language adapter registration, readiness/registry reporting, DevQL language detection, sync cache extraction/materialization, and cached-kind parsing alongside existing Rust/TS-JS/Python/Go/Java/C#/PHP support.
+
 ### Fixed
 
 - **Large-repo init embeddings now avoid several avoidable SQLite contention paths**: Bitloops no longer re-initializes the runtime SQLite schema on every open, managed embeddings bootstrap no longer stays blocked behind stale bootstrap state, embedding commits release relational writes before runtime-mailbox finalization, clone rebuild waits until a repo's embedding backlog drains, and sqlite-vec current-row mirror writes are batched per dimension instead of per artefact. Together these changes keep code embeddings progressing on larger repos, reduce `runtime.sqlite` / `relational.db` lock contention during init backfills, and prevent clone rebuild from competing with active embedding work.
+
+## [0.0.29] - 2026-05-19
+
+- **WorkOS auth token storage now falls back on headless Linux** (`CLI-1875`): when the platform secure store is unavailable, such as a Linux server without DBus Secret Service, Bitloops now persists auth tokens to a private file-backed fallback store instead of aborting sign-in.
+- **Interactive init now uses the same optional setup prompt path with or without the default daemon** (`CLI-1872`): `bitloops init` now offers embeddings, semantic summaries, and context guidance setup when those features are unconfigured, matching `bitloops init --install-default-daemon`; the daemon flag now only adds default-daemon bootstrap behavior.
 - **DevQL sync now handles Vite's package fixtures and duplicate test names** (`CLI-1858`, `CLI-1859`, `CLI-1866`): project-aware classification now accepts `package.json` files with a leading UTF-8 BOM and reports the package path on parse failures. Test-harness materialization now keeps semantic `symbol_id`s independent of source line spans, collapses repeated source suite containers into one logical suite, then applies duplicate-aware tokens when repeated case or doctest identities collide. Current-state sync reuses prior duplicate tokens by source order so legal repeated Vitest `it` names, Gitea tests, NestJS specs, and Rust doctests no longer collapse to the same test artefact ID when line numbers shift.
 
 ## [0.0.28] - 2026-05-18
