@@ -1780,6 +1780,10 @@ WHERE repo_id = '{}' AND path = '{}'",
     assert_eq!(prepared.expanded_count, 1);
     assert!(prepared.commit.replacement_backfill_item.is_none());
     assert!(
+        prepared.commit.clone_rebuild_signal.is_some(),
+        "final explicit repo-backfill chunk should trigger clone rebuild once embeddings are ready"
+    );
+    assert!(
         !prepared.commit.embedding_statements.is_empty(),
         "requested artefact should still produce embedding work"
     );
@@ -1876,6 +1880,10 @@ async fn prepare_embedding_mailbox_batch_with_explicit_repo_backfill_ids_keeps_r
         .replacement_backfill_item
         .as_ref()
         .expect("remaining explicit repo backfill ids should stay queued");
+    assert!(
+        prepared.commit.clone_rebuild_signal.is_none(),
+        "partial repo-backfill chunks should defer clone rebuild until the last chunk"
+    );
     assert_eq!(
         replacement.payload_json,
         Some(
@@ -2106,6 +2114,10 @@ WHERE repo_id = '{}' AND path = '{}'",
         super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE
     );
     assert!(prepared.commit.replacement_backfill_item.is_some());
+    assert!(
+        prepared.commit.clone_rebuild_signal.is_none(),
+        "repo-wide backfill should defer clone rebuild while more backfill remains"
+    );
 }
 
 #[tokio::test]
@@ -2189,6 +2201,16 @@ async fn prepare_embedding_mailbox_batch_persists_multiple_rows_from_one_batch()
     assert!(
         prepared_sql.contains("vec_f32("),
         "embedding batches should mirror current rows into sqlite-vec tables"
+    );
+    assert_eq!(
+        prepared
+            .commit
+            .embedding_statements
+            .iter()
+            .filter(|sql| sql.contains("DELETE FROM semantic_embedding_current_vec_dim_3"))
+            .count(),
+        1,
+        "repo-backfill embedding batches should batch sqlite-vec deletes per dimension"
     );
     assert!(
         !prepared_sql.contains("DELETE FROM symbol_embeddings_current"),

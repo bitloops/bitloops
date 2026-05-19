@@ -6,8 +6,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use tokio::sync::oneshot;
 
-use super::commit::{execute_embedding_commit, execute_summary_commit};
-use super::runtime_store::open_semantic_writer_connection;
+use super::commit::{
+    execute_embedding_relational_commit, execute_embedding_runtime_finalization,
+    execute_summary_commit,
+};
+use super::runtime_store::{
+    open_semantic_writer_connection, open_semantic_writer_relational_connection,
+    open_semantic_writer_runtime_connection,
+};
 use super::{
     CommitEmbeddingBatchRequest, CommitSummaryBatchRequest, SummaryCommitFailure,
     SummaryCommitPhase, SummaryCommitPhaseTimings, SummaryCommitReport,
@@ -175,9 +181,18 @@ fn writer_loop(
     relational_db_path: PathBuf,
     receiver: Receiver<SemanticWriterRequest>,
 ) {
-    let mut connection = open_semantic_writer_connection(&runtime_db_path, &relational_db_path)
-        .map_err(|err| format!("{err:#}"))
-        .ok();
+    let mut summary_connection =
+        open_semantic_writer_connection(&runtime_db_path, &relational_db_path)
+            .map_err(|err| format!("{err:#}"))
+            .ok();
+    let mut embedding_relational_connection =
+        open_semantic_writer_relational_connection(&relational_db_path)
+            .map_err(|err| format!("{err:#}"))
+            .ok();
+    let mut embedding_runtime_connection =
+        open_semantic_writer_runtime_connection(&runtime_db_path)
+            .map_err(|err| format!("{err:#}"))
+            .ok();
     let mut pending = PendingSemanticWriterRequests::default();
     loop {
         if pending.is_empty() {
@@ -190,8 +205,17 @@ fn writer_loop(
         let Some(request) = pending.pop_next() else {
             continue;
         };
-        match (&mut connection, request) {
-            (Some(connection), SemanticWriterRequest::Summary { request, response }) => {
+        match request {
+            SemanticWriterRequest::Summary { request, response } => {
+                let Some(connection) = summary_connection.as_mut() else {
+                    let _ = response.send(Err(SummaryCommitFailure::new(
+                        SummaryCommitPhase::TransactionStart,
+                        SummaryCommitPhaseTimings::default(),
+                        false,
+                        anyhow!("opening semantic writer connection failed"),
+                    )));
+                    continue;
+                };
                 let result = with_semantic_writer_sqlite_locks_map(
                     &runtime_db_path,
                     &relational_db_path,
@@ -219,35 +243,41 @@ fn writer_loop(
                 });
                 let _ = response.send(result);
             }
-            (Some(connection), SemanticWriterRequest::Embedding { request, response }) => {
-                let result = with_semantic_writer_sqlite_locks(
-                    &runtime_db_path,
-                    &relational_db_path,
-                    || execute_embedding_commit(connection, &request),
-                )
-                .map_err(|err| {
-                    format!(
-                        "committing semantic embedding batch for repo `{}`: {err:#}",
-                        request.repo.repo_id
-                    )
-                });
+            SemanticWriterRequest::Embedding { request, response } => {
+                let Some(relational_connection) = embedding_relational_connection.as_mut() else {
+                    let _ = response.send(Err(
+                        "opening semantic embedding relational connection failed".to_string(),
+                    ));
+                    continue;
+                };
+                let Some(runtime_connection) = embedding_runtime_connection.as_mut() else {
+                    let _ = response.send(Err(
+                        "opening semantic embedding runtime connection failed".to_string(),
+                    ));
+                    continue;
+                };
+                let result =
+                    crate::storage::sqlite::with_sqlite_write_lock(&relational_db_path, || {
+                        execute_embedding_relational_commit(relational_connection, &request)
+                    })
+                    .and_then(|()| {
+                        crate::storage::sqlite::with_sqlite_write_lock(&runtime_db_path, || {
+                            execute_embedding_runtime_finalization(runtime_connection, &request)
+                        })
+                    })
+                    .map_err(|err| {
+                        format!(
+                            "committing semantic embedding batch for repo `{}`: {err:#}",
+                            request.repo.repo_id
+                        )
+                    });
                 let _ = response.send(result);
-            }
-            (None, SemanticWriterRequest::Summary { response, .. }) => {
-                let _ = response.send(Err(SummaryCommitFailure::new(
-                    SummaryCommitPhase::TransactionStart,
-                    SummaryCommitPhaseTimings::default(),
-                    false,
-                    anyhow!("opening semantic writer connection failed"),
-                )));
-            }
-            (None, SemanticWriterRequest::Embedding { response, .. }) => {
-                let _ = response.send(Err("opening semantic writer connection failed".to_string()));
             }
         }
     }
 }
 
+#[cfg(test)]
 pub(super) fn with_semantic_writer_sqlite_locks<T>(
     runtime_db_path: &Path,
     relational_db_path: &Path,
