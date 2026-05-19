@@ -9,10 +9,20 @@ fn open_commit_checkpoint_mapping_store(
     let relational = crate::host::relational_store::DefaultRelationalStore::
         open_primary_for_repo_root_preferring_bound_config(repo_root)
         .context("opening relational store for commit_checkpoints")?;
-    initialise_checkpoint_relational_roles(&relational)?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for commit_checkpoints")?
         .repo_id;
+    Ok((relational, repo_id))
+}
+
+fn open_commit_checkpoint_mapping_store_for_write(
+    repo_root: &Path,
+) -> Result<(
+    crate::host::relational_store::DefaultRelationalStore,
+    String,
+)> {
+    let (relational, repo_id) = open_commit_checkpoint_mapping_store(repo_root)?;
+    initialise_checkpoint_relational_roles(&relational)?;
     Ok((relational, repo_id))
 }
 
@@ -29,15 +39,15 @@ pub(crate) fn commit_has_checkpoint_mapping(repo_root: &Path, commit_sha: &str) 
     let rows = query_checkpoint_metadata_rows(&relational, &sql);
     match rows {
         Ok(hit) => Ok(!hit.is_empty()),
-        Err(err)
-            if err
-                .to_string()
-                .contains("no such table: commit_checkpoints") =>
-        {
-            Ok(false)
-        }
+        Err(err) if is_missing_commit_checkpoints_table_error(&err) => Ok(false),
         Err(err) => Err(err),
     }
+}
+
+fn is_missing_commit_checkpoints_table_error(err: &anyhow::Error) -> bool {
+    let message = err.to_string();
+    message.contains("no such table: commit_checkpoints")
+        || message.contains("relation \"commit_checkpoints\" does not exist")
 }
 
 pub fn insert_commit_checkpoint_mapping(
@@ -45,7 +55,7 @@ pub fn insert_commit_checkpoint_mapping(
     commit_sha: &str,
     checkpoint_id: &str,
 ) -> Result<()> {
-    let (relational, repo_id) = open_commit_checkpoint_mapping_store(repo_root)?;
+    let (relational, repo_id) = open_commit_checkpoint_mapping_store_for_write(repo_root)?;
     exec_checkpoint_metadata_statements(
         &relational,
         &[build_insert_commit_checkpoint_mapping_sql(

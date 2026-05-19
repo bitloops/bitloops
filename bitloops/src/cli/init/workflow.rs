@@ -847,13 +847,13 @@ fn runtime_summary_bootstrap_request_from_plan(
         }
         PreparedSummarySetupAction::ConfigureCloud {
             gateway_url_override,
-            api_key_env: _,
+            api_key_env,
         } => crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
             action: "configure_cloud".to_string(),
             message: None,
             model_name: None,
             gateway_url_override: gateway_url_override.clone(),
-            api_key_env: None,
+            api_key_env: api_key_env.clone(),
         },
     }
 }
