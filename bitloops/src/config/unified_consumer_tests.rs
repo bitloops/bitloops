@@ -507,6 +507,210 @@ summary_generation = "repo_summary"
 }
 
 #[test]
+fn summary_only_repo_semantic_policy_preserves_daemon_embedding_bindings() {
+    let (repo, _daemon) = create_repo_with_daemon_config(
+        r#"
+[semantic_clones]
+summary_mode = "auto"
+embedding_mode = "refresh_on_upgrade"
+
+[semantic_clones.inference]
+summary_generation = "daemon_generation"
+code_embeddings = "daemon_code"
+summary_embeddings = "daemon_summary_embedding"
+
+[inference.runtimes.bitloops_local_embeddings]
+command = "bitloops-local-embeddings"
+
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+
+[inference.profiles.daemon_generation]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "daemon-generation-model"
+
+[inference.profiles.daemon_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "daemon-code-model"
+
+[inference.profiles.daemon_summary_embedding]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "daemon-summary-embedding-model"
+"#,
+    );
+    fs::write(
+        repo.path().join(REPO_POLICY_FILE_NAME),
+        r#"
+[semantic_clones]
+summary_mode = "off"
+"#,
+    )
+    .expect("write repo semantic policy");
+
+    let capability = resolve_inference_capability_config_for_repo(repo.path());
+
+    assert_eq!(
+        capability.semantic_clones.summary_mode,
+        SemanticSummaryMode::Off
+    );
+    assert_eq!(
+        capability.semantic_clones.inference.summary_generation,
+        None
+    );
+    assert_eq!(
+        capability.semantic_clones.embedding_mode,
+        SemanticCloneEmbeddingMode::RefreshOnUpgrade
+    );
+    assert_eq!(
+        capability
+            .semantic_clones
+            .inference
+            .code_embeddings
+            .as_deref(),
+        Some("daemon_code")
+    );
+    assert_eq!(
+        capability
+            .semantic_clones
+            .inference
+            .summary_embeddings
+            .as_deref(),
+        Some("daemon_summary_embedding")
+    );
+    assert!(capability.inference.profiles.contains_key("daemon_code"));
+    assert!(
+        capability
+            .inference
+            .profiles
+            .contains_key("daemon_summary_embedding")
+    );
+}
+
+#[test]
+fn embedding_only_repo_semantic_policy_allows_summary_mode_env_override() {
+    let (repo, _daemon) = create_repo_with_daemon_config(
+        r#"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "daemon_code"
+
+[inference.runtimes.bitloops_local_embeddings]
+command = "bitloops-local-embeddings"
+
+[inference.profiles.daemon_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "daemon-code-model"
+"#,
+    );
+    fs::write(
+        repo.path().join(REPO_POLICY_FILE_NAME),
+        r#"
+[semantic_clones]
+embedding_mode = "off"
+"#,
+    )
+    .expect("write repo semantic policy");
+
+    crate::test_support::process_state::with_env_var(
+        "BITLOOPS_SEMANTIC_CLONES_SUMMARY_MODE",
+        Some("off"),
+        || {
+            let semantic_clones = resolve_semantic_clones_config_for_repo(repo.path());
+            assert_eq!(semantic_clones.summary_mode, SemanticSummaryMode::Off);
+            assert_eq!(
+                semantic_clones.embedding_mode,
+                SemanticCloneEmbeddingMode::Off
+            );
+        },
+    );
+}
+
+#[test]
+fn invalid_repo_summary_mode_preserves_daemon_semantic_config() {
+    let (repo, _daemon) = create_repo_with_daemon_config(
+        r#"
+[semantic_clones]
+summary_mode = "auto"
+embedding_mode = "refresh_on_upgrade"
+
+[semantic_clones.inference]
+summary_generation = "daemon_generation"
+code_embeddings = "daemon_code"
+
+[inference.runtimes.bitloops_local_embeddings]
+command = "bitloops-local-embeddings"
+
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+
+[inference.profiles.daemon_generation]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "daemon-generation-model"
+
+[inference.profiles.daemon_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "daemon-code-model"
+"#,
+    );
+    fs::write(
+        repo.path().join(REPO_POLICY_FILE_NAME),
+        r#"
+[semantic_clones]
+summary_mode = "eventually"
+"#,
+    )
+    .expect("write repo semantic policy");
+
+    let capability = resolve_inference_capability_config_for_repo(repo.path());
+
+    assert_eq!(
+        capability.semantic_clones.summary_mode,
+        SemanticSummaryMode::Auto
+    );
+    assert_eq!(
+        capability.semantic_clones.embedding_mode,
+        SemanticCloneEmbeddingMode::RefreshOnUpgrade
+    );
+    assert_eq!(
+        capability
+            .semantic_clones
+            .inference
+            .summary_generation
+            .as_deref(),
+        Some("daemon_generation")
+    );
+    assert_eq!(
+        capability
+            .semantic_clones
+            .inference
+            .code_embeddings
+            .as_deref(),
+        Some("daemon_code")
+    );
+    assert!(
+        capability
+            .inference
+            .profiles
+            .contains_key("daemon_generation")
+    );
+    assert!(capability.inference.profiles.contains_key("daemon_code"));
+}
+
+#[test]
 fn repo_semantic_policy_without_mode_inherits_daemon_mode_with_profile_bindings() {
     let (repo, _daemon) = create_repo_with_daemon_config(
         r#"
