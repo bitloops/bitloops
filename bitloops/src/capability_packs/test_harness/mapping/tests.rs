@@ -1308,7 +1308,10 @@ fn execute_silently_ignores_non_utf8_python_test_file_and_continues() {
             .any(|artefact| artefact.path == "tests/test_big5.py"),
         "non-UTF-8 file should be ignored"
     );
-    assert!(output.issues.is_empty(), "non-UTF-8 file should not create issues");
+    assert!(
+        output.issues.is_empty(),
+        "non-UTF-8 file should not create issues"
+    );
     assert!(
         logs.is_empty(),
         "non-UTF-8 file should not emit discovery warnings: {logs:?}"
@@ -1358,7 +1361,10 @@ fn execute_ignores_xlsx_fixture_inside_typescript_tests_directory() {
         output.stats.files, 1,
         "xlsx fixture should not count as a discovered file"
     );
-    assert!(output.issues.is_empty(), "xlsx fixture should not create issues");
+    assert!(
+        output.issues.is_empty(),
+        "xlsx fixture should not create issues"
+    );
     assert!(
         logs.is_empty(),
         "xlsx fixture should not emit discovery warnings: {logs:?}"
@@ -1408,7 +1414,10 @@ fn execute_ignores_png_fixture_inside_cpp_tests_directory() {
         output.stats.files, 1,
         "png fixture should not count as a discovered file"
     );
-    assert!(output.issues.is_empty(), "png fixture should not create issues");
+    assert!(
+        output.issues.is_empty(),
+        "png fixture should not create issues"
+    );
     assert!(
         logs.is_empty(),
         "png fixture should not emit discovery warnings: {logs:?}"

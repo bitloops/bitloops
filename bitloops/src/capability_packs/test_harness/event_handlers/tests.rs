@@ -280,11 +280,8 @@ async fn merged_delta_silently_ignores_non_utf8_test_files() -> Result<()> {
         artefact_removals: Vec::new(),
     };
 
-    let (result, logs) = capture_logs_async(TestHarnessCurrentStateConsumer.reconcile(
-        &request,
-        &context,
-    ))
-    .await;
+    let (result, logs) =
+        capture_logs_async(TestHarnessCurrentStateConsumer.reconcile(&request, &context)).await;
     result?;
 
     assert!(
