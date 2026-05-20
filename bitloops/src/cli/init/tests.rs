@@ -6550,6 +6550,9 @@ fn choose_final_setup_options_renders_final_setup_prompt() {
             InitFinalSetupSelection {
                 sync: true,
                 ingest: true,
+                code_embeddings: true,
+                summaries: false,
+                summary_embeddings: false,
                 telemetry: false,
                 auto_start_daemon: false,
             }
@@ -6560,6 +6563,97 @@ fn choose_final_setup_options_renders_final_setup_prompt() {
         assert!(rendered.contains("Use space to select, enter to confirm."));
         assert!(rendered.contains("1. Sync codebase (selected)"));
         assert!(rendered.contains("2. Import commit history (selected)"));
+    });
+}
+
+#[test]
+fn choose_final_setup_options_prompts_for_all_repo_local_choices() {
+    with_test_tty_override(true, || {
+        let mut out = Vec::new();
+        let mut input = Cursor::new("1,2,3,4,5\n");
+
+        let selection = choose_final_setup_options(
+            None,
+            &mut out,
+            &mut input,
+            None,
+            InitFinalSetupPromptOptions {
+                show_telemetry: false,
+                show_auto_start_daemon: false,
+            },
+        )
+        .expect("choose setup options");
+
+        assert_eq!(
+            selection,
+            InitFinalSetupSelection {
+                sync: true,
+                ingest: true,
+                code_embeddings: true,
+                summaries: true,
+                summary_embeddings: true,
+                telemetry: false,
+                auto_start_daemon: false,
+            }
+        );
+        let rendered = String::from_utf8(out).expect("utf8 output");
+        assert!(rendered.contains("1. Sync codebase"));
+        assert!(rendered.contains("2. Import commit history"));
+        assert!(rendered.contains("3. Code embeddings"));
+        assert!(rendered.contains("4. Summaries"));
+        assert!(rendered.contains("5. Summary embeddings"));
+    });
+}
+
+#[test]
+fn choose_final_setup_options_enables_summaries_when_summary_embeddings_selected() {
+    with_test_tty_override(true, || {
+        let mut out = Vec::new();
+        let mut input = Cursor::new("5\n");
+
+        let selection = choose_final_setup_options(
+            Some(false),
+            &mut out,
+            &mut input,
+            Some(false),
+            InitFinalSetupPromptOptions {
+                show_telemetry: false,
+                show_auto_start_daemon: false,
+            },
+        )
+        .expect("choose summary embeddings");
+
+        assert!(!selection.sync);
+        assert!(!selection.ingest);
+        assert!(!selection.code_embeddings);
+        assert!(selection.summaries);
+        assert!(selection.summary_embeddings);
+    });
+}
+
+#[test]
+fn choose_final_setup_options_all_selects_all_repo_local_choices() {
+    with_test_tty_override(true, || {
+        let mut out = Vec::new();
+        let mut input = Cursor::new("all\n");
+
+        let selection = choose_final_setup_options(
+            Some(false),
+            &mut out,
+            &mut input,
+            Some(false),
+            InitFinalSetupPromptOptions {
+                show_telemetry: false,
+                show_auto_start_daemon: false,
+            },
+        )
+        .expect("choose all setup options");
+
+        assert!(selection.sync);
+        assert!(selection.ingest);
+        assert!(selection.code_embeddings);
+        assert!(selection.summaries);
+        assert!(selection.summary_embeddings);
     });
 }
 
@@ -6586,6 +6680,9 @@ fn choose_final_setup_options_preselects_telemetry_when_shown() {
             InitFinalSetupSelection {
                 sync: false,
                 ingest: false,
+                code_embeddings: false,
+                summaries: false,
+                summary_embeddings: false,
                 telemetry: true,
                 auto_start_daemon: false,
             }
@@ -6618,6 +6715,9 @@ fn choose_final_setup_options_defaults_auto_start_to_disabled_when_not_interacti
             InitFinalSetupSelection {
                 sync: false,
                 ingest: false,
+                code_embeddings: false,
+                summaries: false,
+                summary_embeddings: false,
                 telemetry: false,
                 auto_start_daemon: false,
             }
