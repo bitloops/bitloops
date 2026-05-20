@@ -42,7 +42,16 @@ fn supports_cpp_test_path(relative_path: &str) -> bool {
     lower.ends_with("_test.cpp")
         || lower.ends_with("_test.cc")
         || lower.ends_with("_test.cxx")
-        || lower.contains("/tests/")
+        || (lower.contains("/tests/") && has_cpp_source_extension(&lower))
+}
+
+fn has_cpp_source_extension(relative_path: &str) -> bool {
+    matches!(
+        Path::new(relative_path)
+            .extension()
+            .and_then(|extension| extension.to_str()),
+        Some("cc" | "cpp" | "cxx" | "h" | "hh" | "hpp" | "hxx")
+    )
 }
 
 fn discover_cpp_tests_from_source(relative_path: &str, content: &str) -> DiscoveredTestFile {
@@ -106,6 +115,7 @@ mod tests {
     fn cpp_test_support_recognizes_test_paths() {
         assert!(supports_cpp_test_path("tests/user_service_test.cpp"));
         assert!(supports_cpp_test_path("src/module/component_test.cc"));
+        assert!(!supports_cpp_test_path("tests/fixtures/snapshot.png"));
         assert!(!supports_cpp_test_path("src/main.cpp"));
     }
 

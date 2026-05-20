@@ -28,6 +28,7 @@ use crate::host::language_adapter::{
 };
 use crate::models::ProductionArtefact;
 use crate::models::TestArtefactCurrentRecord;
+use crate::test_support::log_capture::capture_logs_async;
 
 #[derive(Default)]
 struct NoopWorkplaneGateway;
@@ -82,7 +83,7 @@ impl RelationalGateway for FakeRelationalGateway {
 
 #[derive(Clone)]
 struct FakeLanguageServicesGateway {
-    support: Arc<FakeLanguageTestSupport>,
+    support: Arc<dyn LanguageTestSupport>,
 }
 
 impl LanguageServicesGateway for FakeLanguageServicesGateway {
@@ -95,8 +96,8 @@ impl LanguageServicesGateway for FakeLanguageServicesGateway {
         relative_path: &str,
     ) -> Option<Arc<dyn LanguageTestSupport>> {
         self.support
-            .supports_any(relative_path)
-            .then(|| self.support.clone() as Arc<dyn LanguageTestSupport>)
+            .supports_path(Path::new(relative_path), relative_path)
+            .then(|| self.support.clone())
     }
 }
 
@@ -149,6 +150,34 @@ impl LanguageTestSupport for FakeLanguageTestSupport {
         ReconciledDiscovery {
             enumerated_scenarios: enumeration.scenarios,
         }
+    }
+}
+
+#[derive(Clone)]
+struct InvalidUtf8LanguageTestSupport;
+
+impl LanguageTestSupport for InvalidUtf8LanguageTestSupport {
+    fn language_id(&self) -> &'static str {
+        "fake"
+    }
+
+    fn priority(&self) -> u8 {
+        0
+    }
+
+    fn supports_path(&self, _absolute_path: &Path, relative_path: &str) -> bool {
+        relative_path == "tests/non_utf8.fake"
+    }
+
+    fn discover_tests(
+        &self,
+        _absolute_path: &Path,
+        _relative_path: &str,
+    ) -> Result<DiscoveredTestFile> {
+        Err(anyhow!(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        )))
     }
 }
 
@@ -219,6 +248,53 @@ async fn merged_delta_materializes_enumerated_scenarios_only_for_changed_paths()
         )]
     );
     assert_eq!(count_test_edges(fixture.db_path())?, 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn merged_delta_silently_ignores_non_utf8_test_files() -> Result<()> {
+    let fixture = TestFixture::new()?;
+    fixture.write_file("tests/non_utf8.fake", "placeholder")?;
+    let context = fixture.context(
+        Arc::new(InvalidUtf8LanguageTestSupport),
+        vec![production_artefact()],
+    )?;
+    let request = CurrentStateConsumerRequest {
+        run_id: None,
+        repo_id: "repo-1".to_string(),
+        repo_root: fixture.repo_root(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("HEAD".to_string()),
+        from_generation_seq_exclusive: 0,
+        to_generation_seq_inclusive: 1,
+        reconcile_mode: ReconcileMode::MergedDelta,
+        file_upserts: vec![ChangedFile {
+            path: "tests/non_utf8.fake".to_string(),
+            language: "fake".to_string(),
+            content_id: "content-a".to_string(),
+        }],
+        file_removals: Vec::new(),
+        affected_paths: Vec::new(),
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    };
+
+    let (result, logs) = capture_logs_async(TestHarnessCurrentStateConsumer.reconcile(
+        &request,
+        &context,
+    ))
+    .await;
+    result?;
+
+    assert!(
+        load_test_scenarios(fixture.db_path())?.is_empty(),
+        "non-UTF-8 delta file should not persist discovered scenarios"
+    );
+    assert!(
+        logs.is_empty(),
+        "non-UTF-8 delta file should not emit warnings: {logs:?}"
+    );
 
     Ok(())
 }
@@ -720,7 +796,7 @@ impl TestFixture {
 
     fn context(
         &self,
-        support: Arc<FakeLanguageTestSupport>,
+        support: Arc<dyn LanguageTestSupport>,
         production: Vec<ProductionArtefact>,
     ) -> Result<CurrentStateConsumerContext> {
         Ok(CurrentStateConsumerContext {

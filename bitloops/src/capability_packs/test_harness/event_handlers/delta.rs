@@ -54,6 +54,9 @@ pub(super) async fn reconcile_delta(
                 discovered_files.push(discovered);
             }
             Err(err) => {
+                if mapping::is_non_utf8_discovery_error(&err) {
+                    continue;
+                }
                 log::warn!(
                     "test_harness current-state reconcile: failed discovering tests for {}: {err}",
                     file.path
