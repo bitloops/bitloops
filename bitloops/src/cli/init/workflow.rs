@@ -608,6 +608,7 @@ fn persist_init_embeddings_policy(
             if code_profile.is_some() || summary_profile.is_some() {
                 RepoSemanticEmbeddingPolicy {
                     present: true,
+                    summary_mode: None,
                     embedding_mode: existing_policy
                         .embedding_mode
                         .or(Some(SemanticCloneEmbeddingMode::SemanticAwareOnce)),
@@ -652,6 +653,7 @@ fn legacy_daemon_semantic_embedding_policy(
     if code_profile.is_some() || summary_profile.is_some() {
         return Some(RepoSemanticEmbeddingPolicy {
             present: true,
+            summary_mode: None,
             embedding_mode: Some(capability.semantic_clones.embedding_mode),
             inference: crate::config::SemanticClonesInferenceBindings {
                 summary_generation: capability.semantic_clones.inference.summary_generation,

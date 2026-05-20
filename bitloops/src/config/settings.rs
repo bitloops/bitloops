@@ -10,8 +10,8 @@ use toml_edit::{Array, DocumentMut, Item, Table, Value as TomlValue};
 
 use super::{
     REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME, SemanticCloneEmbeddingMode,
-    SemanticClonesInferenceBindings, discover_repo_policy, discover_repo_policy_optional,
-    load_daemon_settings,
+    SemanticClonesInferenceBindings, SemanticSummaryMode, discover_repo_policy,
+    discover_repo_policy_optional, load_daemon_settings,
 };
 
 pub const SETTINGS_FILE: &str = REPO_POLICY_FILE_NAME;
@@ -86,6 +86,7 @@ impl Default for DevqlProducerSettings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoSemanticEmbeddingPolicy {
     pub present: bool,
+    pub summary_mode: Option<SemanticSummaryMode>,
     pub embedding_mode: Option<SemanticCloneEmbeddingMode>,
     pub inference: SemanticClonesInferenceBindings,
 }
@@ -94,6 +95,7 @@ impl RepoSemanticEmbeddingPolicy {
     pub fn disabled() -> Self {
         Self {
             present: true,
+            summary_mode: None,
             embedding_mode: Some(SemanticCloneEmbeddingMode::Off),
             inference: SemanticClonesInferenceBindings::default(),
         }
@@ -103,6 +105,7 @@ impl RepoSemanticEmbeddingPolicy {
         let profile_name = profile_name.into();
         Self {
             present: true,
+            summary_mode: None,
             embedding_mode: Some(SemanticCloneEmbeddingMode::SemanticAwareOnce),
             inference: SemanticClonesInferenceBindings {
                 summary_generation: None,
@@ -157,6 +160,7 @@ pub fn repo_semantic_embedding_policy_from_policy(
     if !policy.semantic_clones_present {
         return Ok(RepoSemanticEmbeddingPolicy {
             present: false,
+            summary_mode: None,
             embedding_mode: None,
             inference: SemanticClonesInferenceBindings::default(),
         });
@@ -166,6 +170,14 @@ pub fn repo_semantic_embedding_policy_from_policy(
         .semantic_clones
         .as_object()
         .ok_or_else(|| anyhow!("`[semantic_clones]` must be a table"))?;
+    let summary_mode = root
+        .get("summary_mode")
+        .map(|raw| {
+            raw.as_str()
+                .ok_or_else(|| anyhow!("`[semantic_clones].summary_mode` must be a string"))
+                .and_then(parse_repo_summary_mode)
+        })
+        .transpose()?;
     let embedding_mode = root
         .get("embedding_mode")
         .map(|raw| {
@@ -197,13 +209,22 @@ pub fn repo_semantic_embedding_policy_from_policy(
 
     Ok(RepoSemanticEmbeddingPolicy {
         present: true,
+        summary_mode,
         embedding_mode,
         inference: SemanticClonesInferenceBindings {
-            summary_generation: None,
+            summary_generation: read_profile("summary_generation")?,
             code_embeddings: read_profile("code_embeddings")?,
             summary_embeddings: read_profile("summary_embeddings")?,
         },
     })
+}
+
+fn parse_repo_summary_mode(raw: &str) -> Result<SemanticSummaryMode> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" => Ok(SemanticSummaryMode::Auto),
+        "off" | "disabled" | "none" => Ok(SemanticSummaryMode::Off),
+        other => bail!("unsupported `[semantic_clones].summary_mode` value `{other}`"),
+    }
 }
 
 fn parse_repo_embedding_mode(raw: &str) -> Result<SemanticCloneEmbeddingMode> {
@@ -507,12 +528,21 @@ pub fn set_repo_semantic_embedding_policy(
 ) -> Result<()> {
     write_repo_policy_file(path, |doc| {
         ensure_semantic_clones_table(doc);
+        if let Some(summary_mode) = policy.summary_mode {
+            let mode = summary_mode.to_string();
+            doc["semantic_clones"]["summary_mode"] = Item::Value(TomlValue::from(mode.as_str()));
+        }
         let mode = policy
             .embedding_mode
             .unwrap_or(SemanticCloneEmbeddingMode::Off)
             .to_string();
         doc["semantic_clones"]["embedding_mode"] = Item::Value(TomlValue::from(mode.as_str()));
         ensure_semantic_clones_inference_table(doc);
+        set_optional_string(
+            &mut doc["semantic_clones"]["inference"],
+            "summary_generation",
+            policy.inference.summary_generation.as_deref(),
+        );
         set_optional_string(
             &mut doc["semantic_clones"]["inference"],
             "code_embeddings",
@@ -782,6 +812,42 @@ embedding_mode = "off"
     }
 
     #[test]
+    fn repo_semantic_embedding_policy_reads_summary_mode_and_generation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+            r#"
+[semantic_clones]
+summary_mode = "auto"
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+summary_generation = "summary_local"
+code_embeddings = "code_local"
+"#,
+        )
+        .expect("write local repo policy");
+
+        let policy = repo_semantic_embedding_policy(dir.path()).expect("load semantic policy");
+
+        assert!(policy.present);
+        assert_eq!(policy.summary_mode, Some(SemanticSummaryMode::Auto));
+        assert_eq!(
+            policy.embedding_mode,
+            Some(SemanticCloneEmbeddingMode::SemanticAwareOnce)
+        );
+        assert_eq!(
+            policy.inference.summary_generation.as_deref(),
+            Some("summary_local")
+        );
+        assert_eq!(
+            policy.inference.code_embeddings.as_deref(),
+            Some("code_local")
+        );
+        assert_eq!(policy.inference.summary_embeddings, None);
+    }
+
+    #[test]
     fn set_repo_semantic_embedding_policy_persists_profile_bindings() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(REPO_POLICY_LOCAL_FILE_NAME);
@@ -817,6 +883,62 @@ embedding_mode = "off"
         assert!(content.contains("embedding_mode = \"off\""));
         assert!(!content.contains("code_embeddings"));
         assert!(!content.contains("summary_embeddings"));
+    }
+
+    #[test]
+    fn set_repo_semantic_embedding_policy_persists_summary_mode_and_generation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(REPO_POLICY_LOCAL_FILE_NAME);
+
+        set_repo_semantic_embedding_policy(
+            &path,
+            &RepoSemanticEmbeddingPolicy {
+                present: true,
+                summary_mode: Some(SemanticSummaryMode::Auto),
+                embedding_mode: Some(SemanticCloneEmbeddingMode::SemanticAwareOnce),
+                inference: SemanticClonesInferenceBindings {
+                    summary_generation: Some("summary_local".to_string()),
+                    code_embeddings: Some("code_local".to_string()),
+                    summary_embeddings: None,
+                },
+            },
+        )
+        .expect("write semantic policy");
+
+        let content = fs::read_to_string(path).expect("read repo policy");
+        assert!(content.contains("summary_mode = \"auto\""));
+        assert!(content.contains("embedding_mode = \"semantic_aware_once\""));
+        assert!(content.contains("summary_generation = \"summary_local\""));
+        assert!(content.contains("code_embeddings = \"code_local\""));
+        assert!(!content.contains("summary_embeddings = "));
+    }
+
+    #[test]
+    fn set_repo_semantic_embedding_policy_can_disable_summaries_without_disabling_embeddings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(REPO_POLICY_LOCAL_FILE_NAME);
+
+        set_repo_semantic_embedding_policy(
+            &path,
+            &RepoSemanticEmbeddingPolicy {
+                present: true,
+                summary_mode: Some(SemanticSummaryMode::Off),
+                embedding_mode: Some(SemanticCloneEmbeddingMode::SemanticAwareOnce),
+                inference: SemanticClonesInferenceBindings {
+                    summary_generation: None,
+                    code_embeddings: Some("code_local".to_string()),
+                    summary_embeddings: None,
+                },
+            },
+        )
+        .expect("write semantic policy");
+
+        let content = fs::read_to_string(path).expect("read repo policy");
+        assert!(content.contains("summary_mode = \"off\""));
+        assert!(content.contains("embedding_mode = \"semantic_aware_once\""));
+        assert!(content.contains("code_embeddings = \"code_local\""));
+        assert!(!content.contains("summary_generation = "));
+        assert!(!content.contains("summary_embeddings = "));
     }
 
     #[test]
