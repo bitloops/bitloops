@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **Unconfigured architecture role adjudication no longer blocks enrichment work**: current-state role classification now skips queuing role-adjudication jobs when the `role_adjudication` structured-generation slot is not configured, maintenance marks already-queued unconfigured adjudication jobs as completed, and summary-refresh job claiming can page past blocked generic inference work to continue claimable context-guidance jobs.
+- **Context guidance distillation now keeps more useful evidence and reports dropped facts**: history guidance inputs include tool results, file paths, write/edit/bash evidence, and prioritized high-value transcript/tool evidence. Distillation now infers targets for multi-file facts, filters targetless or low-value guidance with validation/quality diagnostics, and stores richer tool excerpts as guidance sources.
+- **Repeated semantic follow-up syncs no longer leave init lanes blocked**: follow-up sync completion sequencing now advances for later follow-up sync tasks while remaining idempotent for already-recorded completions.
+
 ## [0.0.29] - 2026-05-19
 
 ### Added
