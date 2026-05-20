@@ -187,6 +187,7 @@ fn lifecycle_event_conversion_trims_host_owned_values() {
         tool_response: None,
         subagent_id: "  subagent-9  ".to_string(),
         model: "  gemini-2.5  ".to_string(),
+        is_auxiliary: false,
         finalize_open_turn: false,
     };
 

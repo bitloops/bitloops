@@ -30,6 +30,7 @@ pub struct LifecycleEvent {
     pub tool_response: Option<Value>,
     pub subagent_id: String,
     pub model: String,
+    pub is_auxiliary: bool,
     pub finalize_open_turn: bool,
 }
 

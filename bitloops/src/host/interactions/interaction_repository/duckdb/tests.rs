@@ -108,6 +108,33 @@ fn round_trip_sessions_turns_and_events() {
 }
 
 #[test]
+fn upsert_session_preserves_auxiliary_flag() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let repository = make_repository(&temp_dir);
+    repository.ensure_schema().expect("schema");
+
+    let mut session = sample_session();
+    session.is_auxiliary = true;
+    repository
+        .upsert_session(&session)
+        .expect("upsert auxiliary session");
+
+    session.is_auxiliary = false;
+    session.first_prompt = "updated prompt".into();
+    session.updated_at = "2026-04-05T10:10:00Z".into();
+    repository
+        .upsert_session(&session)
+        .expect("upsert non-auxiliary session");
+
+    let loaded = repository
+        .load_session("sess-1")
+        .expect("load session")
+        .expect("session");
+    assert!(loaded.is_auxiliary);
+    assert_eq!(loaded.first_prompt, "updated prompt");
+}
+
+#[test]
 fn assigns_checkpoint_ids() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let repository = make_repository(&temp_dir);

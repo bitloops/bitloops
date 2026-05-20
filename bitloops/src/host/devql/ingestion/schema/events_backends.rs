@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS interaction_sessions (
     started_at String,
     ended_at String,
     last_event_at String,
+    is_auxiliary UInt8,
     updated_at DateTime64(3, 'UTC')
 )
 ENGINE = ReplacingMergeTree(updated_at)
@@ -180,6 +181,7 @@ CREATE TABLE IF NOT EXISTS interaction_sessions (
     ended_at VARCHAR,
     last_event_at VARCHAR,
     updated_at VARCHAR,
+    is_auxiliary INTEGER DEFAULT 0,
     PRIMARY KEY (repo_id, session_id)
 );
 

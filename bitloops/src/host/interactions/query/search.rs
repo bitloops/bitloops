@@ -24,7 +24,9 @@ pub(crate) fn search_session_summaries(
     let summaries = state
         .session_summaries
         .into_values()
-        .filter(|summary| session_matches_filter(summary, &input.filter))
+        .filter(|summary| {
+            !summary.session.is_auxiliary && session_matches_filter(summary, &input.filter)
+        })
         .collect::<Vec<_>>();
     let allowed = summaries
         .iter()
@@ -69,7 +71,12 @@ pub(crate) fn search_turn_summaries(
     let turns = state
         .turn_summaries
         .into_values()
-        .filter(|turn| turn_matches_filter(turn, &input.filter))
+        .filter(|turn| {
+            session_summaries
+                .get(&turn.turn.session_id)
+                .is_some_and(|session| !session.session.is_auxiliary)
+                && turn_matches_filter(turn, &input.filter)
+        })
         .collect::<Vec<_>>();
     let allowed = turns
         .iter()

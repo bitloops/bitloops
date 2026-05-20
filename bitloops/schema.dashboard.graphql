@@ -221,6 +221,7 @@ type DashboardInteractionSession {
 	startedAt: String!
 	endedAt: String
 	lastEventAt: String
+	isAuxiliary: Boolean!
 	turnCount: Int!
 	checkpointCount: Int!
 	tokenUsage: DashboardTokenUsage

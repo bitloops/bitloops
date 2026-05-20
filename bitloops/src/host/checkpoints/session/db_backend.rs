@@ -105,6 +105,7 @@ impl DbSessionBackend {
                 .context("reading transcript_path")?,
             first_prompt: row.get("first_prompt").context("reading first_prompt")?,
             agent_type: row.get("agent_type").context("reading agent_type")?,
+            is_auxiliary: row.get::<_, i64>("is_auxiliary").unwrap_or_default() == 1,
             last_checkpoint_id: row
                 .get("last_checkpoint_id")
                 .context("reading last_checkpoint_id")?,
@@ -132,7 +133,7 @@ impl SessionBackend for DbSessionBackend {
                         transcript_path, first_prompt, agent_type, last_checkpoint_id,
                         last_interaction_time, files_touched, untracked_files_at_start,
                         turn_checkpoint_ids, transcript_identifier_at_start, token_usage,
-                        prompt_attributions, pending_prompt_attribution
+                        prompt_attributions, pending_prompt_attribution, is_auxiliary
                  FROM sessions
                  WHERE repo_id = ?1
                  ORDER BY updated_at DESC, created_at DESC",
@@ -163,7 +164,7 @@ impl SessionBackend for DbSessionBackend {
                             transcript_path, first_prompt, agent_type, last_checkpoint_id,
                             last_interaction_time, files_touched, untracked_files_at_start,
                             turn_checkpoint_ids, transcript_identifier_at_start, token_usage,
-                            prompt_attributions, pending_prompt_attribution
+                            prompt_attributions, pending_prompt_attribution, is_auxiliary
                      FROM sessions
                      WHERE session_id = ?1 AND repo_id = ?2
                      LIMIT 1",
@@ -203,7 +204,8 @@ impl SessionBackend for DbSessionBackend {
                     checkpoint_transcript_start, transcript_path, first_prompt, agent_type,
                     last_checkpoint_id, last_interaction_time, files_touched,
                     untracked_files_at_start, turn_checkpoint_ids, transcript_identifier_at_start,
-                    token_usage, prompt_attributions, pending_prompt_attribution, updated_at
+                    token_usage, prompt_attributions, pending_prompt_attribution, is_auxiliary,
+                    updated_at
                  )
                  VALUES (
                     ?1, ?2, ?3, ?4, ?5,
@@ -211,7 +213,7 @@ impl SessionBackend for DbSessionBackend {
                     ?13, ?14, ?15, ?16,
                     ?17, ?18, ?19,
                     ?20, ?21, ?22,
-                    ?23, ?24, ?25, datetime('now')
+                    ?23, ?24, ?25, ?26, datetime('now')
                  )
                  ON CONFLICT(repo_id, session_id) DO UPDATE SET
                     repo_id = excluded.repo_id,
@@ -238,6 +240,7 @@ impl SessionBackend for DbSessionBackend {
                     token_usage = excluded.token_usage,
                     prompt_attributions = excluded.prompt_attributions,
                     pending_prompt_attribution = excluded.pending_prompt_attribution,
+                    is_auxiliary = excluded.is_auxiliary,
                     updated_at = datetime('now')",
                 params![
                     state.session_id.as_str(),
@@ -264,7 +267,8 @@ impl SessionBackend for DbSessionBackend {
                     state.pending.transcript_identifier_at_start.as_str(),
                     token_usage,
                     prompt_attributions,
-                    pending_prompt_attribution
+                    pending_prompt_attribution,
+                    i64::from(state.is_auxiliary)
                 ],
             )
             .context("upserting session state row")?;
