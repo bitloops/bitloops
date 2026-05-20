@@ -173,6 +173,7 @@ Architecture deep-dive → [Docs › Architecture](https://bitloops.com/docs/)
 - [x] Java
 - [x] C#
 - [x] PHP
+- [x] C++
 
 ---
 ## Local-First Trust Model
