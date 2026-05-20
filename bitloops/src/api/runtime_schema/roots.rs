@@ -19,6 +19,9 @@ use super::config_management::{
 };
 use super::debug::{RuntimeDebugSnapshotObject, load_runtime_debug_snapshot};
 use super::events::RuntimeEventObject;
+use super::executables::{
+    RuntimeExecutableResolutionObject, resolve_runtime_executable_resolutions,
+};
 use super::snapshot::RuntimeSnapshotObject;
 use super::start_init::{StartInitInput, StartInitResult};
 use super::util::{current_unix_timestamp, to_graphql_i64};
@@ -48,6 +51,14 @@ impl RuntimeQueryRoot {
         #[graphql(name = "targetId")] target_id: ID,
     ) -> Result<RuntimeConfigSnapshotObject> {
         load_config_snapshot(ctx.data_unchecked::<DashboardState>(), &target_id).await
+    }
+
+    #[graphql(name = "runtimeExecutableResolutions")]
+    async fn runtime_executable_resolutions(
+        &self,
+        #[graphql(name = "commands")] commands: Vec<String>,
+    ) -> Vec<RuntimeExecutableResolutionObject> {
+        resolve_runtime_executable_resolutions(commands)
     }
 
     #[graphql(name = "runtimeSnapshot")]

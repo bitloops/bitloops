@@ -339,6 +339,9 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
     assert!(sdl_body.contains("type RuntimeQueryRoot"));
     assert!(sdl_body.contains("configTargets: [RuntimeConfigTargetObject!]!"));
     assert!(sdl_body.contains("configSnapshot(targetId: ID!): RuntimeConfigSnapshotObject!"));
+    assert!(sdl_body.contains(
+        "runtimeExecutableResolutions(commands: [String!]!): [RuntimeExecutableResolutionObject!]!"
+    ));
     assert!(sdl_body.contains("capabilityPacks(repoId: String!): [CapabilityPackObject!]!"));
     assert!(sdl_body.contains("runtimeSnapshot(repoId: String!): RuntimeSnapshotObject!"));
     assert!(
@@ -712,6 +715,52 @@ async fn devql_runtime_config_targets_list_existing_config_files() {
     assert!(
         paths.iter().all(|path| !path.contains("/target/ignored/")),
         "target scan should skip heavy target directories: {paths:?}"
+    );
+}
+
+#[tokio::test]
+async fn devql_runtime_executable_resolutions_reports_missing_commands() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = build_dashboard_router(test_state(
+        temp.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        temp.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "query Resolve($commands: [String!]!) { runtimeExecutableResolutions(commands: $commands) { command path found } }",
+                "variables": {
+                    "commands": ["__bitloops_missing_runtime_command__"]
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    assert_eq!(
+        payload["data"]["runtimeExecutableResolutions"][0]["command"],
+        "__bitloops_missing_runtime_command__"
+    );
+    assert_eq!(
+        payload["data"]["runtimeExecutableResolutions"][0]["path"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        payload["data"]["runtimeExecutableResolutions"][0]["found"],
+        false
     );
 }
 
