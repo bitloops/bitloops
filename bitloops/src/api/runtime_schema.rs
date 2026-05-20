@@ -6,6 +6,7 @@
 // crate (the parent `api` module, the router, the dashboard runtime bundle and
 // the test scaffolding).
 
+mod capability_packs;
 mod config;
 mod config_management;
 mod debug;

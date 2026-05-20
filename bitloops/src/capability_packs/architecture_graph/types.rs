@@ -5,6 +5,7 @@ pub const ARCHITECTURE_GRAPH_CONSUMER_ID: &str = "architecture_graph.snapshot";
 pub const ARCHITECTURE_GRAPH_ASSERT_INGESTER_ID: &str = "architecture_graph.assert";
 pub const ARCHITECTURE_GRAPH_REVOKE_INGESTER_ID: &str = "architecture_graph.revoke";
 pub const ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT: &str = "fact_synthesis";
+pub const ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT: &str = "role_adjudication";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]

@@ -595,6 +595,7 @@ fn gateway_rejects_text_generation_profile_without_runtime() {
             base_url: Some("http://127.0.0.1:11434/api/chat".to_string()),
             temperature: Some("0.1".to_string()),
             max_output_tokens: Some(200),
+            thinking_level: None,
             cache_dir: None,
         },
     );
@@ -650,6 +651,7 @@ fn gateway_rejects_text_generation_profile_without_request_defaults() {
             base_url: Some("http://127.0.0.1:11434/api/chat".to_string()),
             temperature: None,
             max_output_tokens: Some(200),
+            thinking_level: None,
             cache_dir: None,
         },
     );

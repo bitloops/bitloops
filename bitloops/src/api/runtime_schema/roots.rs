@@ -4,6 +4,13 @@ use std::pin::Pin;
 use async_graphql::futures_util::{Stream, stream};
 use async_graphql::{Context, ID, Object, Result, SimpleObject, Subscription};
 
+use super::capability_packs::{
+    ApplyCapabilityPackConfigInput, ApplyCapabilityPackConfigResult, CapabilityPackConfigPlan,
+    CapabilityPackObject, PlanCapabilityPackConfigInput,
+    apply_capability_pack_config as apply_capability_pack_config_request,
+    capability_packs_catalog as capability_packs_catalog_request,
+    plan_capability_pack_config as plan_capability_pack_config_request,
+};
 use super::config::{map_runtime_api_error, resolve_runtime_devql_config};
 use super::config_management::{
     RuntimeConfigSnapshotObject, RuntimeConfigTargetObject, UpdateRuntimeConfigInput,
@@ -80,6 +87,20 @@ impl RuntimeQueryRoot {
             .cloned()
             .unwrap_or_default();
         load_runtime_debug_snapshot(state, request_context, repo_id.as_str()).await
+    }
+
+    #[graphql(name = "capabilityPacks")]
+    async fn capability_packs(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: String,
+    ) -> Result<Vec<CapabilityPackObject>> {
+        let state = ctx.data_unchecked::<DashboardState>();
+        let request_context = ctx
+            .data_opt::<RuntimeRequestContext>()
+            .cloned()
+            .unwrap_or_default();
+        capability_packs_catalog_request(state, request_context, repo_id).await
     }
 }
 
@@ -176,6 +197,34 @@ impl RuntimeMutationRoot {
             .cloned()
             .unwrap_or_default();
         reconcile_runtime_watcher(state, request_context, repo_id.as_str()).await
+    }
+
+    #[graphql(name = "planCapabilityPackConfig")]
+    async fn plan_capability_pack_config(
+        &self,
+        ctx: &Context<'_>,
+        input: PlanCapabilityPackConfigInput,
+    ) -> Result<CapabilityPackConfigPlan> {
+        let state = ctx.data_unchecked::<DashboardState>();
+        let request_context = ctx
+            .data_opt::<RuntimeRequestContext>()
+            .cloned()
+            .unwrap_or_default();
+        plan_capability_pack_config_request(state, request_context, input).await
+    }
+
+    #[graphql(name = "applyCapabilityPackConfig")]
+    async fn apply_capability_pack_config(
+        &self,
+        ctx: &Context<'_>,
+        input: ApplyCapabilityPackConfigInput,
+    ) -> Result<ApplyCapabilityPackConfigResult> {
+        let state = ctx.data_unchecked::<DashboardState>();
+        let request_context = ctx
+            .data_opt::<RuntimeRequestContext>()
+            .cloned()
+            .unwrap_or_default();
+        apply_capability_pack_config_request(state, request_context, input).await
     }
 }
 

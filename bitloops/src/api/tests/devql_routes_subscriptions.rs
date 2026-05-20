@@ -339,10 +339,18 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
     assert!(sdl_body.contains("type RuntimeQueryRoot"));
     assert!(sdl_body.contains("configTargets: [RuntimeConfigTargetObject!]!"));
     assert!(sdl_body.contains("configSnapshot(targetId: ID!): RuntimeConfigSnapshotObject!"));
+    assert!(sdl_body.contains("capabilityPacks(repoId: String!): [CapabilityPackObject!]!"));
     assert!(sdl_body.contains("runtimeSnapshot(repoId: String!): RuntimeSnapshotObject!"));
     assert!(
         sdl_body
             .contains("updateConfig(input: UpdateRuntimeConfigInput!): UpdateRuntimeConfigResult!")
+    );
+    assert!(sdl_body.contains(
+        "planCapabilityPackConfig(input: PlanCapabilityPackConfigInput!): CapabilityPackConfigPlan!"
+    ));
+    assert!(
+        sdl_body
+            .contains("applyCapabilityPackConfig(input: ApplyCapabilityPackConfigInput!): ApplyCapabilityPackConfigResult!")
     );
     assert!(
         sdl_body.contains("startInit(repoId: String!, input: StartInitInput!): StartInitResult!")

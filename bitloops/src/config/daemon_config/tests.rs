@@ -97,6 +97,7 @@ fn load_daemon_settings_accepts_architecture_inference_binding() {
         r#"
 [architecture.inference]
 fact_synthesis = "local_agent"
+role_adjudication = "architecture_role_adjudication_codex"
 
 [inference.runtimes.codex]
 command = "codex"
@@ -111,6 +112,15 @@ runtime = "codex"
 model = "gpt-5.4-mini"
 temperature = "0.1"
 max_output_tokens = 4096
+
+[inference.profiles.architecture_role_adjudication_codex]
+task = "structured_generation"
+driver = "codex_exec"
+runtime = "codex"
+model = "gpt-5.4-mini"
+temperature = "0.1"
+max_output_tokens = 1024
+thinking_level = "high"
 "#,
     )
     .expect("write temp config");
@@ -120,9 +130,15 @@ max_output_tokens = 4096
         loaded.settings.architecture,
         Some(serde_json::json!({
             "inference": {
-                "fact_synthesis": "local_agent"
+                "fact_synthesis": "local_agent",
+                "role_adjudication": "architecture_role_adjudication_codex"
             }
         }))
+    );
+    let inference = loaded.settings.inference.expect("inference settings");
+    assert_eq!(
+        inference["profiles"]["architecture_role_adjudication_codex"]["thinking_level"],
+        serde_json::json!("high")
     );
 }
 

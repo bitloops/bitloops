@@ -399,6 +399,7 @@ summary_embeddings = "repo_summary"
         capability.architecture.inference,
         ArchitectureInferenceBindings {
             fact_synthesis: Some("local_agent".to_string()),
+            role_adjudication: None,
         }
     );
 }
@@ -559,11 +560,12 @@ fn context_guidance_and_inference_from_unified_read_slot_binding() {
 }
 
 #[test]
-fn architecture_and_inference_from_unified_read_fact_synthesis_slot_binding() {
+fn architecture_and_inference_from_unified_read_structured_generation_slot_bindings() {
     let settings = UnifiedSettings {
         architecture: Some(json!({
             "inference": {
-                "fact_synthesis": "local_agent"
+                "fact_synthesis": "local_agent",
+                "role_adjudication": "architecture_role_adjudication_codex"
             }
         })),
         inference: Some(json!({
@@ -583,6 +585,15 @@ fn architecture_and_inference_from_unified_read_fact_synthesis_slot_binding() {
                     "model": "gpt-5.4-mini",
                     "temperature": "0.1",
                     "max_output_tokens": 4096
+                },
+                "architecture_role_adjudication_codex": {
+                    "task": "structured_generation",
+                    "driver": "codex_exec",
+                    "runtime": "codex",
+                    "model": "gpt-5.4-mini",
+                    "temperature": "0.1",
+                    "max_output_tokens": 1024,
+                    "thinking_level": "high"
                 }
             }
         })),
@@ -597,6 +608,7 @@ fn architecture_and_inference_from_unified_read_fact_synthesis_slot_binding() {
         architecture.inference,
         ArchitectureInferenceBindings {
             fact_synthesis: Some("local_agent".to_string()),
+            role_adjudication: Some("architecture_role_adjudication_codex".to_string()),
         }
     );
     assert_eq!(capability.architecture, architecture);
@@ -606,6 +618,15 @@ fn architecture_and_inference_from_unified_read_fact_synthesis_slot_binding() {
             .profiles
             .get("local_agent")
             .expect("local agent profile")
+            .task,
+        InferenceTask::StructuredGeneration
+    );
+    assert_eq!(
+        capability
+            .inference
+            .profiles
+            .get("architecture_role_adjudication_codex")
+            .expect("role adjudication profile")
             .task,
         InferenceTask::StructuredGeneration
     );

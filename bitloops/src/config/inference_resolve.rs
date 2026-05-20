@@ -185,6 +185,13 @@ where
                     ),
                     temperature,
                     max_output_tokens,
+                    thinking_level: resolve_runtime_string_opt(
+                        Some(profile_root),
+                        "thinking_level",
+                        &env_lookup,
+                        &mut warnings,
+                        &format!("inference.profiles.{name}.thinking_level"),
+                    ),
                     cache_dir: resolve_runtime_string_opt(
                         Some(profile_root),
                         "cache_dir",

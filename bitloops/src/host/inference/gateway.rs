@@ -12,7 +12,7 @@ use crate::config::{
 use super::embeddings::BitloopsEmbeddingsIpcService;
 use super::text_generation::BitloopsInferenceTextGenerationService;
 use super::{
-    BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_PLATFORM_CHAT_DRIVER,
+    BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_INFERENCE_RUNTIME_ID, BITLOOPS_PLATFORM_CHAT_DRIVER,
     BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID, EmbeddingService, InferenceGateway,
     ResolvedInferenceSlot, StructuredGenerationService, TextGenerationService,
 };
@@ -226,11 +226,15 @@ impl LocalInferenceGateway {
         profile_name: &str,
         profile: &InferenceProfileConfig,
     ) -> Result<Arc<dyn StructuredGenerationService>> {
-        let runtime_name = profile
+        let selected_runtime_name = profile
             .runtime
             .as_deref()
             .ok_or_else(|| anyhow!("profile `{profile_name}` requires a runtime"))?;
-        let runtime = self.configured_runtime(profile_name, runtime_name)?;
+        let runtime = self.configured_structured_generation_runtime(
+            profile_name,
+            profile,
+            selected_runtime_name,
+        )?;
         let model = profile
             .model
             .as_deref()
@@ -259,6 +263,25 @@ impl LocalInferenceGateway {
         Ok(Arc::new(service))
     }
 
+    fn configured_structured_generation_runtime<'a>(
+        &'a self,
+        profile_name: &str,
+        profile: &InferenceProfileConfig,
+        selected_runtime_name: &str,
+    ) -> Result<&'a InferenceRuntimeConfig> {
+        if uses_managed_structured_generation_driver(&profile.driver) {
+            let _selected_runtime = self.configured_runtime(profile_name, selected_runtime_name)?;
+            return self.configured_runtime(profile_name, BITLOOPS_INFERENCE_RUNTIME_ID)
+                .with_context(|| {
+                    format!(
+                        "profile `{profile_name}` uses driver `{}` and requires the managed `{BITLOOPS_INFERENCE_RUNTIME_ID}` launcher runtime",
+                        profile.driver
+                    )
+                });
+        }
+        self.configured_runtime(profile_name, selected_runtime_name)
+    }
+
     fn configured_runtime(
         &self,
         profile_name: &str,
@@ -281,6 +304,10 @@ impl LocalInferenceGateway {
         resolve_preferred_daemon_config_path_for_repo(&self.repo_root)
             .or_else(|_| Ok(self.repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)))
     }
+}
+
+fn uses_managed_structured_generation_driver(driver: &str) -> bool {
+    matches!(driver, "codex_exec" | "claude_code_print")
 }
 
 impl InferenceGateway for LocalInferenceGateway {
@@ -452,5 +479,93 @@ impl InferenceGateway for ScopedInferenceGateway<'_> {
 
     fn describe(&self, slot_name: &str) -> Option<ResolvedInferenceSlot> {
         self.inner.describe_slot(self.capability_id, slot_name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn runtime_config(command: &str) -> InferenceRuntimeConfig {
+        InferenceRuntimeConfig {
+            command: command.to_string(),
+            args: Vec::new(),
+            startup_timeout_secs: 5,
+            request_timeout_secs: 30,
+        }
+    }
+
+    fn profile_config(driver: &str, runtime: &str) -> InferenceProfileConfig {
+        InferenceProfileConfig {
+            name: "structured_profile".to_string(),
+            task: InferenceTask::StructuredGeneration,
+            driver: driver.to_string(),
+            runtime: Some(runtime.to_string()),
+            model: Some("gpt-5.4-mini".to_string()),
+            api_key: None,
+            base_url: None,
+            temperature: Some("0.1".to_string()),
+            max_output_tokens: Some(1024),
+            cache_dir: None,
+            thinking_level: Some("high".to_string()),
+        }
+    }
+
+    fn gateway_with_runtimes(runtimes: &[(&str, InferenceRuntimeConfig)]) -> LocalInferenceGateway {
+        let mut runtime_map = BTreeMap::new();
+        for (name, runtime) in runtimes {
+            runtime_map.insert((*name).to_string(), runtime.clone());
+        }
+        LocalInferenceGateway::new(
+            Path::new("/tmp/repo"),
+            InferenceConfig {
+                runtimes: runtime_map,
+                profiles: BTreeMap::new(),
+                warnings: Vec::new(),
+            },
+            HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn managed_structured_generation_driver_uses_bitloops_inference_launcher() {
+        let gateway = gateway_with_runtimes(&[
+            ("codex", runtime_config("/usr/local/bin/codex")),
+            (
+                BITLOOPS_INFERENCE_RUNTIME_ID,
+                runtime_config("/usr/local/bin/bitloops-inference"),
+            ),
+        ]);
+        let profile = profile_config("codex_exec", "codex");
+
+        let runtime = gateway
+            .configured_structured_generation_runtime(
+                "architecture_role_adjudication",
+                &profile,
+                "codex",
+            )
+            .expect("runtime");
+
+        assert_eq!(runtime.command, "/usr/local/bin/bitloops-inference");
+    }
+
+    #[test]
+    fn managed_structured_generation_driver_requires_selected_agent_runtime() {
+        let gateway = gateway_with_runtimes(&[(
+            BITLOOPS_INFERENCE_RUNTIME_ID,
+            runtime_config("/usr/local/bin/bitloops-inference"),
+        )]);
+        let profile = profile_config("codex_exec", "codex");
+
+        let err = gateway
+            .configured_structured_generation_runtime(
+                "architecture_role_adjudication",
+                &profile,
+                "codex",
+            )
+            .expect_err("missing codex runtime should fail");
+
+        assert!(err.to_string().contains("runtime `codex` is not defined"));
     }
 }
