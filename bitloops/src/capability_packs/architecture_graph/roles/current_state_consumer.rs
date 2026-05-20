@@ -241,8 +241,9 @@ fn role_current_state_metrics(
         "role_adjudication_deduped": adjudication_metrics.deduped,
     });
     if role_adjudication_skipped_unconfigured > 0 {
-        metrics["role_adjudication_skipped_unconfigured"] =
-            serde_json::Value::Number(role_adjudication_skipped_unconfigured.into());
+        metrics["role_adjudication_skipped_unconfigured"] = serde_json::Value::Number(
+            serde_json::Number::from(role_adjudication_skipped_unconfigured as u64),
+        );
     }
     if architecture_embedding_enqueue_failed {
         metrics["architecture_embedding_enqueue_failed"] = serde_json::Value::Bool(true);

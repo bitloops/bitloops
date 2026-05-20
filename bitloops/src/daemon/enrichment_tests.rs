@@ -920,6 +920,28 @@ max_output_tokens = 200
     fs::write(&config_path, config).expect("write test daemon config with guidance profile");
 }
 
+fn configure_architecture_role_adjudication_for_repo(target: &EnrichmentJobTarget) {
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("bind repo root to daemon config");
+
+    let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
+    config.push_str(
+        r#"
+[architecture.inference]
+role_adjudication = "role_adjudicator"
+"#,
+    );
+    fs::write(&config_path, config)
+        .expect("write test daemon config with role adjudication profile");
+}
+
 fn configure_embeddings_for_repo(target: &EnrichmentJobTarget, profile_name: &str) -> PathBuf {
     let config_path =
         crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
@@ -5061,6 +5083,52 @@ fn maintenance_completes_unconfigured_architecture_role_adjudication_jobs() {
         completed[0].last_error.as_deref(),
         Some("skipped: structured-generation slot `role_adjudication` is not configured")
     );
+}
+
+#[test]
+fn maintenance_only_completes_unconfigured_role_adjudication_for_matching_repo_root() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, unconfigured_target, repo_id) = new_test_coordinator(&temp);
+    let configured_config_root = temp.path().join("configured-config");
+    let configured_repo_root = temp.path().join("configured-repo");
+    fs::create_dir_all(&configured_config_root).expect("create configured config root");
+    fs::create_dir_all(&configured_repo_root).expect("create configured repo root");
+    init_test_repo(
+        &configured_repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops@example.com",
+    );
+    let configured_target = sample_target(configured_config_root, configured_repo_root);
+    configure_architecture_role_adjudication_for_repo(&configured_target);
+
+    insert_architecture_role_adjudication_workplane_job(
+        &coordinator,
+        &unconfigured_target,
+        &repo_id,
+        "unconfigured-role-adjudication",
+        1,
+        10,
+    );
+    insert_architecture_role_adjudication_workplane_job(
+        &coordinator,
+        &configured_target,
+        &repo_id,
+        "configured-role-adjudication",
+        2,
+        11,
+    );
+
+    super::compact_and_prune_workplane_jobs(&coordinator.workplane_store)
+        .expect("compact workplane jobs");
+
+    let pending = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].job_id, "configured-role-adjudication");
+
+    let completed = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Completed);
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].job_id, "unconfigured-role-adjudication");
 }
 
 #[tokio::test]

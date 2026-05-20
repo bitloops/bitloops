@@ -177,7 +177,7 @@ fn history_distillation_result_payload(
             "validationDropped": report.validation_discards.len(),
             "validationDropReasons": report.validation_discards.iter().map(|discard| {
                 json!({
-                    "kind": discard.kind,
+                    "kind": discard.kind.as_str(),
                     "reason": format!("{:?}", discard.reason),
                 })
             }).collect::<Vec<_>>(),
@@ -186,9 +186,9 @@ fn history_distillation_result_payload(
             "qualityDropped": report.quality_discards.len(),
             "qualityDropReasons": report.quality_discards.iter().map(|discard| {
                 json!({
-                    "kind": discard.kind,
+                    "kind": discard.kind.as_str(),
                     "category": format!("{:?}", discard.category),
-                    "reason": discard.reason,
+                    "reason": discard.reason.as_str(),
                 })
             }).collect::<Vec<_>>(),
         }
