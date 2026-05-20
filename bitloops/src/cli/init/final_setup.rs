@@ -26,7 +26,7 @@ pub(crate) struct InitFinalSetupPromptOptions {
     pub show_auto_start_daemon: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum InitFinalSetupOptionKind {
     Sync,
     Ingest,
@@ -52,7 +52,7 @@ pub(crate) fn choose_final_setup_options(
     prompt_options: InitFinalSetupPromptOptions,
 ) -> Result<InitFinalSetupSelection> {
     let can_prompt = telemetry_consent::can_prompt_interactively();
-    let code_embeddings_default = sync.unwrap_or(true) || ingest.unwrap_or(true);
+    let code_embeddings_default = sync.unwrap_or(true);
     let defaults = InitFinalSetupSelection {
         sync: sync.unwrap_or(true),
         ingest: ingest.unwrap_or(true),
@@ -132,6 +132,11 @@ fn prompt_final_setup_selection_with_picker(
             }
             FollowUpKey::Toggle => {
                 selected[cursor] = !selected[cursor];
+                apply_final_setup_toggle_dependencies(
+                    &options,
+                    &mut selected,
+                    options[cursor].kind,
+                );
             }
             FollowUpKey::Cancel => bail!("cancelled by user"),
             FollowUpKey::Submit => break,
@@ -368,6 +373,40 @@ fn normalize_final_setup_dependencies(selection: &mut InitFinalSetupSelection) {
     }
 }
 
+fn apply_final_setup_toggle_dependencies(
+    options: &[InitFinalSetupOptionSpec],
+    selected: &mut [bool],
+    toggled_kind: InitFinalSetupOptionKind,
+) {
+    let find_index = |kind| options.iter().position(|option| option.kind == kind);
+    match toggled_kind {
+        InitFinalSetupOptionKind::SummaryEmbeddings => {
+            let summary_embeddings_selected =
+                find_index(InitFinalSetupOptionKind::SummaryEmbeddings)
+                    .and_then(|index| selected.get(index))
+                    .copied()
+                    .unwrap_or(false);
+            if summary_embeddings_selected {
+                if let Some(index) = find_index(InitFinalSetupOptionKind::Summaries) {
+                    selected[index] = true;
+                }
+            }
+        }
+        InitFinalSetupOptionKind::Summaries => {
+            let summaries_selected = find_index(InitFinalSetupOptionKind::Summaries)
+                .and_then(|index| selected.get(index))
+                .copied()
+                .unwrap_or(false);
+            if !summaries_selected {
+                if let Some(index) = find_index(InitFinalSetupOptionKind::SummaryEmbeddings) {
+                    selected[index] = false;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn option_for_final_setup_token<'a>(
     options: &'a [InitFinalSetupOptionSpec],
     token: &str,
@@ -579,4 +618,41 @@ fn selected_follow_up_checkbox() -> String {
 fn selected_follow_up_label(label: &str) -> String {
     const SELECTION_WHITE_HEX: &str = "#ffffff";
     color_hex_if_enabled(label, SELECTION_WHITE_HEX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picker_toggle_dependencies_keep_summary_choices_consistent() {
+        let options = final_setup_option_specs(InitFinalSetupPromptOptions {
+            show_telemetry: false,
+            show_auto_start_daemon: false,
+        });
+        let mut selected = vec![false; options.len()];
+        let summary_embeddings_index = options
+            .iter()
+            .position(|option| option.kind == InitFinalSetupOptionKind::SummaryEmbeddings)
+            .expect("summary embeddings option");
+        selected[summary_embeddings_index] = true;
+        apply_final_setup_toggle_dependencies(
+            &options,
+            &mut selected,
+            InitFinalSetupOptionKind::SummaryEmbeddings,
+        );
+        let summaries_index = options
+            .iter()
+            .position(|option| option.kind == InitFinalSetupOptionKind::Summaries)
+            .expect("summaries option");
+        assert!(selected[summaries_index]);
+
+        selected[summaries_index] = false;
+        apply_final_setup_toggle_dependencies(
+            &options,
+            &mut selected,
+            InitFinalSetupOptionKind::Summaries,
+        );
+        assert!(!selected[summary_embeddings_index]);
+    }
 }

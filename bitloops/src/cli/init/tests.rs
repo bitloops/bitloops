@@ -6606,6 +6606,35 @@ fn choose_final_setup_options_prompts_for_all_repo_local_choices() {
 }
 
 #[test]
+fn choose_final_setup_options_does_not_preselect_code_embeddings_when_sync_disabled() {
+    with_test_tty_override(true, || {
+        let mut out = Vec::new();
+        let mut input = Cursor::new("\n");
+
+        let selection = choose_final_setup_options(
+            Some(false),
+            &mut out,
+            &mut input,
+            Some(true),
+            InitFinalSetupPromptOptions {
+                show_telemetry: false,
+                show_auto_start_daemon: false,
+            },
+        )
+        .expect("choose setup options");
+
+        assert!(!selection.sync);
+        assert!(selection.ingest);
+        assert!(!selection.code_embeddings);
+        assert!(!selection.summaries);
+        assert!(!selection.summary_embeddings);
+
+        let rendered = String::from_utf8(out).expect("utf8 output");
+        assert!(!rendered.contains("3. Code embeddings (selected)"));
+    });
+}
+
+#[test]
 fn choose_final_setup_options_enables_summaries_when_summary_embeddings_selected() {
     with_test_tty_override(true, || {
         let mut out = Vec::new();
