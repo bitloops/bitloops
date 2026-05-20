@@ -26,10 +26,11 @@ impl LanguageTestSupport for JavaLanguageTestSupport {
     }
 
     fn supports_path(&self, _absolute_path: &Path, relative_path: &str) -> bool {
-        relative_path.ends_with("Test.java")
-            || relative_path.ends_with("Tests.java")
-            || relative_path.ends_with("IT.java")
-            || relative_path.contains("src/test/java/")
+        relative_path.ends_with(".java")
+            && (relative_path.ends_with("Test.java")
+                || relative_path.ends_with("Tests.java")
+                || relative_path.ends_with("IT.java")
+                || relative_path.contains("src/test/java/"))
     }
 
     fn discover_tests(
@@ -545,6 +546,10 @@ mod tests {
             "src/test/java/com/acme/GreeterSpec.java"
         ));
         assert!(support.supports_path(std::path::Path::new(""), "app/GreeterIT.java"));
+        assert!(!support.supports_path(
+            std::path::Path::new(""),
+            "src/test/java/com/acme/fixtures/snapshot.png"
+        ));
         assert!(!support.supports_path(
             std::path::Path::new(""),
             "src/main/java/com/acme/Greeter.java"

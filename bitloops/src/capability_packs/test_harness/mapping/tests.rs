@@ -31,6 +31,7 @@ use super::model::{ReferenceCandidate, ScenarioDiscoverySource};
 use crate::host::capability_host::gateways::LanguageServicesGateway;
 use crate::host::language_adapter::{DiscoveredTestFile, EnumerationResult, LanguageTestSupport};
 use crate::models::ProductionArtefact;
+use crate::test_support::log_capture::capture_logs;
 
 #[test]
 fn extracts_import_specifier_from_statement() {
@@ -1264,7 +1265,7 @@ pub fn evaluate(value: &str) -> bool {
 }
 
 #[test]
-fn execute_records_issue_for_non_utf8_python_test_file_and_continues() {
+fn execute_silently_ignores_non_utf8_python_test_file_and_continues() {
     let temp = TempDir::new().expect("failed creating temp repo");
     let repo_root = temp.path();
     fs::create_dir_all(repo_root.join("tests")).expect("failed creating tests directory");
@@ -1288,8 +1289,10 @@ fn execute_records_issue_for_non_utf8_python_test_file_and_continues() {
     let gateway = SourceOnlyLanguageServicesGateway {
         support: python_test_support(),
     };
-    let output = execute("repo-1", repo_root, "commit-1", &[], &gateway)
-        .expect("mapping execution should degrade non-UTF-8 files");
+    let (output, logs) = capture_logs(|| {
+        execute("repo-1", repo_root, "commit-1", &[], &gateway)
+            .expect("mapping execution should silently ignore non-UTF-8 files")
+    });
 
     assert!(
         output
@@ -1298,12 +1301,126 @@ fn execute_records_issue_for_non_utf8_python_test_file_and_continues() {
             .any(|artefact| artefact.path == "tests/test_good.py"),
         "UTF-8 test file should still be discovered"
     );
-    assert_eq!(output.issues.len(), 1);
-    assert_eq!(output.issues[0].path, "tests/test_big5.py");
     assert!(
-        output.issues[0].message.contains("valid UTF-8"),
-        "issue should preserve the UTF-8 decoding failure: {}",
-        output.issues[0].message
+        !output
+            .test_artefacts
+            .iter()
+            .any(|artefact| artefact.path == "tests/test_big5.py"),
+        "non-UTF-8 file should be ignored"
+    );
+    assert!(
+        output.issues.is_empty(),
+        "non-UTF-8 file should not create issues"
+    );
+    assert!(
+        logs.is_empty(),
+        "non-UTF-8 file should not emit discovery warnings: {logs:?}"
+    );
+}
+
+#[test]
+fn execute_ignores_xlsx_fixture_inside_typescript_tests_directory() {
+    let temp = TempDir::new().expect("failed creating temp repo");
+    let repo_root = temp.path();
+    fs::create_dir_all(repo_root.join("backend/bl-output/__tests__/mocks"))
+        .expect("failed creating __tests__ fixture directory");
+    fs::write(
+        repo_root.join("backend/bl-output/__tests__/report.spec.ts"),
+        "describe('report', () => { it('works', () => {}); });\n",
+    )
+    .expect("failed writing TypeScript fixture");
+    fs::write(
+        repo_root.join("backend/bl-output/__tests__/mocks/4.1.BankStatement.xlsx"),
+        [0xff, 0xfe, 0x00, 0x81, 0x82, 0x83],
+    )
+    .expect("failed writing XLSX fixture");
+
+    let gateway = SourceOnlyLanguageServicesGateway {
+        support: ts_js_test_support(),
+    };
+    let (output, logs) = capture_logs(|| {
+        execute("repo-1", repo_root, "commit-1", &[], &gateway)
+            .expect("mapping execution should ignore binary fixtures under __tests__")
+    });
+
+    assert!(
+        output
+            .test_artefacts
+            .iter()
+            .any(|artefact| artefact.path == "backend/bl-output/__tests__/report.spec.ts"),
+        "TypeScript source test file should still be discovered"
+    );
+    assert!(
+        !output
+            .test_artefacts
+            .iter()
+            .any(|artefact| artefact.path.ends_with(".xlsx")),
+        "xlsx fixture should not be discovered as a test file"
+    );
+    assert_eq!(
+        output.stats.files, 1,
+        "xlsx fixture should not count as a discovered file"
+    );
+    assert!(
+        output.issues.is_empty(),
+        "xlsx fixture should not create issues"
+    );
+    assert!(
+        logs.is_empty(),
+        "xlsx fixture should not emit discovery warnings: {logs:?}"
+    );
+}
+
+#[test]
+fn execute_ignores_png_fixture_inside_cpp_tests_directory() {
+    let temp = TempDir::new().expect("failed creating temp repo");
+    let repo_root = temp.path();
+    fs::create_dir_all(repo_root.join("src/tests/fixtures"))
+        .expect("failed creating C++ tests directory");
+    fs::write(
+        repo_root.join("src/tests/user_service_test.cpp"),
+        "TEST(UserServiceTest, ReturnsUser) {}\n",
+    )
+    .expect("failed writing C++ source fixture");
+    fs::write(
+        repo_root.join("src/tests/fixtures/snapshot.png"),
+        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    )
+    .expect("failed writing PNG fixture");
+
+    let gateway = SourceOnlyLanguageServicesGateway {
+        support: crate::adapters::languages::cpp::test_support::cpp_test_support(),
+    };
+    let (output, logs) = capture_logs(|| {
+        execute("repo-1", repo_root, "commit-1", &[], &gateway)
+            .expect("mapping execution should ignore binary fixtures under /tests/")
+    });
+
+    assert!(
+        output
+            .test_artefacts
+            .iter()
+            .any(|artefact| artefact.path == "src/tests/user_service_test.cpp"),
+        "C++ source test file should still be discovered"
+    );
+    assert!(
+        !output
+            .test_artefacts
+            .iter()
+            .any(|artefact| artefact.path.ends_with(".png")),
+        "png fixture should not be discovered as a test file"
+    );
+    assert_eq!(
+        output.stats.files, 1,
+        "png fixture should not count as a discovered file"
+    );
+    assert!(
+        output.issues.is_empty(),
+        "png fixture should not create issues"
+    );
+    assert!(
+        logs.is_empty(),
+        "png fixture should not emit discovery warnings: {logs:?}"
     );
 }
 
