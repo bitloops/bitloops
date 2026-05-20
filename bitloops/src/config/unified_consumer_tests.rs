@@ -268,6 +268,44 @@ embedding_mode = "off"
 }
 
 #[test]
+fn repo_semantic_policy_disables_daemon_global_summary_generation() {
+    let (repo, _daemon) = create_repo_with_daemon_config(
+        r#"
+[semantic_clones]
+summary_mode = "auto"
+
+[semantic_clones.inference]
+summary_generation = "daemon_summary"
+
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+
+[inference.profiles.daemon_summary]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "daemon-summary-model"
+"#,
+    );
+    fs::write(
+        repo.path().join(REPO_POLICY_FILE_NAME),
+        r#"
+[semantic_clones]
+summary_mode = "off"
+"#,
+    )
+    .expect("write repo semantic policy");
+
+    let semantic_clones = resolve_semantic_clones_config_for_repo(repo.path());
+    let capability = resolve_inference_capability_config_for_repo(repo.path());
+
+    assert_eq!(semantic_clones.summary_mode, SemanticSummaryMode::Off);
+    assert_eq!(semantic_clones.inference.summary_generation, None);
+    assert_eq!(capability.semantic_clones, semantic_clones);
+    assert!(capability.inference.profiles.contains_key("daemon_summary"));
+}
+
+#[test]
 fn repo_semantic_policy_uses_repo_profile_bindings_with_daemon_profiles() {
     let (repo, _daemon) = create_repo_with_daemon_config(
         r#"
@@ -401,6 +439,70 @@ summary_embeddings = "repo_summary"
             fact_synthesis: Some("local_agent".to_string()),
             role_adjudication: None,
         }
+    );
+}
+
+#[test]
+fn repo_semantic_policy_selects_repo_summary_generation_with_daemon_profiles() {
+    let (repo, _daemon) = create_repo_with_daemon_config(
+        r#"
+[semantic_clones]
+summary_mode = "auto"
+
+[semantic_clones.inference]
+summary_generation = "daemon_summary"
+
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+
+[inference.profiles.daemon_summary]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "daemon-summary-model"
+
+[inference.profiles.repo_summary]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "repo-summary-model"
+"#,
+    );
+    fs::write(
+        repo.path().join(REPO_POLICY_FILE_NAME),
+        r#"
+[semantic_clones]
+summary_mode = "auto"
+
+[semantic_clones.inference]
+summary_generation = "repo_summary"
+"#,
+    )
+    .expect("write repo semantic policy");
+
+    let capability = resolve_inference_capability_config_for_repo(repo.path());
+
+    assert_eq!(
+        capability.semantic_clones.summary_mode,
+        SemanticSummaryMode::Auto
+    );
+    assert_eq!(
+        capability
+            .semantic_clones
+            .inference
+            .summary_generation
+            .as_deref(),
+        Some("repo_summary")
+    );
+    assert_eq!(
+        capability
+            .inference
+            .profiles
+            .get("repo_summary")
+            .expect("repo summary profile")
+            .model
+            .as_deref(),
+        Some("repo-summary-model")
     );
 }
 

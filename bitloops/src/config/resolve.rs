@@ -348,6 +348,7 @@ fn preferred_daemon_settings_with_repo_semantic_policy(
     if semantic_policy.present {
         settings.semantic_clones = Some(apply_repo_semantic_embedding_policy(
             settings.semantic_clones.take(),
+            semantic_policy.summary_mode,
             semantic_policy.embedding_mode,
             semantic_policy.inference,
         ));
@@ -358,12 +359,18 @@ fn preferred_daemon_settings_with_repo_semantic_policy(
 
 fn apply_repo_semantic_embedding_policy(
     daemon_semantic_clones: Option<Value>,
+    summary_mode: Option<SemanticSummaryMode>,
     embedding_mode: Option<SemanticCloneEmbeddingMode>,
     repo_inference: SemanticClonesInferenceBindings,
 ) -> Value {
     let mut root = daemon_semantic_clones
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
+    if let Some(mode) = summary_mode {
+        root.remove("summary_mode");
+        root.insert("summary_mode".to_string(), Value::String(mode.to_string()));
+    }
+
     let repo_supplied_embedding_bindings = repo_inference.code_embeddings.as_ref().is_some()
         || repo_inference.summary_embeddings.as_ref().is_some();
     let daemon_embedding_mode = root
@@ -387,6 +394,17 @@ fn apply_repo_semantic_embedding_policy(
         .remove("inference")
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
+    let repo_controls_summaries =
+        summary_mode.is_some() || repo_inference.summary_generation.as_ref().is_some();
+    if repo_controls_summaries {
+        inference.remove("summary_generation");
+        if summary_mode != Some(SemanticSummaryMode::Off) {
+            if let Some(profile) = repo_inference.summary_generation {
+                inference.insert("summary_generation".to_string(), Value::String(profile));
+            }
+        }
+    }
+
     inference.remove("code_embeddings");
     inference.remove("summary_embeddings");
     if effective_embedding_mode != SemanticCloneEmbeddingMode::Off {
@@ -405,7 +423,9 @@ fn repo_effective_semantic_env(key: &str, repo_policy_present: bool) -> Option<S
     if repo_policy_present
         && matches!(
             key,
-            "BITLOOPS_SEMANTIC_CLONES_EMBEDDING_MODE" | "BITLOOPS_SEMANTIC_CLONES_CODE_EMBEDDINGS"
+            "BITLOOPS_SEMANTIC_CLONES_SUMMARY_MODE"
+                | "BITLOOPS_SEMANTIC_CLONES_EMBEDDING_MODE"
+                | "BITLOOPS_SEMANTIC_CLONES_CODE_EMBEDDINGS"
         )
     {
         return None;
