@@ -3,6 +3,12 @@ use std::fs;
 use rusqlite::params;
 use tempfile::TempDir;
 
+use crate::capability_packs::architecture_graph::types::{
+    ARCHITECTURE_GRAPH_CONSUMER_ID, ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
+};
+use crate::capability_packs::semantic_clones::types::{
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_INBOUND_CURRENT_STATE_MAILBOX,
+};
 use crate::daemon::capability_events::queue::sql_i64;
 use crate::daemon::types::{CapabilityEventRunRecord, CapabilityEventRunStatus};
 use crate::host::capability_host::{DevqlCapabilityHost, SyncArtefactDiff, SyncFileDiff};
@@ -155,6 +161,90 @@ fn record_sync_generation_schedules_consumers_for_successful_empty_sync() {
 }
 
 #[test]
+fn record_sync_generation_attaches_init_session_only_to_blocking_cursor_mailboxes() {
+    let temp = TempDir::new().expect("tempdir");
+    let repo_root = temp.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+    write_test_daemon_config(&repo_root);
+
+    let cfg = test_cfg(&repo_root);
+    let host = DevqlCapabilityHost::builtin(repo_root.clone(), cfg.repo.clone())
+        .expect("build capability host");
+    let store = test_runtime_store(&temp);
+    let coordinator = CapabilityEventCoordinator::new_shared_instance(store.clone());
+
+    coordinator
+        .record_sync_generation(
+            &host,
+            &cfg,
+            &SyncSummary {
+                success: true,
+                mode: "auto".to_string(),
+                active_branch: Some("main".to_string()),
+                head_commit_sha: Some("abc123".to_string()),
+                ..SyncSummary::default()
+            },
+            SyncGenerationInput {
+                file_diff: SyncFileDiff::default(),
+                artefact_diff: SyncArtefactDiff::default(),
+                source_task_id: None,
+                init_session_id: Some("init-session-1"),
+            },
+        )
+        .expect("record sync generation");
+
+    let rows = store
+        .with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT capability_id, mailbox_name, init_session_id
+                 FROM capability_workplane_cursor_runs
+                 WHERE repo_id = ?1
+                 ORDER BY capability_id ASC, mailbox_name ASC",
+            )?;
+            let rows = stmt
+                .query_map(params![cfg.repo.repo_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .expect("load cursor runs");
+
+    let semantic = rows
+        .iter()
+        .find(|(capability_id, mailbox_name, _)| {
+            capability_id == SEMANTIC_CLONES_CAPABILITY_ID
+                && mailbox_name == SEMANTIC_CLONES_INBOUND_CURRENT_STATE_MAILBOX
+        })
+        .expect("semantic current-state run");
+    assert_eq!(semantic.2.as_deref(), Some("init-session-1"));
+
+    let architecture = rows
+        .iter()
+        .find(|(_, mailbox_name, _)| mailbox_name == ARCHITECTURE_GRAPH_CONSUMER_ID)
+        .expect("architecture graph snapshot run");
+    assert_eq!(architecture.2, None);
+    assert!(
+        rows.iter().any(|(_, mailbox_name, init_session_id)| {
+            mailbox_name == ARCHITECTURE_GRAPH_CONSUMER_ID && init_session_id.is_none()
+        }),
+        "architecture graph snapshot must be scheduled as background current-state work"
+    );
+    assert!(
+        rows.iter().any(|(_, mailbox_name, init_session_id)| {
+            mailbox_name == ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID
+                && init_session_id.is_none()
+        }),
+        "architecture role current-state work must be scheduled as background work"
+    );
+}
+
+#[test]
 fn apply_completion_noop_keeps_existing_cursor_and_clears_error() {
     let temp = TempDir::new().expect("tempdir");
     let store = test_runtime_store(&temp);
@@ -201,6 +291,58 @@ fn apply_completion_noop_keeps_existing_cursor_and_clears_error() {
         .expect("persisted run");
     assert_eq!(persisted.status, CapabilityEventRunStatus::Completed);
     assert_eq!(persisted.error, None);
+}
+
+#[test]
+fn current_state_consumer_completion_persists_metrics_json() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = test_runtime_store(&temp);
+    let coordinator = CapabilityEventCoordinator::new_shared_instance(store.clone());
+    let run = sample_run(CapabilityEventRunStatus::Running);
+    insert_consumer_row(
+        &store,
+        &run.repo_id,
+        &run.capability_id,
+        &run.consumer_id,
+        Some(2),
+        Some("previous failure"),
+        29,
+    );
+    insert_run_row(&store, &run);
+
+    coordinator
+        .apply_completion(RunCompletion::Completed {
+            run: run.clone(),
+            applied_to_generation_seq: 5,
+            warnings: vec!["role classifier used fallback".to_string()],
+            metrics: Some(serde_json::json!({
+                "roles": {
+                    "assignments_written": 3,
+                    "files_classified": 2
+                }
+            })),
+        })
+        .expect("apply completed run with metrics");
+
+    store
+        .with_connection(|conn| {
+            let (warnings_json, metrics_json) = conn.query_row(
+                "SELECT warnings_json, metrics_json
+                 FROM capability_workplane_cursor_runs
+                 WHERE run_id = ?1",
+                params![&run.run_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?;
+            let warnings: Vec<String> =
+                serde_json::from_str(&warnings_json).expect("parse warnings json");
+            let metrics: serde_json::Value =
+                serde_json::from_str(&metrics_json).expect("parse metrics json");
+            assert_eq!(warnings, vec!["role classifier used fallback".to_string()]);
+            assert_eq!(metrics["roles"]["assignments_written"], 3);
+            assert_eq!(metrics["roles"]["files_classified"], 2);
+            Ok(())
+        })
+        .expect("load persisted metrics");
 }
 
 #[test]

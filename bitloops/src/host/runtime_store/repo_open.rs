@@ -9,7 +9,7 @@ use crate::host::checkpoints::session::DbSessionBackend;
 use crate::host::interactions::db_store::SqliteInteractionSpool;
 use crate::storage::SqliteConnectionPool;
 
-use super::sqlite_migrate::initialise_repo_runtime_schema;
+use super::sqlite_migrate::{ensure_sqlite_schema_once, initialise_repo_runtime_schema};
 use super::types::RepoSqliteRuntimeStore;
 
 impl RepoSqliteRuntimeStore {
@@ -37,9 +37,7 @@ impl RepoSqliteRuntimeStore {
         repo_id: &str,
     ) -> Result<Self> {
         let db_path = resolve_repo_runtime_db_path_for_config_root(daemon_config_root);
-        let sqlite = SqliteConnectionPool::connect(db_path.clone())
-            .with_context(|| format!("opening repo runtime database {}", db_path.display()))?;
-        initialise_repo_runtime_schema(&sqlite)?;
+        ensure_repo_runtime_schema_once(&db_path)?;
         Ok(Self {
             config_root: daemon_config_root.to_path_buf(),
             repo_root: repo_root.to_path_buf(),
@@ -70,8 +68,15 @@ pub(crate) fn open_runtime_sqlite_for_config_root(
     daemon_config_root: &Path,
 ) -> Result<SqliteConnectionPool> {
     let db_path = resolve_repo_runtime_db_path_for_config_root(daemon_config_root);
-    let sqlite = SqliteConnectionPool::connect(db_path.clone())
-        .with_context(|| format!("opening repo runtime database {}", db_path.display()))?;
-    initialise_repo_runtime_schema(&sqlite)?;
-    Ok(sqlite)
+    ensure_repo_runtime_schema_once(&db_path)?;
+    SqliteConnectionPool::connect_existing(db_path.clone())
+        .with_context(|| format!("opening repo runtime database {}", db_path.display()))
+}
+
+fn ensure_repo_runtime_schema_once(db_path: &Path) -> Result<()> {
+    ensure_sqlite_schema_once(db_path, "repo-runtime-store", |sqlite_path| {
+        let sqlite = SqliteConnectionPool::connect(sqlite_path.clone())
+            .with_context(|| format!("opening repo runtime database {}", sqlite_path.display()))?;
+        initialise_repo_runtime_schema(&sqlite)
+    })
 }

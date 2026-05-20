@@ -18,6 +18,7 @@ pub enum EmbeddingRepresentationKind {
     #[default]
     #[serde(alias = "baseline", alias = "enriched")]
     Code,
+    Architecture,
     Summary,
     #[serde(alias = "locator")]
     Identity,
@@ -27,6 +28,7 @@ impl fmt::Display for EmbeddingRepresentationKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Code => write!(f, "code"),
+            Self::Architecture => write!(f, "architecture"),
             Self::Summary => write!(f, "summary"),
             Self::Identity => write!(f, "identity"),
         }
@@ -37,10 +39,23 @@ impl EmbeddingRepresentationKind {
     pub const fn storage_values(self) -> &'static [&'static str] {
         match self {
             Self::Code => &["code", "baseline", "enriched"],
+            Self::Architecture => &["architecture"],
             Self::Summary => &["summary"],
             Self::Identity => &["identity", "locator"],
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArchitectureRoleEmbeddingRole {
+    pub role_id: String,
+    pub assignment_id: String,
+    pub canonical_key: String,
+    pub display_name: String,
+    pub family: String,
+    pub description: String,
+    pub priority: String,
+    pub confidence: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +74,7 @@ pub struct SymbolEmbeddingInput {
     pub body: String,
     pub summary: String,
     pub dependency_signals: Vec<String>,
+    pub architecture_roles: Vec<ArchitectureRoleEmbeddingRole>,
     pub parent_kind: Option<String>,
     pub content_hash: Option<String>,
 }

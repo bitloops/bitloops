@@ -9,7 +9,8 @@ use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::embeddings::{
     ActiveEmbeddingRepresentationState, EmbeddingRepresentationKind,
     build_symbol_embedding_input_hash, build_symbol_embedding_inputs, build_symbol_embedding_rows,
-    resolve_embedding_setup, symbol_embeddings_require_reindex,
+    load_architecture_roles_for_embedding_inputs, resolve_embedding_setup,
+    symbol_embeddings_require_reindex,
 };
 use crate::capability_packs::semantic_clones::features::{
     SemanticFeatureHashKey, build_symbol_feature_rows,
@@ -23,8 +24,9 @@ use crate::capability_packs::semantic_clones::stage_embeddings::{
 };
 use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX;
 use crate::capability_packs::semantic_clones::vector_backend::{
-    build_postgres_pgvector_partial_index_sql, build_sqlite_current_vec_table_init_statements,
-    build_sqlite_current_vec_upsert_statements,
+    SqliteCurrentVecUpsertRow, build_postgres_pgvector_partial_index_sql,
+    build_sqlite_current_vec_batch_upsert_statements,
+    build_sqlite_current_vec_table_init_statements,
     build_sqlite_stale_current_rows_for_path_delete_statements,
 };
 use crate::capability_packs::semantic_clones::{
@@ -32,13 +34,14 @@ use crate::capability_packs::semantic_clones::{
     build_conditional_current_symbol_feature_persist_rows_sql,
     build_current_symbol_embedding_persist_sql,
     build_delete_stale_current_symbol_embedding_rows_for_path_sql,
-    build_embedding_setup_persist_sql, build_postgres_current_symbol_embedding_persist_sql,
-    build_postgres_symbol_embedding_persist_sql, build_sqlite_symbol_embedding_persist_sql,
-    build_symbol_feature_persist_rows_sql, load_current_semantic_summary_map,
+    build_embedding_setup_persist_sql, build_postgres_symbol_embedding_persist_sql,
+    build_sqlite_symbol_embedding_persist_sql, build_symbol_feature_persist_rows_sql,
+    load_current_semantic_summary_map,
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{
-    DevqlConfig, RelationalPrimaryBackend, RelationalStorage, build_capability_host, esc_pg,
+    DevqlConfig, RelationalDialect, RelationalStorage, RelationalStorageRole,
+    build_capability_host, esc_pg,
 };
 use crate::host::runtime_store::{
     CapabilityWorkplaneJobInsert, SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind,
@@ -51,7 +54,7 @@ use super::super::workplane::{
 };
 use super::helpers::{
     dedupe_inputs_by_artefact_id, load_current_semantic_inputs, payload_artefact_ids_from_value,
-    select_current_semantic_input_scope,
+    requested_current_semantic_input_artefact_ids,
 };
 
 pub(crate) struct PreparedEmbeddingMailboxBatch {
@@ -136,6 +139,7 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         EmbeddingRepresentationKind::Code | EmbeddingRepresentationKind::Identity => {
             mailbox_intent.code_embeddings_active
         }
+        EmbeddingRepresentationKind::Architecture => mailbox_intent.architecture_embeddings_active,
         EmbeddingRepresentationKind::Summary => mailbox_intent.summary_embeddings_active,
     };
     if !representation_active {
@@ -176,22 +180,15 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     let contains_repo_wide_backfill = batch.items.iter().any(|item| {
         item.item_kind == SemanticMailboxItemKind::RepoBackfill && item.payload_json.is_none()
     });
-    let explicit_artefact_ids =
-        contains_repo_wide_backfill.then(|| explicit_artefact_ids_from_batch(&batch.items));
-    let current_input_selection =
-        (!contains_repo_wide_backfill).then(|| select_current_semantic_input_scope(&batch.items));
-    let requested_artefact_ids = if contains_repo_wide_backfill {
-        explicit_artefact_ids.as_deref()
-    } else {
-        current_input_selection
-            .as_ref()
-            .and_then(|selection| selection.requested_artefact_ids())
-    };
+    let requested_artefact_ids = requested_current_semantic_input_artefact_ids(
+        &batch.items,
+        SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE,
+    );
     let current_inputs = load_current_semantic_inputs(
         &relational,
         &batch.repo_root,
         &batch.repo_id,
-        requested_artefact_ids,
+        Some(&requested_artefact_ids),
     )
     .await?;
     let mut current_by_artefact = current_inputs
@@ -218,10 +215,35 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
                     .as_ref()
                     .map(payload_artefact_ids_from_value);
                 let mut selected = match requested_ids {
-                    Some(requested_ids) => requested_ids
-                        .iter()
-                        .filter_map(|artefact_id| current_by_artefact.get(artefact_id).cloned())
-                        .collect::<Vec<_>>(),
+                    Some(requested_ids) => {
+                        let (selected_ids, remaining_ids) = if requested_ids.len()
+                            > SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE
+                        {
+                            (
+                                requested_ids[..SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE].to_vec(),
+                                Some(
+                                    requested_ids[SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE..].to_vec(),
+                                ),
+                            )
+                        } else {
+                            (requested_ids, None)
+                        };
+                        if let Some(remaining_ids) = remaining_ids {
+                            replacement_backfill_item =
+                                Some(SemanticEmbeddingMailboxItemInsert::new(
+                                    item.init_session_id.clone(),
+                                    batch.representation_kind.to_string(),
+                                    SemanticMailboxItemKind::RepoBackfill,
+                                    None,
+                                    Some(serde_json::to_value(remaining_ids)?),
+                                    item.dedupe_key.clone(),
+                                ));
+                        }
+                        selected_ids
+                            .iter()
+                            .filter_map(|artefact_id| current_by_artefact.get(artefact_id).cloned())
+                            .collect::<Vec<_>>()
+                    }
                     None => {
                         let artefact_ids = match repo_wide_artefact_ids.as_ref() {
                             Some(ids) => ids,
@@ -295,6 +317,12 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     let input_ms = elapsed_ms(input_started);
 
     let summary_started = Instant::now();
+    let path_cleanup_paths = batch
+        .items
+        .iter()
+        .filter_map(|item| item.payload_json.as_ref())
+        .filter_map(path_cleanup_path_from_payload)
+        .collect::<Vec<_>>();
     let summary_map = load_current_semantic_summary_map(
         &relational,
         &expanded_inputs
@@ -304,12 +332,29 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         batch.representation_kind,
     )
     .await?;
-    let embedding_inputs =
+    let mut embedding_inputs =
         build_symbol_embedding_inputs(&expanded_inputs, batch.representation_kind, &summary_map);
+    if batch.representation_kind == EmbeddingRepresentationKind::Architecture {
+        let roles_by_artefact = load_architecture_roles_for_embedding_inputs(
+            &relational,
+            &batch.repo_id,
+            &expanded_inputs,
+        )
+        .await?;
+        for input in &mut embedding_inputs {
+            input.architecture_roles = roles_by_artefact
+                .get(&input.artefact_id)
+                .cloned()
+                .unwrap_or_default();
+        }
+        embedding_inputs.retain(|input| !input.architecture_roles.is_empty());
+    }
     let should_prune_stale_current_rows = batch
         .items
         .iter()
-        .all(|item| item.item_kind == SemanticMailboxItemKind::Artefact);
+        .all(|item| item.item_kind == SemanticMailboxItemKind::Artefact)
+        || (batch.representation_kind == EmbeddingRepresentationKind::Architecture
+            && !contains_repo_wide_backfill);
     let mut current_paths_by_content = BTreeSet::<(String, String)>::new();
     let mut keep_current_artefact_ids_by_path_content =
         BTreeMap::<(String, String), Vec<String>>::new();
@@ -318,18 +363,26 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
             current_paths_by_content.insert((input.path.clone(), input.blob_sha.clone()));
         }
         for (path, content_id) in &current_paths_by_content {
-            keep_current_artefact_ids_by_path_content
-                .entry((path.clone(), content_id.clone()))
-                .or_default()
-                .extend(
+            let keep_artefact_ids =
+                if batch.representation_kind == EmbeddingRepresentationKind::Architecture {
+                    embedding_inputs
+                        .iter()
+                        .filter(|input| input.path == *path && input.blob_sha == *content_id)
+                        .map(|input| input.artefact_id.clone())
+                        .collect::<Vec<_>>()
+                } else {
                     load_current_embedding_artefact_ids_for_path_content(
                         &relational,
                         &batch.repo_id,
                         path,
                         content_id,
                     )
-                    .await?,
-                );
+                    .await?
+                };
+            keep_current_artefact_ids_by_path_content
+                .entry((path.clone(), content_id.clone()))
+                .or_default()
+                .extend(keep_artefact_ids);
         }
         for keep_artefact_ids in keep_current_artefact_ids_by_path_content.values_mut() {
             keep_artefact_ids.sort();
@@ -340,7 +393,30 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
 
     let mut embedding_statements = Vec::new();
     let mut remote_embedding_statements = Vec::new();
+    let mut remote_setup_statements = Vec::new();
+    let shared_dialect = relational.dialect_for_role(RelationalStorageRole::SharedRelational);
+    let shared_writes_remote = relational.has_remote_shared_relational_authority();
+
+    let push_shared_statement =
+        |local: &mut Vec<String>, remote: &mut Vec<String>, statement: String| {
+            if shared_writes_remote {
+                remote.push(statement);
+            } else {
+                local.push(statement);
+            }
+        };
     let mut repaired_feature_projection = false;
+    if batch.representation_kind == EmbeddingRepresentationKind::Architecture {
+        let cleanup_statements = build_architecture_path_cleanup_statements(
+            &relational,
+            &batch.repo_id,
+            batch.representation_kind,
+            &path_cleanup_paths,
+        )
+        .await?;
+        embedding_statements.extend(cleanup_statements.local);
+        remote_embedding_statements.extend(cleanup_statements.remote);
+    }
     if batch.representation_kind == EmbeddingRepresentationKind::Code {
         let feature_hash_provider = code_feature_hash_provider
             .as_ref()
@@ -354,10 +430,11 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
             })
             .await
             .context("building code embedding feature rows on blocking worker")?;
-            embedding_statements.push(build_symbol_feature_persist_rows_sql(
-                &rows,
-                relational.dialect(),
-            )?);
+            push_shared_statement(
+                &mut embedding_statements,
+                &mut remote_embedding_statements,
+                build_symbol_feature_persist_rows_sql(&rows, shared_dialect)?,
+            );
             embedding_statements.push(build_conditional_current_symbol_feature_persist_rows_sql(
                 &rows,
                 input,
@@ -368,10 +445,11 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     }
     let mut upserted_any = false;
     if !embedding_inputs.is_empty() {
-        embedding_statements.push(build_embedding_setup_persist_sql(&setup));
-        if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
-            remote_embedding_statements.push(build_embedding_setup_persist_sql(&setup));
-        }
+        push_shared_statement(
+            &mut embedding_statements,
+            &mut remote_setup_statements,
+            build_embedding_setup_persist_sql(&setup),
+        );
     }
     if should_prune_stale_current_rows {
         for (path, content_id) in current_paths_by_content {
@@ -396,9 +474,6 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
                 )
                 .await?,
             );
-            if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
-                remote_embedding_statements.push(delete_sql);
-            }
         }
     }
     let freshness_started = Instant::now();
@@ -454,10 +529,19 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         embedding_ms = elapsed_ms(embedding_started);
         let sql_started = Instant::now();
         let mut sqlite_vec_dimensions = BTreeSet::new();
-        let mut sqlite_vec_upsert_statements = Vec::new();
+        let mut sqlite_vec_upsert_rows = Vec::new();
         let mut postgres_index_dimensions = BTreeSet::new();
         for row in rows {
-            embedding_statements.push(build_sqlite_symbol_embedding_persist_sql(&row)?);
+            let row_dimension = row.dimension;
+            let shared_sql = match shared_dialect {
+                RelationalDialect::Sqlite => build_sqlite_symbol_embedding_persist_sql(&row)?,
+                RelationalDialect::Postgres => build_postgres_symbol_embedding_persist_sql(&row)?,
+            };
+            push_shared_statement(
+                &mut embedding_statements,
+                &mut remote_embedding_statements,
+                shared_sql,
+            );
             if let Some(current_input) = current_by_artefact.get(&row.artefact_id) {
                 embedding_statements.push(build_current_symbol_embedding_persist_sql(
                     current_input,
@@ -465,26 +549,14 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
                     &current_input.blob_sha,
                     &row,
                 )?);
-                sqlite_vec_dimensions.insert(row.dimension);
-                sqlite_vec_upsert_statements.extend(build_sqlite_current_vec_upsert_statements(
-                    &current_input.path,
-                    &row,
-                )?);
+                sqlite_vec_dimensions.insert(row_dimension);
+                sqlite_vec_upsert_rows.push(SqliteCurrentVecUpsertRow {
+                    path: current_input.path.clone(),
+                    row,
+                });
             }
-            if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
-                remote_embedding_statements
-                    .push(build_postgres_symbol_embedding_persist_sql(&row)?);
-                postgres_index_dimensions.insert(row.dimension);
-                if let Some(current_input) = current_by_artefact.get(&row.artefact_id) {
-                    remote_embedding_statements.push(
-                        build_postgres_current_symbol_embedding_persist_sql(
-                            current_input,
-                            &current_input.path,
-                            &current_input.blob_sha,
-                            &row,
-                        )?,
-                    );
-                }
+            if shared_writes_remote {
+                postgres_index_dimensions.insert(row_dimension);
             }
         }
         for dimension in sqlite_vec_dimensions {
@@ -492,15 +564,13 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
                 build_sqlite_current_vec_table_init_statements(&relational, dimension).await?,
             );
         }
-        embedding_statements.extend(sqlite_vec_upsert_statements);
-        if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
+        embedding_statements.extend(build_sqlite_current_vec_batch_upsert_statements(
+            &sqlite_vec_upsert_rows,
+        )?);
+        if shared_writes_remote {
             for dimension in postgres_index_dimensions {
                 remote_embedding_statements.push(build_postgres_pgvector_partial_index_sql(
                     "symbol_embeddings",
-                    dimension,
-                ));
-                remote_embedding_statements.push(build_postgres_pgvector_partial_index_sql(
-                    "symbol_embeddings_current",
                     dimension,
                 ));
             }
@@ -510,23 +580,22 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     }
 
     let mut setup_statements = Vec::new();
-    let mut remote_setup_statements = Vec::new();
     let setup_started = Instant::now();
     if upserted_any {
         setup_statements.push(build_active_embedding_setup_persist_sql(
             &batch.repo_id,
             &ActiveEmbeddingRepresentationState::new(batch.representation_kind, setup.clone()),
         ));
-        if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
-            remote_setup_statements.push(build_active_embedding_setup_persist_sql(
-                &batch.repo_id,
-                &ActiveEmbeddingRepresentationState::new(batch.representation_kind, setup.clone()),
-            ));
-        }
     }
     let setup_ms = elapsed_ms(setup_started);
 
-    let clone_rebuild_signal = if (upserted_any || repaired_feature_projection)
+    let repo_backfill_has_remaining_follow_up = replacement_backfill_item.is_some()
+        && batch
+            .items
+            .iter()
+            .any(|item| item.item_kind == SemanticMailboxItemKind::RepoBackfill);
+    let clone_rebuild_signal = if !repo_backfill_has_remaining_follow_up
+        && (upserted_any || repaired_feature_projection)
         && matches!(
             batch.representation_kind,
             EmbeddingRepresentationKind::Code | EmbeddingRepresentationKind::Summary
@@ -586,27 +655,51 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     })
 }
 
-fn explicit_artefact_ids_from_batch(
-    items: &[crate::host::runtime_store::SemanticEmbeddingMailboxItemRecord],
-) -> Vec<String> {
-    let mut ids = Vec::new();
-    for item in items {
-        match item.item_kind {
-            SemanticMailboxItemKind::Artefact => {
-                if let Some(artefact_id) = item.artefact_id.as_ref() {
-                    ids.push(artefact_id.clone());
-                }
-            }
-            SemanticMailboxItemKind::RepoBackfill => {
-                if let Some(payload) = item.payload_json.as_ref() {
-                    ids.extend(payload_artefact_ids_from_value(payload));
-                }
-            }
-        }
+struct ArchitecturePathCleanupStatements {
+    local: Vec<String>,
+    remote: Vec<String>,
+}
+
+async fn build_architecture_path_cleanup_statements(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    representation_kind: EmbeddingRepresentationKind,
+    path_cleanup_paths: &[String],
+) -> Result<ArchitecturePathCleanupStatements> {
+    let mut local = Vec::new();
+    for path in path_cleanup_paths {
+        let delete_sql = build_delete_stale_current_symbol_embedding_rows_for_path_sql(
+            repo_id,
+            path,
+            "",
+            representation_kind,
+            &[],
+        );
+        local.push(delete_sql);
+        local.extend(
+            build_sqlite_stale_current_rows_for_path_delete_statements(
+                relational,
+                repo_id,
+                path,
+                representation_kind,
+                &[],
+            )
+            .await?,
+        );
     }
-    ids.sort();
-    ids.dedup();
-    ids
+    Ok(ArchitecturePathCleanupStatements {
+        local,
+        remote: Vec::new(),
+    })
+}
+
+fn path_cleanup_path_from_payload(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("path_cleanup")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
 }
 
 async fn load_current_embedding_backfill_artefact_ids(
@@ -669,4 +762,46 @@ ORDER BY current.artefact_id",
 
 fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn architecture_path_cleanup_keeps_current_projection_cleanup_local() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let sqlite_path = temp.path().join("semantic.sqlite");
+        drop(rusqlite::Connection::open(&sqlite_path).expect("create sqlite db"));
+        let relational = RelationalStorage::primary_backend_for_tests(
+            sqlite_path,
+            crate::host::devql::RelationalPrimaryBackend::Postgres,
+        );
+        let paths = vec!["src/api.rs".to_string()];
+        let statements = build_architecture_path_cleanup_statements(
+            &relational,
+            "repo-1",
+            EmbeddingRepresentationKind::Architecture,
+            &paths,
+        )
+        .await
+        .expect("build architecture path cleanup statements");
+
+        assert!(
+            statements
+                .local
+                .iter()
+                .any(|statement| statement.contains("DELETE FROM symbol_embeddings_current"))
+        );
+        assert!(
+            statements
+                .local
+                .iter()
+                .any(|statement| statement.contains("path = 'src/api.rs'"))
+        );
+        assert!(
+            statements.remote.is_empty(),
+            "current projection cleanup must stay in local SQLite even when the shared backend is remote"
+        );
+    }
 }

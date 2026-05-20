@@ -69,6 +69,7 @@ pub struct EnrichmentControlState {
     pub version: u8,
     pub paused_semantic: bool,
     pub paused_embeddings: bool,
+    pub last_embedding_claim_kind: Option<EmbeddingRepresentationKind>,
     pub active_branch_by_repo: BTreeMap<String, String>,
     pub jobs: Vec<EnrichmentJob>,
     pub retried_failed_jobs: u64,

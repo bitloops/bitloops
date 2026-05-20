@@ -24,7 +24,9 @@ use crate::capability_packs::semantic_clones::{
     parse_semantic_index_state_rows,
 };
 use crate::config::resolve_store_backend_config_for_repo;
-use crate::host::devql::{DevqlConfig, RelationalStorage, build_capability_host, esc_pg};
+use crate::host::devql::{
+    DevqlConfig, RelationalStorage, RelationalStorageRole, build_capability_host, esc_pg,
+};
 use crate::host::runtime_store::{
     SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind, SemanticSummaryMailboxItemInsert,
 };
@@ -36,7 +38,7 @@ use super::super::workplane::{
 };
 use super::helpers::{
     dedupe_inputs_by_artefact_id, load_current_semantic_inputs, payload_artefact_ids_from_value,
-    select_current_semantic_input_scope,
+    requested_current_semantic_input_artefact_ids,
 };
 
 pub(crate) struct PreparedSummaryMailboxBatch {
@@ -68,25 +70,15 @@ where
     let summary_embeddings_enabled =
         embedding_slot_for_representation(&config, EmbeddingRepresentationKind::Summary).is_some();
 
-    let contains_repo_wide_backfill = batch.items.iter().any(|item| {
-        item.item_kind == SemanticMailboxItemKind::RepoBackfill && item.payload_json.is_none()
-    });
-    let explicit_artefact_ids =
-        contains_repo_wide_backfill.then(|| explicit_artefact_ids_from_batch(&batch.items));
-    let current_input_selection =
-        (!contains_repo_wide_backfill).then(|| select_current_semantic_input_scope(&batch.items));
-    let requested_artefact_ids = if contains_repo_wide_backfill {
-        explicit_artefact_ids.as_deref()
-    } else {
-        current_input_selection
-            .as_ref()
-            .and_then(|selection| selection.requested_artefact_ids())
-    };
+    let requested_artefact_ids = requested_current_semantic_input_artefact_ids(
+        &batch.items,
+        SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE,
+    );
     let current_inputs = load_current_semantic_inputs(
         &relational,
         &batch.repo_root,
         &batch.repo_id,
-        requested_artefact_ids,
+        Some(&requested_artefact_ids),
     )
     .await?;
     let current_by_artefact = current_inputs
@@ -121,10 +113,32 @@ where
                     .as_ref()
                     .map(payload_artefact_ids_from_value);
                 let mut selected = match requested_ids {
-                    Some(requested_ids) => requested_ids
-                        .iter()
-                        .filter_map(|artefact_id| current_by_artefact.get(artefact_id).cloned())
-                        .collect::<Vec<_>>(),
+                    Some(requested_ids) => {
+                        let (selected_ids, remaining_ids) = if requested_ids.len()
+                            > SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE
+                        {
+                            (
+                                requested_ids[..SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE].to_vec(),
+                                Some(requested_ids[SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE..].to_vec()),
+                            )
+                        } else {
+                            (requested_ids, None)
+                        };
+                        if let Some(remaining_ids) = remaining_ids {
+                            replacement_backfill_item =
+                                Some(SemanticSummaryMailboxItemInsert::new(
+                                    item.init_session_id.clone(),
+                                    SemanticMailboxItemKind::RepoBackfill,
+                                    None,
+                                    Some(serde_json::to_value(remaining_ids)?),
+                                    item.dedupe_key.clone(),
+                                ));
+                        }
+                        selected_ids
+                            .iter()
+                            .filter_map(|artefact_id| current_by_artefact.get(artefact_id).cloned())
+                            .collect::<Vec<_>>()
+                    }
                     None => {
                         let artefact_ids = match repo_wide_artefact_ids.as_ref() {
                             Some(ids) => ids,
@@ -203,6 +217,17 @@ where
     dedupe_inputs_by_artefact_id(&mut expanded_inputs);
 
     let mut semantic_statements = Vec::new();
+    let mut remote_semantic_statements = Vec::new();
+    let shared_dialect = relational.dialect_for_role(RelationalStorageRole::SharedRelational);
+    let shared_writes_remote = relational.has_remote_shared_relational_authority();
+    let push_shared_statement =
+        |local: &mut Vec<String>, remote: &mut Vec<String>, statement: String| {
+            if shared_writes_remote {
+                remote.push(statement);
+            } else {
+                local.push(statement);
+            }
+        };
     let mut embedding_follow_ups = Vec::new();
     for input in &expanded_inputs {
         let persist_summaries = summary_provider.provider.persists_summaries_for(input);
@@ -210,7 +235,10 @@ where
             build_semantic_feature_input_hash(input, summary_provider.provider.as_ref());
         let state = parse_semantic_index_state_rows(
             &relational
-                .query_rows(&build_semantic_get_index_state_sql(&input.artefact_id))
+                .query_rows_for_role(
+                    RelationalStorageRole::SharedRelational,
+                    &build_semantic_get_index_state_sql(&input.artefact_id),
+                )
                 .await?,
         );
         if !semantic_features_require_reindex(
@@ -219,13 +247,15 @@ where
             summary_provider.provider.requires_model_output(),
             persist_summaries,
         ) {
-            semantic_statements.push(
-                build_repair_current_semantic_projection_from_historical_sql(
-                    &input.repo_id,
-                    std::slice::from_ref(&input.artefact_id),
-                    relational.dialect(),
-                ),
-            );
+            if !shared_writes_remote {
+                semantic_statements.push(
+                    build_repair_current_semantic_projection_from_historical_sql(
+                        &input.repo_id,
+                        std::slice::from_ref(&input.artefact_id),
+                        relational.dialect(),
+                    ),
+                );
+            }
             if !persist_summaries {
                 semantic_statements.push(build_delete_current_symbol_semantics_for_artefact_sql(
                     &input.repo_id,
@@ -233,7 +263,10 @@ where
                 ));
             }
             if summary_embeddings_enabled && persist_summaries {
-                embedding_follow_ups.push(summary_embedding_follow_up_for(input));
+                embedding_follow_ups.push(summary_embedding_follow_up_for(
+                    input,
+                    artefact_session_ids.get(&input.artefact_id),
+                ));
             }
             continue;
         }
@@ -250,23 +283,28 @@ where
         .context("building semantic summary rows on blocking worker")?;
         ensure_required_llm_summary_output(&rows, summary_provider.provider.as_ref())?;
         if persist_summaries {
-            semantic_statements.push(build_semantic_persist_rows_sql(
-                &rows,
-                relational.dialect(),
-            )?);
+            push_shared_statement(
+                &mut semantic_statements,
+                &mut remote_semantic_statements,
+                build_semantic_persist_rows_sql(&rows, shared_dialect)?,
+            );
             semantic_statements.push(build_conditional_current_semantic_persist_rows_sql(
                 &rows,
                 input,
                 relational.dialect(),
             )?);
             if summary_embeddings_enabled {
-                embedding_follow_ups.push(summary_embedding_follow_up_for(input));
+                embedding_follow_ups.push(summary_embedding_follow_up_for(
+                    input,
+                    artefact_session_ids.get(&input.artefact_id),
+                ));
             }
         } else {
-            semantic_statements.push(build_symbol_feature_persist_rows_sql(
-                &rows,
-                relational.dialect(),
-            )?);
+            push_shared_statement(
+                &mut semantic_statements,
+                &mut remote_semantic_statements,
+                build_symbol_feature_persist_rows_sql(&rows, shared_dialect)?,
+            );
             semantic_statements.push(build_conditional_current_symbol_feature_persist_rows_sql(
                 &rows,
                 input,
@@ -291,6 +329,7 @@ where
             },
             lease_token: batch.lease_token.clone(),
             semantic_statements,
+            remote_semantic_statements,
             embedding_follow_ups,
             replacement_backfill_item,
             acked_item_ids: batch
@@ -311,9 +350,14 @@ where
 
 fn summary_embedding_follow_up_for(
     input: &SemanticFeatureInput,
+    init_session_ids: Option<&BTreeSet<String>>,
 ) -> SemanticEmbeddingMailboxItemInsert {
+    let init_session_id = match init_session_ids {
+        Some(session_ids) if session_ids.len() == 1 => session_ids.iter().next().cloned(),
+        _ => None,
+    };
     SemanticEmbeddingMailboxItemInsert::new(
-        None,
+        init_session_id,
         EmbeddingRepresentationKind::Summary.to_string(),
         SemanticMailboxItemKind::Artefact,
         Some(input.artefact_id.clone()),
@@ -323,29 +367,6 @@ fn summary_embedding_follow_up_for(
             SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, input.artefact_id
         )),
     )
-}
-
-fn explicit_artefact_ids_from_batch(
-    items: &[crate::host::runtime_store::SemanticSummaryMailboxItemRecord],
-) -> Vec<String> {
-    let mut ids = Vec::new();
-    for item in items {
-        match item.item_kind {
-            SemanticMailboxItemKind::Artefact => {
-                if let Some(artefact_id) = item.artefact_id.as_ref() {
-                    ids.push(artefact_id.clone());
-                }
-            }
-            SemanticMailboxItemKind::RepoBackfill => {
-                if let Some(payload) = item.payload_json.as_ref() {
-                    ids.extend(payload_artefact_ids_from_value(payload));
-                }
-            }
-        }
-    }
-    ids.sort();
-    ids.dedup();
-    ids
 }
 
 async fn load_current_summary_backfill_artefact_ids(
@@ -372,4 +393,63 @@ ORDER BY current.path, current.start_line, current.symbol_id, COALESCE(current.s
                 .map(str::to_string)
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summary_embedding_follow_up_for;
+    use crate::capability_packs::semantic_clones::features::SemanticFeatureInput;
+    use std::collections::BTreeSet;
+
+    fn test_input() -> SemanticFeatureInput {
+        SemanticFeatureInput {
+            repo_id: "repo-1".to_string(),
+            artefact_id: "artefact-1".to_string(),
+            path: "src/lib.rs".to_string(),
+            blob_sha: "blob-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            symbol_fqn: "crate::render_invoice".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function_item".to_string(),
+            language: "rust".to_string(),
+            name: "render_invoice".to_string(),
+            signature: Some("fn render_invoice(order_id: &str) -> String".to_string()),
+            modifiers: Vec::new(),
+            docstring: Some("Render an invoice.".to_string()),
+            body: "fn render_invoice(order_id: &str) -> String { order_id.to_string() }"
+                .to_string(),
+            parent_kind: None,
+            dependency_signals: Vec::new(),
+            content_hash: None,
+        }
+    }
+
+    #[test]
+    fn summary_embedding_follow_up_keeps_single_init_session_id_when_available() {
+        let session_ids = ["init-session-1".to_string()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        let follow_up = summary_embedding_follow_up_for(&test_input(), Some(&session_ids));
+
+        assert_eq!(follow_up.init_session_id.as_deref(), Some("init-session-1"));
+    }
+
+    #[test]
+    fn summary_embedding_follow_up_stays_sessionless_with_multiple_init_session_ids() {
+        let session_ids = ["init-session-2".to_string(), "init-session-1".to_string()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        let follow_up = summary_embedding_follow_up_for(&test_input(), Some(&session_ids));
+
+        assert_eq!(follow_up.init_session_id, None);
+    }
+
+    #[test]
+    fn summary_embedding_follow_up_stays_sessionless_without_init_session_ids() {
+        let follow_up = summary_embedding_follow_up_for(&test_input(), None);
+
+        assert_eq!(follow_up.init_session_id, None);
+    }
 }

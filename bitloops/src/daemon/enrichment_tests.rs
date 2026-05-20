@@ -1,5 +1,6 @@
 use super::*;
 use crate::capability_packs::semantic_clones::features::NoopSemanticSummaryProvider;
+use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX;
 use crate::cli::inference::{managed_inference_binary_path, platform_summary_gateway_url_override};
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{
@@ -814,6 +815,7 @@ fn new_test_coordinator(temp: &TempDir) -> (EnrichmentCoordinator, EnrichmentJob
             workplane_store: DaemonSqliteRuntimeStore::open_at(runtime_db_path)
                 .expect("open test workplane store"),
             daemon_config_root: config_root.clone(),
+            self_ref: std::sync::OnceLock::new(),
             subscription_hub: std::sync::Mutex::new(None),
             lock: Mutex::new(()),
             notify: Notify::new(),
@@ -965,6 +967,88 @@ model = "local-code"
     config_path
 }
 
+fn configure_summary_refresh_and_embeddings_for_repo(
+    target: &EnrichmentJobTarget,
+    profile_name: &str,
+) -> PathBuf {
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("bind repo root to daemon config");
+
+    #[cfg(unix)]
+    let (summary_command, summary_args) =
+        fake_text_generation_runtime_command_and_args(&target.repo_root);
+    #[cfg(windows)]
+    let (summary_command, summary_args) =
+        fake_text_generation_runtime_command_and_args(&target.repo_root);
+    let summary_runtime_args = summary_args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    #[cfg(unix)]
+    let (embedding_command, embedding_args) =
+        fake_embeddings_runtime_command_and_args(&target.repo_root);
+    #[cfg(windows)]
+    let (embedding_command, embedding_args) =
+        fake_embeddings_runtime_command_and_args(&target.repo_root);
+    let embedding_runtime_args = embedding_args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
+    config.push_str(&format!(
+        r#"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+summary_generation = "summary_local"
+code_embeddings = "{profile_name}"
+summary_embeddings = "{profile_name}"
+
+[inference.runtimes.bitloops_inference]
+command = {summary_command:?}
+args = [{summary_runtime_args}]
+startup_timeout_secs = 1
+request_timeout_secs = 1
+
+[inference.runtimes.bitloops_local_embeddings]
+command = {embedding_command:?}
+args = [{embedding_runtime_args}]
+startup_timeout_secs = 1
+request_timeout_secs = 1
+
+[inference.profiles.summary_local]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+base_url = "http://127.0.0.1:11434/api/chat"
+temperature = "0.1"
+max_output_tokens = 200
+
+[inference.profiles.{profile_name}]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "local-code"
+"#
+    ));
+    fs::write(&config_path, config)
+        .expect("write test daemon config with summary and embeddings profiles");
+    config_path
+}
+
 fn configure_summary_embeddings_only_for_repo(
     target: &EnrichmentJobTarget,
     profile_name: &str,
@@ -1054,6 +1138,147 @@ model = "bge-m3"
     ));
     fs::write(&config_path, config)
         .expect("write test daemon config with remote embeddings profile");
+    config_path
+}
+
+fn configure_repo_local_remote_embeddings_for_repo(
+    target: &EnrichmentJobTarget,
+    profile_name: &str,
+) -> PathBuf {
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
+    config.push_str(&format!(
+        r#"
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+
+[inference.runtimes.bitloops_platform_embeddings]
+command = "platform-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.runtimes.bitloops_inference]
+command = "platform-summary"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.{profile_name}]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_platform_embeddings"
+model = "bge-m3"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+runtime = "bitloops_inference"
+driver = "bitloops_platform_chat"
+model = "ministral-3-3b-instruct"
+api_key = "${{BITLOOPS_PLATFORM_GATEWAY_TOKEN}}"
+temperature = "0.1"
+max_output_tokens = 200
+"#
+    ));
+    fs::write(&config_path, config)
+        .expect("write daemon config with remote summary and embeddings profiles");
+    fs::write(
+        target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        format!(
+            r#"[daemon]
+config_path = {:?}
+
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "{profile_name}"
+summary_embeddings = "{profile_name}"
+"#,
+            config_path.display().to_string(),
+        ),
+    )
+    .expect("write repo-local semantic embeddings policy");
+    config_path
+}
+
+fn configure_repo_local_remote_embeddings_with_fake_summary_for_repo(
+    target: &EnrichmentJobTarget,
+    profile_name: &str,
+) -> PathBuf {
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+
+    #[cfg(unix)]
+    let (summary_command, summary_args) =
+        fake_text_generation_runtime_command_and_args(&target.repo_root);
+    #[cfg(windows)]
+    let (summary_command, summary_args) =
+        fake_text_generation_runtime_command_and_args(&target.repo_root);
+    let summary_runtime_args = summary_args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
+    config.push_str(&format!(
+        r#"
+[semantic_clones.inference]
+summary_generation = "summary_local"
+
+[inference.runtimes.bitloops_platform_embeddings]
+command = "platform-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.runtimes.bitloops_inference]
+command = {summary_command:?}
+args = [{summary_runtime_args}]
+startup_timeout_secs = 1
+request_timeout_secs = 1
+
+[inference.profiles.{profile_name}]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_platform_embeddings"
+model = "bge-m3"
+
+[inference.profiles.summary_local]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+base_url = "http://127.0.0.1:11434/api/chat"
+temperature = "0.1"
+max_output_tokens = 200
+"#
+    ));
+    fs::write(&config_path, config)
+        .expect("write daemon config with remote embeddings and fake summary profile");
+    fs::write(
+        target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        format!(
+            r#"[daemon]
+config_path = {:?}
+
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "{profile_name}"
+summary_embeddings = "{profile_name}"
+"#,
+            config_path.display().to_string(),
+        ),
+    )
+    .expect("write repo-local semantic embeddings policy");
     config_path
 }
 
@@ -1685,6 +1910,742 @@ fn embedding_mailbox_batch_claim_leases_identity_items_when_embeddings_are_confi
         load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending).len(),
         0,
     );
+}
+
+#[test]
+fn embedding_mailbox_batch_claim_balances_code_and_identity_batches_when_both_are_pending() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let _config_path = configure_embeddings_for_repo(&target, "local_code");
+
+    for index in 0..64 {
+        insert_embedding_mailbox_item(
+            &coordinator,
+            &target,
+            EmbeddingMailboxItemFixture {
+                repo_id: &repo_id,
+                item_id: &format!("code-item-{index}"),
+                representation_kind: "code",
+                status: SemanticMailboxItemStatus::Pending,
+                item_kind: SemanticMailboxItemKind::Artefact,
+                artefact_id: Some(&format!("code-{index}")),
+                payload_json: None,
+                submitted_at_unix: (index + 1) as u64,
+                updated_at_unix: (index + 1) as u64,
+                attempts: 0,
+                lease_token: None,
+                lease_expires_at_unix: None,
+                last_error: None,
+            },
+        );
+    }
+    for index in 0..64 {
+        insert_embedding_mailbox_item(
+            &coordinator,
+            &target,
+            EmbeddingMailboxItemFixture {
+                repo_id: &repo_id,
+                item_id: &format!("identity-item-{index}"),
+                representation_kind: "identity",
+                status: SemanticMailboxItemStatus::Pending,
+                item_kind: SemanticMailboxItemKind::Artefact,
+                artefact_id: Some(&format!("identity-{index}")),
+                payload_json: None,
+                submitted_at_unix: (index + 65) as u64,
+                updated_at_unix: (index + 65) as u64,
+                attempts: 0,
+                lease_token: None,
+                lease_expires_at_unix: None,
+                last_error: None,
+            },
+        );
+    }
+
+    let mut claimed_kinds = Vec::new();
+    for _ in 0..4 {
+        let claimed = super::claim_embedding_mailbox_batch(
+            &coordinator.workplane_store,
+            &coordinator.runtime_store,
+            &default_state(),
+        )
+        .expect("claim embedding mailbox batch")
+        .expect("embedding mailbox batch should be claimable");
+        claimed_kinds.push(claimed.representation_kind.to_string());
+    }
+
+    assert_eq!(
+        claimed_kinds,
+        vec![
+            "code".to_string(),
+            "identity".to_string(),
+            "code".to_string(),
+            "identity".to_string(),
+        ],
+    );
+}
+
+#[test]
+fn embedding_mailbox_batch_claim_keeps_fifo_with_single_embedding_worker_during_summary_overlap() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let config_path = configure_summary_refresh_and_embeddings_for_repo(&target, "local_code");
+    let config = fs::read_to_string(&config_path).expect("read test daemon config");
+    fs::write(
+        &config_path,
+        config.replacen(
+            "[semantic_clones]\n",
+            "[semantic_clones]\nembedding_workers = 1\n",
+            1,
+        ),
+    )
+    .expect("write test daemon config with explicit single embedding worker");
+
+    insert_summary_mailbox_item(
+        &coordinator,
+        &target,
+        SummaryMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "summary-refresh-pending",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("summary-source"),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "code-pending-older",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("code-older"),
+            payload_json: None,
+            submitted_at_unix: 2,
+            updated_at_unix: 2,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "summary-pending-newer",
+            representation_kind: "summary",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("summary-newer"),
+            payload_json: None,
+            submitted_at_unix: 3,
+            updated_at_unix: 3,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+
+    let claimed = super::claim_embedding_mailbox_batch(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+    )
+    .expect("claim embedding mailbox batch")
+    .expect("code embedding mailbox batch should be claimable");
+
+    assert_eq!(claimed.representation_kind.to_string(), "code");
+    assert_eq!(claimed.items.len(), 1);
+    assert_eq!(claimed.items[0].artefact_id.as_deref(), Some("code-older"));
+}
+
+#[test]
+fn embedding_mailbox_batch_claim_balances_code_and_identity_after_summary_priority_slots() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let config_path = configure_summary_refresh_and_embeddings_for_repo(&target, "local_code");
+    let config = fs::read_to_string(&config_path).expect("read test daemon config");
+    fs::write(
+        &config_path,
+        config.replacen(
+            "[semantic_clones]\n",
+            "[semantic_clones]\nembedding_workers = 4\n",
+            1,
+        ),
+    )
+    .expect("write test daemon config with explicit embedding worker count");
+
+    insert_summary_mailbox_item(
+        &coordinator,
+        &target,
+        SummaryMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "summary-refresh-pending",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("summary-source"),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    for index in 0..64 {
+        insert_embedding_mailbox_item(
+            &coordinator,
+            &target,
+            EmbeddingMailboxItemFixture {
+                repo_id: &repo_id,
+                item_id: &format!("code-item-{index}"),
+                representation_kind: "code",
+                status: SemanticMailboxItemStatus::Pending,
+                item_kind: SemanticMailboxItemKind::Artefact,
+                artefact_id: Some(&format!("code-{index}")),
+                payload_json: None,
+                submitted_at_unix: (index + 2) as u64,
+                updated_at_unix: (index + 2) as u64,
+                attempts: 0,
+                lease_token: None,
+                lease_expires_at_unix: None,
+                last_error: None,
+            },
+        );
+    }
+    for index in 0..64 {
+        insert_embedding_mailbox_item(
+            &coordinator,
+            &target,
+            EmbeddingMailboxItemFixture {
+                repo_id: &repo_id,
+                item_id: &format!("identity-item-{index}"),
+                representation_kind: "identity",
+                status: SemanticMailboxItemStatus::Pending,
+                item_kind: SemanticMailboxItemKind::Artefact,
+                artefact_id: Some(&format!("identity-{index}")),
+                payload_json: None,
+                submitted_at_unix: (index + 66) as u64,
+                updated_at_unix: (index + 66) as u64,
+                attempts: 0,
+                lease_token: None,
+                lease_expires_at_unix: None,
+                last_error: None,
+            },
+        );
+    }
+    for index in 0..64 {
+        insert_embedding_mailbox_item(
+            &coordinator,
+            &target,
+            EmbeddingMailboxItemFixture {
+                repo_id: &repo_id,
+                item_id: &format!("summary-item-{index}"),
+                representation_kind: "summary",
+                status: SemanticMailboxItemStatus::Pending,
+                item_kind: SemanticMailboxItemKind::Artefact,
+                artefact_id: Some(&format!("summary-{index}")),
+                payload_json: None,
+                submitted_at_unix: (index + 130) as u64,
+                updated_at_unix: (index + 130) as u64,
+                attempts: 0,
+                lease_token: None,
+                lease_expires_at_unix: None,
+                last_error: None,
+            },
+        );
+    }
+
+    let mut claimed_kinds = Vec::new();
+    for _ in 0..4 {
+        let claimed = super::claim_embedding_mailbox_batch(
+            &coordinator.workplane_store,
+            &coordinator.runtime_store,
+            &default_state(),
+        )
+        .expect("claim embedding mailbox batch")
+        .expect("embedding mailbox batch should be claimable");
+        claimed_kinds.push(claimed.representation_kind.to_string());
+    }
+
+    assert_eq!(
+        claimed_kinds,
+        vec![
+            "summary".to_string(),
+            "code".to_string(),
+            "identity".to_string(),
+            "code".to_string(),
+        ],
+    );
+}
+
+#[test]
+fn embedding_mailbox_batch_claim_keeps_one_summary_slot_after_summary_refresh_finishes() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let config_path = configure_summary_refresh_and_embeddings_for_repo(&target, "local_code");
+    let config = fs::read_to_string(&config_path).expect("read test daemon config");
+    fs::write(
+        &config_path,
+        config.replacen(
+            "[semantic_clones]\n",
+            "[semantic_clones]\nembedding_workers = 4\n",
+            1,
+        ),
+    )
+    .expect("write test daemon config with explicit embedding worker count");
+
+    for index in 0..64 {
+        insert_embedding_mailbox_item(
+            &coordinator,
+            &target,
+            EmbeddingMailboxItemFixture {
+                repo_id: &repo_id,
+                item_id: &format!("code-item-{index}"),
+                representation_kind: "code",
+                status: SemanticMailboxItemStatus::Pending,
+                item_kind: SemanticMailboxItemKind::Artefact,
+                artefact_id: Some(&format!("code-{index}")),
+                payload_json: None,
+                submitted_at_unix: (index + 1) as u64,
+                updated_at_unix: (index + 1) as u64,
+                attempts: 0,
+                lease_token: None,
+                lease_expires_at_unix: None,
+                last_error: None,
+            },
+        );
+    }
+    for index in 0..64 {
+        insert_embedding_mailbox_item(
+            &coordinator,
+            &target,
+            EmbeddingMailboxItemFixture {
+                repo_id: &repo_id,
+                item_id: &format!("identity-item-{index}"),
+                representation_kind: "identity",
+                status: SemanticMailboxItemStatus::Pending,
+                item_kind: SemanticMailboxItemKind::Artefact,
+                artefact_id: Some(&format!("identity-{index}")),
+                payload_json: None,
+                submitted_at_unix: (index + 65) as u64,
+                updated_at_unix: (index + 65) as u64,
+                attempts: 0,
+                lease_token: None,
+                lease_expires_at_unix: None,
+                last_error: None,
+            },
+        );
+    }
+    for index in 0..64 {
+        insert_embedding_mailbox_item(
+            &coordinator,
+            &target,
+            EmbeddingMailboxItemFixture {
+                repo_id: &repo_id,
+                item_id: &format!("summary-item-{index}"),
+                representation_kind: "summary",
+                status: SemanticMailboxItemStatus::Pending,
+                item_kind: SemanticMailboxItemKind::Artefact,
+                artefact_id: Some(&format!("summary-{index}")),
+                payload_json: None,
+                submitted_at_unix: (index + 129) as u64,
+                updated_at_unix: (index + 129) as u64,
+                attempts: 0,
+                lease_token: None,
+                lease_expires_at_unix: None,
+                last_error: None,
+            },
+        );
+    }
+
+    let mut claimed_kinds = Vec::new();
+    for _ in 0..4 {
+        let claimed = super::claim_embedding_mailbox_batch(
+            &coordinator.workplane_store,
+            &coordinator.runtime_store,
+            &default_state(),
+        )
+        .expect("claim embedding mailbox batch")
+        .expect("embedding mailbox batch should be claimable");
+        claimed_kinds.push(claimed.representation_kind.to_string());
+    }
+
+    assert_eq!(
+        claimed_kinds,
+        vec![
+            "summary".to_string(),
+            "code".to_string(),
+            "identity".to_string(),
+            "code".to_string(),
+        ],
+    );
+}
+
+#[test]
+fn embedding_mailbox_batch_claim_prioritises_summary_items_with_multiple_workers_while_summary_mailbox_work_is_active()
+ {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let config_path = configure_summary_refresh_and_embeddings_for_repo(&target, "local_code");
+    let config = fs::read_to_string(&config_path).expect("read test daemon config");
+    fs::write(
+        &config_path,
+        config.replacen(
+            "[semantic_clones]\n",
+            "[semantic_clones]\nembedding_workers = 4\n",
+            1,
+        ),
+    )
+    .expect("write test daemon config with explicit embedding worker count");
+
+    insert_summary_mailbox_item(
+        &coordinator,
+        &target,
+        SummaryMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "summary-refresh-pending",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("summary-source"),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "code-pending-older",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("code-older"),
+            payload_json: None,
+            submitted_at_unix: 2,
+            updated_at_unix: 2,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "summary-pending-newer",
+            representation_kind: "summary",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("summary-newer"),
+            payload_json: None,
+            submitted_at_unix: 3,
+            updated_at_unix: 3,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+
+    let claimed = super::claim_embedding_mailbox_batch(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+    )
+    .expect("claim embedding mailbox batch")
+    .expect("summary embedding mailbox batch should be claimable");
+
+    assert_eq!(claimed.representation_kind.to_string(), "summary");
+    assert_eq!(claimed.items.len(), 1);
+    assert_eq!(
+        claimed.items[0].artefact_id.as_deref(),
+        Some("summary-newer")
+    );
+}
+
+#[test]
+fn embedding_mailbox_batch_claim_prioritises_summary_items_with_multiple_workers_while_summary_workplane_jobs_are_active()
+ {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let config_path = configure_summary_refresh_and_embeddings_for_repo(&target, "local_code");
+    let config = fs::read_to_string(&config_path).expect("read test daemon config");
+    fs::write(
+        &config_path,
+        config.replacen(
+            "[semantic_clones]\n",
+            "[semantic_clones]\nembedding_workers = 4\n",
+            1,
+        ),
+    )
+    .expect("write test daemon config with explicit embedding worker count");
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("summary-workplane"),
+            job_id: "summary-refresh-job",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "code-pending-older",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("code-older"),
+            payload_json: None,
+            submitted_at_unix: 2,
+            updated_at_unix: 2,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "summary-pending-newer",
+            representation_kind: "summary",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("summary-newer"),
+            payload_json: None,
+            submitted_at_unix: 3,
+            updated_at_unix: 3,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+
+    let claimed = super::claim_embedding_mailbox_batch(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+    )
+    .expect("claim embedding mailbox batch")
+    .expect("summary embedding mailbox batch should be claimable");
+
+    assert_eq!(claimed.representation_kind.to_string(), "summary");
+    assert_eq!(claimed.items.len(), 1);
+    assert_eq!(
+        claimed.items[0].artefact_id.as_deref(),
+        Some("summary-newer")
+    );
+}
+
+#[test]
+fn embedding_mailbox_batch_claim_reserves_non_summary_overlap_capacity_before_extra_summary_claims()
+{
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let config_path = configure_summary_refresh_and_embeddings_for_repo(&target, "local_code");
+    let config = fs::read_to_string(&config_path).expect("read test daemon config");
+    fs::write(
+        &config_path,
+        config.replacen(
+            "[semantic_clones]\n",
+            "[semantic_clones]\nembedding_workers = 4\n",
+            1,
+        ),
+    )
+    .expect("write test daemon config with explicit embedding worker count");
+
+    let summary_priority_slots = 1;
+    assert!(
+        super::effective_worker_budgets(&coordinator.workplane_store, &target.config_root)
+            .expect("load effective worker budgets")
+            .embeddings
+            > summary_priority_slots,
+        "test requires at least two embeddings workers"
+    );
+
+    insert_summary_mailbox_item(
+        &coordinator,
+        &target,
+        SummaryMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "summary-refresh-pending",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("summary-source"),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    for index in 0..summary_priority_slots {
+        let item_id = format!("summary-leased-{index}");
+        let artefact_id = format!("summary-active-{index}");
+        let lease_token = format!("summary-lease-token-{index}");
+        insert_embedding_mailbox_item(
+            &coordinator,
+            &target,
+            EmbeddingMailboxItemFixture {
+                repo_id: &repo_id,
+                item_id: &item_id,
+                representation_kind: "summary",
+                status: SemanticMailboxItemStatus::Leased,
+                item_kind: SemanticMailboxItemKind::Artefact,
+                artefact_id: Some(&artefact_id),
+                payload_json: None,
+                submitted_at_unix: 1,
+                updated_at_unix: 1,
+                attempts: 1,
+                lease_token: Some(&lease_token),
+                lease_expires_at_unix: Some(301),
+                last_error: None,
+            },
+        );
+    }
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "code-pending-older",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("code-older"),
+            payload_json: None,
+            submitted_at_unix: 2,
+            updated_at_unix: 2,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "summary-pending-newer",
+            representation_kind: "summary",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("summary-newer"),
+            payload_json: None,
+            submitted_at_unix: 3,
+            updated_at_unix: 3,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+
+    let claimed = super::claim_embedding_mailbox_batch(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+    )
+    .expect("claim embedding mailbox batch")
+    .expect("code embedding mailbox batch should be claimable");
+
+    assert_eq!(claimed.representation_kind.to_string(), "code");
+    assert_eq!(claimed.items.len(), 1);
+    assert_eq!(claimed.items[0].artefact_id.as_deref(), Some("code-older"));
+}
+
+#[test]
+fn embedding_mailbox_batch_claim_keeps_fifo_when_no_summary_refresh_work_is_active() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let _config_path = configure_embeddings_for_repo(&target, "local_code");
+
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "code-pending-older",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("code-older"),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "summary-pending-newer",
+            representation_kind: "summary",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("summary-newer"),
+            payload_json: None,
+            submitted_at_unix: 2,
+            updated_at_unix: 2,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+
+    let claimed = super::claim_embedding_mailbox_batch(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+    )
+    .expect("claim embedding mailbox batch")
+    .expect("code embedding mailbox batch should be claimable");
+
+    assert_eq!(claimed.representation_kind.to_string(), "code");
+    assert_eq!(claimed.items.len(), 1);
+    assert_eq!(claimed.items[0].artefact_id.as_deref(), Some("code-older"));
 }
 
 #[test]
@@ -2345,6 +3306,140 @@ fn clone_rebuild_pool_only_claims_clone_rebuild_jobs() {
 }
 
 #[test]
+fn clone_rebuild_pool_defers_while_repo_has_active_embedding_backlog() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let _config_path = configure_embeddings_for_repo(&target, "local_code");
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: None,
+            job_id: "clone-a",
+            updated_at_unix: 2,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "embedding-pending",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("code-a"),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "embedding-leased",
+            representation_kind: "summary",
+            status: SemanticMailboxItemStatus::Leased,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("summary-a"),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 1,
+            lease_token: Some("embedding-lease"),
+            lease_expires_at_unix: Some(unix_timestamp_now() + 300),
+            last_error: None,
+        },
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::CloneRebuild,
+    )
+    .expect("attempt clone rebuild claim while embeddings are active");
+
+    assert!(claimed.is_none());
+    let pending_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    assert_eq!(
+        pending_jobs
+            .iter()
+            .filter(|job| job.mailbox_name == SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX)
+            .count(),
+        1,
+        "clone rebuild should stay pending until embeddings drain",
+    );
+}
+
+#[test]
+fn clone_rebuild_pool_defers_while_repo_has_active_architecture_embedding_job() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let _config_path = configure_embeddings_for_repo(&target, "local_code");
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: None,
+            job_id: "clone-a",
+            updated_at_unix: 2,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("architecture-a"),
+            job_id: "architecture-a",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::CloneRebuild,
+    )
+    .expect("attempt clone rebuild claim while architecture embeddings are active");
+
+    assert!(claimed.is_none());
+    let pending_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    assert_eq!(
+        pending_jobs
+            .iter()
+            .filter(|job| job.mailbox_name == SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX)
+            .count(),
+        1,
+        "clone rebuild should stay pending until architecture embeddings drain",
+    );
+}
+
+#[test]
 fn embeddings_pool_does_not_borrow_summary_or_clone_rebuild_work() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
@@ -2580,6 +3675,41 @@ fn effective_worker_budgets_use_remote_embedding_defaults_for_active_config_root
             job_id: "code-pending",
             updated_at_unix: 1,
             attempts: 0,
+            last_error: None,
+        },
+    );
+
+    let budgets = effective_worker_budgets(
+        &coordinator.workplane_store,
+        &coordinator.daemon_config_root,
+    )
+    .expect("resolve effective worker budgets");
+
+    assert_eq!(budgets.embeddings, 4);
+}
+
+#[test]
+fn effective_worker_budgets_use_active_repo_roots_when_semantic_policy_is_repo_local() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let _config_path = configure_repo_local_remote_embeddings_for_repo(&target, "platform_code");
+
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            representation_kind: "code",
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            item_id: "code-pending",
+            payload_json: None,
+            status: SemanticMailboxItemStatus::Pending,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
             last_error: None,
         },
     );
@@ -3047,6 +4177,193 @@ async fn enqueue_repo_backfill_embedding_jobs_chunks_large_payloads_for_parallel
 }
 
 #[tokio::test]
+async fn enqueue_embeddings_refreshes_worker_capacity_for_active_repo_policy() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, _repo_id) = new_test_coordinator(&temp);
+    let coordinator = Arc::new(coordinator);
+    let _config_path = configure_repo_local_remote_embeddings_for_repo(&target, "platform_code");
+
+    coordinator.ensure_started();
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        1,
+        "startup should begin with the fallback daemon-config embedding worker budget",
+    );
+
+    coordinator
+        .enqueue_follow_up(FollowUpJob::RepoBackfillEmbeddings {
+            target,
+            artefact_ids: vec!["artefact-001".to_string()],
+            representation_kind: EmbeddingRepresentationKind::Code,
+        })
+        .await
+        .expect("enqueue repo backfill embedding work");
+
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        4,
+        "enqueueing active repo-local embedding work should refresh the worker budget",
+    );
+}
+
+#[tokio::test]
+async fn current_state_consumer_completion_refreshes_worker_capacity_for_direct_enqueue() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let coordinator = Arc::new(coordinator);
+    let _config_path = configure_repo_local_remote_embeddings_for_repo(&target, "platform_code");
+
+    coordinator.ensure_started();
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        1,
+        "startup should begin with the fallback daemon-config embedding worker budget",
+    );
+
+    insert_embedding_mailbox_item(
+        &coordinator,
+        &target,
+        EmbeddingMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "code-item-1",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some("artefact-001"),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        1,
+        "direct workplane writes should not refresh worker capacity on their own",
+    );
+
+    crate::daemon::capability_events::refresh_enrichment_capacity_after_current_state_consumer_completion(
+        &coordinator,
+    );
+
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        4,
+        "the current-state completion hook should promote repo-local remote embeddings capacity before the fresh backlog starts draining",
+    );
+}
+
+#[tokio::test]
+async fn summary_commit_refreshes_worker_capacity_for_follow_up_embeddings() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let coordinator = Arc::new(coordinator);
+
+    if let Ok(mut counts) = coordinator.started_worker_counts.lock() {
+        *counts = super::worker_count::EnrichmentWorkerBudgets {
+            summary_refresh: 32,
+            embeddings: 1,
+            clone_rebuild: 32,
+        };
+    }
+    coordinator.ensure_started();
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        1,
+        "startup should still reflect the fallback daemon-config embedding worker budget",
+    );
+
+    seed_summary_refresh_perf_repo(&target.repo_root, 2);
+    let _config_path =
+        configure_repo_local_remote_embeddings_with_fake_summary_for_repo(&target, "platform_code");
+    let inputs = load_summary_refresh_perf_inputs(&target).await;
+    let selected = inputs
+        .first()
+        .expect("summary perf fixture should produce at least one semantic input");
+
+    insert_summary_mailbox_item(
+        &coordinator,
+        &target,
+        SummaryMailboxItemFixture {
+            repo_id: &repo_id,
+            item_id: "summary-item-1",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some(&selected.artefact_id),
+            payload_json: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        },
+    );
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        1,
+        "direct mailbox writes should not refresh worker capacity on their own",
+    );
+
+    assert!(
+        coordinator
+            .process_next_summary_batch_for_test()
+            .await
+            .expect("process summary batch"),
+        "the inserted summary mailbox item should be processed",
+    );
+
+    assert_eq!(
+        coordinator
+            .started_worker_counts
+            .lock()
+            .expect("lock worker counts")
+            .embeddings,
+        4,
+        "successful summary commits should refresh worker capacity for follow-up embeddings",
+    );
+    assert!(
+        load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending)
+            .iter()
+            .any(
+                |item| item.representation_kind == EmbeddingRepresentationKind::Summary.to_string()
+            ),
+        "summary commits should enqueue summary embedding follow-up work",
+    );
+}
+
+#[tokio::test]
 async fn enqueue_repo_backfill_summary_follow_ups_chunk_large_payloads_into_repo_backfill_items() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, _repo_id) = new_test_coordinator(&temp);
@@ -3183,6 +4500,89 @@ fn requeue_running_jobs_moves_stale_running_jobs_back_to_pending() {
             .as_deref(),
         Some("requeue_running")
     );
+}
+
+#[test]
+fn startup_recovery_requeues_running_non_clone_workplane_jobs() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+
+    coordinator
+        .workplane_store
+        .with_write_connection(|conn| {
+            conn.execute(
+                "INSERT INTO capability_workplane_jobs (
+                    job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                    dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                    started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                    lease_expires_at_unix, last_error
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15, ?16, NULL)",
+                rusqlite::params![
+                    "running-role-adjudication",
+                    repo_id,
+                    target.repo_root.to_string_lossy().to_string(),
+                    target.config_root.to_string_lossy().to_string(),
+                    crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+                    "repo-1:1:file:src/main.rs:unknown",
+                    json!({"request": {"repo_id": repo_id}}).to_string(),
+                    WorkplaneJobStatus::Running.as_str(),
+                    1u32,
+                    sql_i64(10)?,
+                    sql_i64(10)?,
+                    sql_i64(11)?,
+                    sql_i64(11)?,
+                    Some("manual-validation"),
+                    Some(sql_i64(70)?),
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO capability_workplane_jobs (
+                    job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                    dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                    started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                    lease_expires_at_unix, last_error
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, NULL)",
+                rusqlite::params![
+                    "completed-role-adjudication",
+                    repo_id,
+                    target.repo_root.to_string_lossy().to_string(),
+                    target.config_root.to_string_lossy().to_string(),
+                    crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+                    "repo-1:1:file:src/lib.rs:unknown",
+                    json!({"request": {"repo_id": repo_id}}).to_string(),
+                    WorkplaneJobStatus::Completed.as_str(),
+                    1u32,
+                    sql_i64(10)?,
+                    sql_i64(10)?,
+                    sql_i64(11)?,
+                    sql_i64(12)?,
+                    sql_i64(13)?,
+                    Option::<String>::None,
+                    Option::<i64>::None,
+                ],
+            )
+            .map(|_| ())
+            .map_err(anyhow::Error::from)
+        })
+        .expect("insert running role adjudication job");
+
+    let recovered = super::workplane::requeue_running_workplane_jobs(&coordinator.workplane_store)
+        .expect("recover running jobs");
+
+    assert_eq!(recovered, 1);
+    let pending_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    assert_eq!(pending_jobs.len(), 1);
+    assert_eq!(pending_jobs[0].job_id, "running-role-adjudication");
+    assert_eq!(pending_jobs[0].started_at_unix, None);
+    assert_eq!(pending_jobs[0].lease_owner, None);
+    assert_eq!(pending_jobs[0].lease_expires_at_unix, None);
+
+    let completed_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Completed);
+    assert_eq!(completed_jobs.len(), 1);
+    assert_eq!(completed_jobs[0].job_id, "completed-role-adjudication");
+    assert_eq!(completed_jobs[0].completed_at_unix, Some(13));
 }
 
 #[test]

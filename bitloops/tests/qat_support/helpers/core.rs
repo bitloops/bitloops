@@ -682,7 +682,7 @@ fn stop_registered_watcher_for_scenario(world: &QatWorld) -> Result<()> {
     }
 
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "DELETE FROM repo_watcher_registrations
                  WHERE repo_root = ?1 AND pid = ?2 AND restart_token = ?3",
@@ -3740,7 +3740,7 @@ fn load_commit_checkpoint_rows(
 ) -> Result<Vec<CommitCheckpointRow>> {
     ensure_bitloops_repo_name(repo_name)?;
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT commit_sha, checkpoint_id
@@ -3798,6 +3798,54 @@ fn checkpoint_ids_for_commit_sha(rows: &[CommitCheckpointRow], commit_sha: &str)
         .collect()
 }
 
+fn recent_hook_failure_lines_from_log_content(content: &str, max_lines: usize) -> Vec<String> {
+    let mut lines = content
+        .lines()
+        .rev()
+        .map(str::trim)
+        .filter(|line| {
+            let lower = line.to_ascii_lowercase();
+            (lower.contains("hook=") || lower.contains("\"hook\""))
+                && (lower.contains("success=false")
+                    || lower.contains("\"success\":false")
+                    || lower.contains("error"))
+        })
+        .take(max_lines)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    lines.reverse();
+    lines
+}
+
+fn latest_hook_failure_context(world: &QatWorld) -> String {
+    let log_path = with_scenario_app_env(world, || {
+        bitloops::utils::platform_dirs::bitloops_state_dir()
+            .map(|state_dir| state_dir.join("logs").join("bitloops.log"))
+    });
+    let Ok(log_path) = log_path else {
+        return "latest hook failures unavailable: unable to resolve Bitloops state log path"
+            .to_string();
+    };
+    let Ok(content) = fs::read_to_string(&log_path) else {
+        return format!(
+            "latest hook failures unavailable: log not readable at {}",
+            log_path.display()
+        );
+    };
+    let lines = recent_hook_failure_lines_from_log_content(&content, 8);
+    if lines.is_empty() {
+        return format!(
+            "no hook failure lines found in {}",
+            log_path.display()
+        );
+    }
+    format!(
+        "latest hook failure lines from {}:\n{}",
+        log_path.display(),
+        lines.join("\n")
+    )
+}
+
 pub fn assert_checkpoint_mapping_exists_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let rows = wait_for_qat_condition(
@@ -3807,7 +3855,8 @@ pub fn assert_checkpoint_mapping_exists_for_repo(world: &QatWorld, repo_name: &s
         || load_commit_checkpoint_rows(world, repo_name),
         |rows| !rows.is_empty(),
         |rows| format!("rows={}", count_commit_checkpoint_rows(rows)),
-    )?;
+    )
+    .with_context(|| latest_hook_failure_context(world))?;
     let Some(checkpoint_id) = rows.first().map(|row| row.checkpoint_id.as_str()) else {
         bail!("expected at least one Bitloops commit_checkpoints row");
     };
@@ -3834,7 +3883,8 @@ pub fn assert_checkpoint_mapping_count_at_least_for_repo(
         || load_commit_checkpoint_rows(world, repo_name),
         |rows| count_commit_checkpoint_rows(rows) >= min_count,
         |rows| format!("rows={}", count_commit_checkpoint_rows(rows)),
-    )?;
+    )
+    .with_context(|| latest_hook_failure_context(world))?;
     ensure!(
         count_commit_checkpoint_rows(&rows) >= min_count,
         "expected at least {min_count} Bitloops commit_checkpoints rows, got {}",
@@ -5086,6 +5136,22 @@ fn query_repo_id_optional(conn: &rusqlite::Connection, sql: &str) -> Result<Opti
     }
 }
 
+fn resolve_repo_id_for_world(world: &QatWorld, conn: &rusqlite::Connection) -> Result<String> {
+    if let Ok(repo_id) =
+        with_scenario_app_env(world, || bitloops::host::devql::resolve_repo_id(world.repo_dir()))
+        && !repo_id.trim().is_empty()
+    {
+        return Ok(repo_id);
+    }
+
+    resolve_repo_id(conn).with_context(|| {
+        format!(
+            "resolving repo_id from relational store after repo path `{}` did not resolve",
+            world.repo_dir().display()
+        )
+    })
+}
+
 fn resolve_repo_id(conn: &rusqlite::Connection) -> Result<String> {
     for sql in [
         "SELECT repo_id FROM commit_ingest_ledger ORDER BY updated_at DESC LIMIT 1",
@@ -5106,6 +5172,7 @@ fn resolve_repo_id(conn: &rusqlite::Connection) -> Result<String> {
     }
     bail!("unable to resolve repo_id from relational store for ingest assertions")
 }
+
 
 fn checkpoint_touched_paths_for_repo(
     conn: &rusqlite::Connection,
@@ -5146,7 +5213,7 @@ fn checkpoint_touched_paths_for_repo(
 fn chat_history_candidate_paths(world: &QatWorld) -> Result<Vec<String>> {
     let mut candidates = vec![smoke_target_relative_path(world)];
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     for path in checkpoint_touched_paths_for_repo(&conn, &repo_id)? {
         if !candidates.iter().any(|existing| existing == &path) {
             candidates.push(path);
@@ -5178,7 +5245,7 @@ fn git_reachable_shas(world: &QatWorld, max_count: Option<usize>) -> Result<Vec<
 
 fn completed_ledger_shas(world: &QatWorld) -> Result<Vec<String>> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT commit_sha \
@@ -5198,7 +5265,7 @@ fn completed_ledger_shas(world: &QatWorld) -> Result<Vec<String>> {
 
 fn completed_ledger_count(world: &QatWorld) -> Result<usize> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) \
@@ -5213,7 +5280,7 @@ fn completed_ledger_count(world: &QatWorld) -> Result<usize> {
 
 fn artefacts_current_count(world: &QatWorld) -> Result<usize> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1",
@@ -5226,7 +5293,7 @@ fn artefacts_current_count(world: &QatWorld) -> Result<usize> {
 
 fn artefacts_current_count_for_path(world: &QatWorld, path: &str) -> Result<usize> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
@@ -5239,7 +5306,7 @@ fn artefacts_current_count_for_path(world: &QatWorld, path: &str) -> Result<usiz
 
 fn current_file_state_effective_content_id(world: &QatWorld, path: &str) -> Result<Option<String>> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     use rusqlite::OptionalExtension;
     conn.query_row(
         "SELECT effective_content_id \
@@ -5254,7 +5321,7 @@ fn current_file_state_effective_content_id(world: &QatWorld, path: &str) -> Resu
 
 fn file_state_count_for_commit(world: &QatWorld, commit_sha: &str) -> Result<usize> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2",
@@ -5271,7 +5338,7 @@ fn file_state_count_for_commit_path(
     path: &str,
 ) -> Result<usize> {
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2 AND path = ?3",

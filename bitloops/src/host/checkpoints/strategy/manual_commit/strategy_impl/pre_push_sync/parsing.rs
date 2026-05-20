@@ -57,21 +57,6 @@ pub(super) fn parse_pre_push_update_line(line: &str) -> Option<types::PrePushRef
     })
 }
 
-pub(super) fn parse_sha_lines(raw: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in raw.lines() {
-        let sha = line.trim();
-        if sha.is_empty() {
-            continue;
-        }
-        if out.iter().any(|existing| existing == sha) {
-            continue;
-        }
-        out.push(sha.to_string());
-    }
-    out
-}
-
 pub(super) fn is_zero_git_oid(value: &str) -> bool {
     value.trim() == constants::ZERO_GIT_OID
 }

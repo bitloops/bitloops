@@ -134,6 +134,7 @@ fn sample_input() -> SymbolEmbeddingInput {
             "calls:user_repo::find_by_id".to_string(),
             "references:user::email".to_string(),
         ],
+        architecture_roles: Vec::new(),
         parent_kind: Some("file".to_string()),
         content_hash: Some("hash-1".to_string()),
     }
@@ -443,6 +444,92 @@ fn summary_embedding_text_omits_body_and_dependencies() {
     assert!(!text.contains("dependencies:"));
     assert!(!text.contains("body:"));
     assert!(!text.contains("signature:"));
+}
+
+fn sample_architecture_role(
+    role_id: &str,
+    assignment_id: &str,
+    canonical_key: &str,
+) -> ArchitectureRoleEmbeddingRole {
+    ArchitectureRoleEmbeddingRole {
+        role_id: role_id.to_string(),
+        assignment_id: assignment_id.to_string(),
+        canonical_key: canonical_key.to_string(),
+        display_name: "API Endpoint".to_string(),
+        family: "interface".to_string(),
+        description: "Handles HTTP API endpoint requests for invoice creation.".to_string(),
+        priority: "primary".to_string(),
+        confidence: 0.91,
+    }
+}
+
+#[test]
+fn architecture_representation_uses_architecture_storage_value() {
+    let representation = serde_json::from_str::<EmbeddingRepresentationKind>("\"architecture\"")
+        .expect("architecture representation");
+
+    assert_eq!(representation, EmbeddingRepresentationKind::Architecture);
+    assert_eq!(representation.to_string(), "architecture");
+    assert_eq!(representation.storage_values(), &["architecture"]);
+}
+
+#[test]
+fn architecture_embedding_text_includes_light_target_identity_and_role_metadata_only() {
+    let mut input = sample_input();
+    input.representation_kind = EmbeddingRepresentationKind::Architecture;
+    input.name = "createInvoiceEndpoint".to_string();
+    input.path = "src/api/invoices.ts".to_string();
+    input.body = "fn body should not be indexed".to_string();
+    input.signature = Some("fn signature should not be indexed".to_string());
+    input.summary = "summary should not be indexed".to_string();
+    input.dependency_signals = vec!["calls:command_bus::dispatch".to_string()];
+    input.architecture_roles = vec![sample_architecture_role(
+        "role-api",
+        "assignment-api",
+        "api_endpoint",
+    )];
+
+    let text = build_symbol_embedding_text(&input);
+
+    assert!(text.contains("kind: function"));
+    assert!(text.contains("language: typescript"));
+    assert!(text.contains("name: createInvoiceEndpoint"));
+    assert!(text.contains("path: src/api/invoices.ts"));
+    assert!(text.contains("architecture_roles:"));
+    assert!(text.contains("- canonical_key: api_endpoint"));
+    assert!(text.contains("  display_name: API Endpoint"));
+    assert!(text.contains("  family: interface"));
+    assert!(
+        text.contains("  description: Handles HTTP API endpoint requests for invoice creation.")
+    );
+    assert!(!text.contains("body:"));
+    assert!(!text.contains("signature:"));
+    assert!(!text.contains("summary:"));
+    assert!(!text.contains("dependencies:"));
+    assert!(!text.contains("fn body should not be indexed"));
+    assert!(!text.contains("fn signature should not be indexed"));
+}
+
+#[test]
+fn architecture_embedding_hash_changes_when_role_metadata_changes() {
+    let provider = MockEmbeddingProvider;
+    let mut base = sample_input();
+    base.representation_kind = EmbeddingRepresentationKind::Architecture;
+    base.architecture_roles = vec![sample_architecture_role(
+        "role-api",
+        "assignment-api",
+        "api_endpoint",
+    )];
+    let mut changed = base.clone();
+    changed.architecture_roles[0].display_name = "Public API Endpoint".to_string();
+    changed.architecture_roles[0].family = "boundary".to_string();
+    changed.architecture_roles[0].description = "Handles public HTTP requests.".to_string();
+    changed.architecture_roles[0].canonical_key = "public_api_endpoint".to_string();
+
+    assert_ne!(
+        build_symbol_embedding_input_hash(&base, &provider),
+        build_symbol_embedding_input_hash(&changed, &provider)
+    );
 }
 
 #[test]

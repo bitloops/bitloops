@@ -28,4 +28,3 @@ pub(crate) use orchestrator::{
 #[allow(unused_imports)]
 pub(crate) use persistence::delete_repo_current_symbol_clone_edges;
 pub(crate) use persistence::delete_repo_symbol_clone_edges;
-pub(crate) use schema::init_postgres_semantic_clones_schema;

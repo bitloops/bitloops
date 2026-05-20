@@ -88,7 +88,9 @@ CREATE TABLE IF NOT EXISTS capability_workplane_cursor_runs (
     started_at_unix INTEGER,
     updated_at_unix INTEGER NOT NULL,
     completed_at_unix INTEGER,
-    error TEXT
+    error TEXT,
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    metrics_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_capability_workplane_cursor_runs_repo_mailbox_status
@@ -200,6 +202,18 @@ pub(crate) fn ensure_repo_workplane_schema_upgrades(sqlite: &SqliteConnectionPoo
             "capability_workplane_jobs",
             "init_session_id",
             "ALTER TABLE capability_workplane_jobs ADD COLUMN init_session_id TEXT",
+        )?;
+        ensure_table_has_column(
+            conn,
+            "capability_workplane_cursor_runs",
+            "warnings_json",
+            "ALTER TABLE capability_workplane_cursor_runs ADD COLUMN warnings_json TEXT NOT NULL DEFAULT '[]'",
+        )?;
+        ensure_table_has_column(
+            conn,
+            "capability_workplane_cursor_runs",
+            "metrics_json",
+            "ALTER TABLE capability_workplane_cursor_runs ADD COLUMN metrics_json TEXT NOT NULL DEFAULT '{}'",
         )?;
         Ok(())
     })

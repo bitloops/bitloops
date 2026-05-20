@@ -248,6 +248,14 @@ impl DevqlCapabilityHost {
         self.build_current_state_consumer_context_with_session(capability_id, None)
     }
 
+    pub fn build_relational_storage(&self) -> Result<crate::host::devql::RelationalStorage> {
+        let relational_store = DefaultRelationalStore::open_local_for_backend_config(
+            self.repo_root(),
+            &self.runtime.backends.relational,
+        )?;
+        Ok(relational_store.to_local_inner())
+    }
+
     pub fn build_current_state_consumer_context_with_session(
         &self,
         capability_id: &str,
@@ -271,9 +279,10 @@ impl DevqlCapabilityHost {
         let host_services: Arc<dyn HostServicesGateway> = Arc::new(
             DefaultHostServicesGateway::new(self.runtime.repo.repo_id.clone()),
         );
+        let declared_mailboxes = self.declared_mailboxes_for_current_state_context(capability_id);
         let workplane = Arc::new(self.runtime.workplane_gateway_for_capability(
             capability_id,
-            &self.declared_mailboxes_for_capability(capability_id),
+            &declared_mailboxes,
             init_session_id.clone(),
         )?);
 
@@ -298,6 +307,24 @@ impl DevqlCapabilityHost {
 
     pub fn build_event_handler_context(&self) -> Result<CurrentStateConsumerContext> {
         self.build_current_state_consumer_context("<event_handler>")
+    }
+
+    fn declared_mailboxes_for_current_state_context(
+        &self,
+        capability_id: &str,
+    ) -> Vec<CapabilityMailboxRegistration> {
+        let mut registrations = self.declared_mailboxes_for_capability(capability_id);
+        if capability_id
+            == crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_CAPABILITY_ID
+        {
+            registrations.extend(self.mailboxes.iter().copied().filter(|registration| {
+                registration.capability_id
+                    == crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CAPABILITY_ID
+                    && registration.mailbox_name
+                        == crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
+            }));
+        }
+        registrations
     }
 
     /// Snapshot of registered packs, migrations, invocation policy, and cross-pack grants.

@@ -321,7 +321,7 @@ fn load_knowledge_relation_assertions(
 ) -> Result<Vec<KnowledgeRelationAssertionRecord>> {
     ensure_bitloops_repo_name(repo_name)?;
     let conn = open_relational_connection(world)?;
-    let repo_id = resolve_repo_id(&conn)?;
+    let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT knowledge_item_id, target_type, target_id, relation_type, association_method

@@ -130,6 +130,53 @@ fn test_spool() -> (tempfile::TempDir, SqliteInteractionSpool) {
 }
 
 #[test]
+fn opening_spool_does_not_rebuild_search_projections() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let sqlite = SqliteConnectionPool::connect(dir.path().join("interaction-spool.sqlite"))?;
+    initialise_interaction_spool_schema(&sqlite)?;
+
+    sqlite.with_write_connection(|conn| {
+        conn.execute(
+            "INSERT INTO interaction_sessions (session_id, repo_id, first_prompt, started_at, updated_at)
+             VALUES ('session-1', 'repo-test', 'hello from prompt', '2026-05-13T00:00:00Z', '2026-05-13T00:00:00Z')",
+            [],
+        )?;
+        Ok(())
+    })?;
+
+    let _spool = SqliteInteractionSpool::new(sqlite.clone(), "repo-test".into())?;
+
+    let docs_after_open: i64 = sqlite.with_connection(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM interaction_session_search_documents WHERE repo_id = 'repo-test'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(anyhow::Error::from)
+    })?;
+    assert_eq!(
+        docs_after_open, 0,
+        "constructing a spool must not rebuild interaction search projections"
+    );
+
+    _spool.rebuild_search_projections()?;
+    let docs_after_rebuild: i64 = sqlite.with_connection(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM interaction_session_search_documents WHERE repo_id = 'repo-test'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(anyhow::Error::from)
+    })?;
+    assert_eq!(
+        docs_after_rebuild, 1,
+        "explicit projection rebuild should still repair search documents"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn initialising_spool_migrates_legacy_event_schema_before_creating_indexes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sqlite =
@@ -338,6 +385,31 @@ fn list_uncheckpointed_turns_excludes_assigned_turns() {
         .assign_checkpoint_to_turns(&["turn-1".to_string()], "cp-1", "2026-04-05T10:10:00Z")
         .expect("assign checkpoint");
     assert!(spool.list_uncheckpointed_turns().unwrap().is_empty());
+}
+
+#[test]
+fn refresh_turn_local_only_updates_spool_rows_without_queueing_remote_work() {
+    let (_dir, spool) = test_spool();
+    let mut turn = sample_turn();
+    spool.record_turn(&turn).expect("record turn");
+    spool
+        .flush(&MockRepository::new("repo-test"))
+        .expect("flush initial turn");
+
+    turn.checkpoint_id = Some("cp-1".into());
+    turn.updated_at = "2026-04-05T10:10:00Z".into();
+    spool
+        .refresh_turn_local_only(&turn)
+        .expect("refresh local-only turn");
+
+    let refreshed = spool
+        .list_turns_for_session("session-1", 10)
+        .expect("load turns")
+        .pop()
+        .expect("one refreshed turn");
+    assert_eq!(refreshed.checkpoint_id.as_deref(), Some("cp-1"));
+    assert_eq!(refreshed.updated_at, "2026-04-05T10:10:00Z");
+    assert!(!spool.has_pending_mutations().expect("queue state"));
 }
 
 #[test]

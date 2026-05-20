@@ -18,6 +18,8 @@ pub(crate) fn load_workplane_jobs_by_status(
          WHERE status = ?1
          ORDER BY CASE mailbox_name
                       WHEN 'semantic_clones.embedding.code' THEN 0
+                      WHEN 'semantic_clones.embedding.identity' THEN 0
+                      WHEN 'semantic_clones.embedding.architecture' THEN 0
                       WHEN 'semantic_clones.embedding.summary' THEN 0
                       WHEN 'semantic_clones.summary_refresh' THEN 1
                       WHEN 'semantic_clones.clone_rebuild' THEN 2

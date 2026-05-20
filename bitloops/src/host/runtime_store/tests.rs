@@ -89,6 +89,134 @@ fn repo_runtime_store_can_open_with_known_repo_id_without_git_identity_lookup() 
 }
 
 #[test]
+fn runtime_schema_initialisation_does_not_rebuild_interaction_projections() {
+    let dir = TempDir::new().expect("tempdir");
+    let sqlite_path = dir.path().join("runtime.sqlite");
+    let sqlite =
+        crate::storage::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+    super::sqlite_migrate::initialise_repo_runtime_schema(&sqlite)
+        .expect("initialise runtime schema");
+
+    sqlite
+        .with_write_connection(|conn| {
+            conn.execute(
+                "INSERT INTO interaction_sessions (session_id, repo_id, first_prompt, started_at, updated_at)
+                 VALUES ('session-1', '__runtime-bootstrap__', 'bootstrap prompt', '2026-05-13T00:00:00Z', '2026-05-13T00:00:00Z')",
+                [],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .expect("seed bootstrap interaction row");
+
+    super::sqlite_migrate::initialise_repo_runtime_schema(&sqlite)
+        .expect("reinitialise runtime schema");
+
+    let docs: i64 = sqlite
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM interaction_session_search_documents WHERE repo_id = '__runtime-bootstrap__'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(anyhow::Error::from)
+        })
+        .expect("count search docs");
+    assert_eq!(
+        docs, 0,
+        "runtime schema bootstrap must not rebuild interaction search projections"
+    );
+}
+
+#[test]
+fn repo_workplane_schema_migrates_cursor_run_metrics_columns() {
+    let dir = TempDir::new().expect("tempdir");
+    let sqlite_path = dir.path().join("runtime.sqlite");
+    let sqlite =
+        crate::storage::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+    sqlite
+        .with_write_connection(|conn| {
+            conn.execute_batch(
+                r#"
+CREATE TABLE capability_workplane_cursor_runs (
+    run_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    repo_root TEXT NOT NULL,
+    capability_id TEXT NOT NULL,
+    mailbox_name TEXT NOT NULL,
+    init_session_id TEXT,
+    from_generation_seq INTEGER NOT NULL,
+    to_generation_seq INTEGER NOT NULL,
+    reconcile_mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    submitted_at_unix INTEGER NOT NULL,
+    started_at_unix INTEGER,
+    updated_at_unix INTEGER NOT NULL,
+    completed_at_unix INTEGER,
+    error TEXT
+);
+
+CREATE TABLE capability_workplane_jobs (
+    job_id TEXT PRIMARY KEY
+);
+"#,
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .expect("create legacy cursor run table");
+
+    super::repo_workplane::ensure_repo_workplane_schema_upgrades(&sqlite)
+        .expect("upgrade cursor run table");
+
+    sqlite
+        .with_write_connection(|conn| {
+            let columns = {
+                let mut stmt =
+                    conn.prepare("PRAGMA table_info(capability_workplane_cursor_runs)")?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(1)?, row.get::<_, Option<String>>(4)?))
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            assert!(
+                columns.iter().any(|(name, default_value)| {
+                    name == "warnings_json" && default_value.as_deref() == Some("'[]'")
+                }),
+                "warnings_json column should be added with [] default: {columns:?}"
+            );
+            assert!(
+                columns.iter().any(|(name, default_value)| {
+                    name == "metrics_json" && default_value.as_deref() == Some("'{}'")
+                }),
+                "metrics_json column should be added with {{}} default: {columns:?}"
+            );
+
+            conn.execute(
+                "INSERT INTO capability_workplane_cursor_runs (
+                    run_id, repo_id, repo_root, capability_id, mailbox_name,
+                    from_generation_seq, to_generation_seq, reconcile_mode,
+                    status, attempts, submitted_at_unix, updated_at_unix
+                 ) VALUES (
+                    'run-1', 'repo-1', '/tmp/repo', 'architecture_graph',
+                    'architecture_graph.roles.current_state', 0, 1, 'merged_delta',
+                    'completed', 1, 10, 11
+                 )",
+                [],
+            )?;
+            let defaults = conn.query_row(
+                "SELECT warnings_json, metrics_json
+                 FROM capability_workplane_cursor_runs
+                 WHERE run_id = 'run-1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?;
+            assert_eq!(defaults, ("[]".to_string(), "{}".to_string()));
+            Ok::<_, anyhow::Error>(())
+        })
+        .expect("verify migrated cursor run defaults");
+}
+
+#[test]
 fn repo_runtime_store_fails_without_daemon_config() {
     let dir = TempDir::new().expect("tempdir");
     init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");
@@ -461,6 +589,109 @@ fn daemon_runtime_store_mutations_wait_for_shared_sqlite_write_lock() {
                 .expect("wait for mutation result")
                 .expect("mutate capability event queue state");
             worker.join().expect("join mutation worker");
+        },
+    );
+}
+
+#[test]
+fn repo_runtime_store_reopen_does_not_wait_for_existing_schema_write_lock() {
+    let dir = TempDir::new().expect("tempdir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+
+    let store =
+        RepoSqliteRuntimeStore::open_for_roots_with_repo_id(&config_root, &repo_root, "repo-known")
+            .expect("open repo runtime store");
+    let db_path = store.db_path().to_path_buf();
+    let held_lock = crate::storage::sqlite::hold_sqlite_write_lock_until_release(db_path)
+        .expect("hold sqlite write lock");
+    let config_root_for_worker = config_root.clone();
+    let repo_root_for_worker = repo_root.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal reopen started");
+        done_tx
+            .send(
+                RepoSqliteRuntimeStore::open_for_roots_with_repo_id(
+                    &config_root_for_worker,
+                    &repo_root_for_worker,
+                    "repo-known",
+                )
+                .map(|_| ()),
+            )
+            .expect("send reopen result");
+    });
+    started_rx.recv().expect("wait for reopen start");
+    let completed_while_locked = match done_rx.recv_timeout(Duration::from_millis(200)) {
+        Ok(result) => {
+            result.expect("reopen repo runtime store");
+            true
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("reopen worker disconnected before reporting result");
+        }
+    };
+    held_lock.release().expect("release sqlite write lock");
+    if !completed_while_locked {
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("wait for reopen result after releasing lock")
+            .expect("reopen repo runtime store after releasing lock");
+    }
+    worker.join().expect("join reopen worker");
+    assert!(
+        completed_while_locked,
+        "re-opening a repo runtime store with an existing schema should not wait for the shared SQLite write lock"
+    );
+}
+
+#[test]
+fn daemon_runtime_store_read_does_not_wait_for_existing_schema_write_lock() {
+    let state_dir = TempDir::new().expect("tempdir");
+    with_env_var(
+        "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+        Some(state_dir.path().to_string_lossy().as_ref()),
+        || {
+            let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
+            let db_path = store.db_path().to_path_buf();
+            let held_lock = crate::storage::sqlite::hold_sqlite_write_lock_until_release(db_path)
+                .expect("hold sqlite write lock");
+            let store_for_read = store.clone();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                started_tx.send(()).expect("signal read started");
+                done_tx
+                    .send(store_for_read.runtime_state_exists())
+                    .expect("send read result");
+            });
+            started_rx.recv().expect("wait for read start");
+            let completed_while_locked = match done_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(result) => {
+                    result.expect("read daemon runtime state exists");
+                    true
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("read worker disconnected before reporting result");
+                }
+            };
+            held_lock.release().expect("release sqlite write lock");
+            if !completed_while_locked {
+                done_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("wait for read result after releasing lock")
+                    .expect("read daemon runtime state exists after releasing lock");
+            }
+            worker.join().expect("join read worker");
+            assert!(
+                completed_while_locked,
+                "read-only daemon runtime-store access should not wait for the shared SQLite write lock once schema exists"
+            );
         },
     );
 }
@@ -885,6 +1116,150 @@ fn repo_runtime_store_persists_capability_workplane_mailbox_intents() {
         !status[SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX].intent_active,
         "summary embedding intent should remain inactive"
     );
+}
+
+#[test]
+fn repo_runtime_store_lists_workplane_jobs_by_capability_mailbox_and_status() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+
+    let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
+        .expect("open repo runtime store");
+    store
+        .enqueue_capability_workplane_jobs(
+            "architecture_graph",
+            vec![
+                CapabilityWorkplaneJobInsert::new(
+                    "architecture_graph.roles.adjudication",
+                    None,
+                    Some("queue-1".to_string()),
+                    serde_json::json!({"request": {"reason": "unknown"}}),
+                ),
+                CapabilityWorkplaneJobInsert::new(
+                    "architecture_graph.roles.adjudication",
+                    None,
+                    Some("queue-2".to_string()),
+                    serde_json::json!({"request": {"reason": "high_impact"}}),
+                ),
+                CapabilityWorkplaneJobInsert::new(
+                    "architecture_graph.snapshot",
+                    None,
+                    Some("snapshot-1".to_string()),
+                    serde_json::json!({"kind": "cursor"}),
+                ),
+            ],
+        )
+        .expect("enqueue architecture workplane jobs");
+    store
+        .enqueue_capability_workplane_jobs(
+            "semantic_clones",
+            vec![CapabilityWorkplaneJobInsert::new(
+                "semantic_clones.clone_rebuild",
+                None,
+                Some("clone-1".to_string()),
+                serde_json::json!({"kind": "clone"}),
+            )],
+        )
+        .expect("enqueue semantic workplane job");
+
+    let sqlite = store.connect_repo_sqlite().expect("connect sqlite");
+    sqlite
+        .with_write_connection(|conn| {
+            conn.execute(
+                "UPDATE capability_workplane_jobs SET status = 'failed', payload = '{invalid', last_error = 'boom'
+                 WHERE repo_id = ?1 AND capability_id = 'architecture_graph'
+                   AND mailbox_name = 'architecture_graph.roles.adjudication'
+                   AND dedupe_key = 'queue-2';",
+                rusqlite::params![store.repo_id()],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .expect("mark failed adjudication row");
+
+    let queue_rows = store
+        .list_capability_workplane_jobs(WorkplaneJobQuery {
+            capability_id: Some("architecture_graph".to_string()),
+            mailbox_name: Some("architecture_graph.roles.adjudication".to_string()),
+            statuses: vec![WorkplaneJobStatus::Pending, WorkplaneJobStatus::Failed],
+            limit: Some(10),
+        })
+        .expect("list adjudication jobs");
+    assert_eq!(queue_rows.len(), 2);
+    assert!(
+        queue_rows
+            .iter()
+            .any(|row| row.status == WorkplaneJobStatus::Pending)
+    );
+    assert!(
+        queue_rows
+            .iter()
+            .any(|row| row.status == WorkplaneJobStatus::Failed)
+    );
+    let failed = queue_rows
+        .iter()
+        .find(|row| row.status == WorkplaneJobStatus::Failed)
+        .expect("failed row");
+    assert_eq!(failed.payload, serde_json::Value::Null);
+    assert_eq!(failed.last_error.as_deref(), Some("boom"));
+
+    let pending_only = store
+        .list_capability_workplane_jobs(WorkplaneJobQuery {
+            capability_id: Some("architecture_graph".to_string()),
+            mailbox_name: Some("architecture_graph.roles.adjudication".to_string()),
+            statuses: vec![WorkplaneJobStatus::Pending],
+            limit: Some(1),
+        })
+        .expect("list pending adjudication jobs");
+    assert_eq!(pending_only.len(), 1);
+    assert_eq!(pending_only[0].status, WorkplaneJobStatus::Pending);
+}
+
+#[test]
+fn read_only_workplane_status_reader_lists_existing_jobs_without_runtime_open() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+
+    let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
+        .expect("open repo runtime store");
+    store
+        .enqueue_capability_workplane_jobs(
+            "architecture_graph",
+            vec![CapabilityWorkplaneJobInsert::new(
+                "architecture_graph.roles.adjudication",
+                None,
+                Some("queue-1".to_string()),
+                serde_json::json!({"request": {"reason": "unknown_kind", "generation": 7}}),
+            )],
+        )
+        .expect("enqueue workplane job");
+
+    let reader =
+        RepoCapabilityWorkplaneStatusReader::open_for_config_root(dir.path(), store.repo_id())
+            .expect("open read-only status reader")
+            .expect("runtime db should exist");
+    let rows = reader
+        .list_capability_workplane_jobs(WorkplaneJobQuery {
+            capability_id: Some("architecture_graph".to_string()),
+            mailbox_name: Some("architecture_graph.roles.adjudication".to_string()),
+            statuses: vec![WorkplaneJobStatus::Pending],
+            limit: Some(10),
+        })
+        .expect("list jobs read-only");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].dedupe_key.as_deref(), Some("queue-1"));
+}
+
+#[test]
+fn read_only_workplane_status_reader_returns_none_for_missing_runtime_db() {
+    let dir = TempDir::new().expect("tempdir");
+    let reader = RepoCapabilityWorkplaneStatusReader::open_for_config_root(dir.path(), "repo-1")
+        .expect("open status reader");
+    assert!(reader.is_none());
 }
 
 #[test]

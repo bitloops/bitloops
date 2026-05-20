@@ -78,6 +78,44 @@ fn typescript_context_activates_near_tsconfig() {
 }
 
 #[test]
+fn node_context_accepts_package_json_with_utf8_bom() {
+    let dir = tempdir().expect("temp dir");
+    fs::create_dir_all(dir.path().join("playground/resolve/utf8-bom-package"))
+        .expect("create package dir");
+    fs::write(
+        dir.path()
+            .join("playground/resolve/utf8-bom-package/package.json"),
+        "\u{feff}{\"name\":\"@vitejs/test-utf8-bom-package\",\"private\":true}\n",
+    )
+    .expect("write package.json");
+    fs::write(
+        dir.path()
+            .join("playground/resolve/utf8-bom-package/index.mjs"),
+        "export const value = 1;\n",
+    )
+    .expect("write module");
+
+    let classifier = classifier_for(
+        dir.path(),
+        &[
+            "playground/resolve/utf8-bom-package/package.json",
+            "playground/resolve/utf8-bom-package/index.mjs",
+        ],
+    );
+    let classification = classifier
+        .classify_repo_relative_path("playground/resolve/utf8-bom-package/index.mjs", false)
+        .expect("classify module");
+
+    assert_eq!(classification.analysis_mode, AnalysisMode::Code);
+    assert_eq!(classification.file_role, FileRole::SourceCode);
+    assert_eq!(classification.language, "javascript");
+    assert_eq!(
+        classification.primary_context_id.as_deref(),
+        Some("auto:node:playground/resolve/utf8-bom-package")
+    );
+}
+
+#[test]
 fn scope_include_as_text_promotes_otherwise_track_only_paths() {
     let dir = tempdir().expect("temp dir");
     fs::write(

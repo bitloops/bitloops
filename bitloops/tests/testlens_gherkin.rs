@@ -326,10 +326,8 @@ fn then_hybrid_rust_scenarios_are_materialized(world: &mut TestHarnessWorld, com
     }
 
     assert!(
-        scenario_names
-            .iter()
-            .any(|name| name.starts_with("documented_increment[doctest:")),
-        "expected doctest scenario in {:?}",
+        scenario_names.contains("documented_increment"),
+        "expected semantic doctest scenario in {:?}",
         scenario_names
     );
 }
@@ -375,11 +373,9 @@ fn then_query_returns_doctest_covering_test(
     let covering_tests = query_json["covering_tests"]
         .as_array()
         .expect("covering_tests should be an array");
-    let found = covering_tests.iter().any(|row| {
-        row["test_name"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("documented_increment[doctest:"))
-    });
+    let found = covering_tests
+        .iter()
+        .any(|row| row["test_name"].as_str() == Some("documented_increment"));
     assert!(found, "expected doctest covering test, got {query_json}");
     world.query_json = Some(query_json);
 }

@@ -55,6 +55,11 @@ pub(crate) fn derive_post_commit_from_event_db_turns_with_fake_sources() {
         repository.checkpoint_id_for("turn-1").as_deref(),
         Some(checkpoint_id.as_str())
     );
+    assert_eq!(
+        spool.checkpoint_id_for("turn-1").as_deref(),
+        Some(checkpoint_id.as_str()),
+        "local spool state should refresh from canonical event-store progress without re-queueing"
+    );
 
     let sequence = operations.lock().expect("lock operations").clone();
     let flush_index = sequence
@@ -68,6 +73,14 @@ pub(crate) fn derive_post_commit_from_event_db_turns_with_fake_sources() {
     assert!(
         flush_index < repo_list_index,
         "post_commit should flush the spool before reading the Event DB, got sequence {sequence:?}"
+    );
+    assert_eq!(
+        sequence
+            .iter()
+            .filter(|entry| **entry == "spool.flush")
+            .count(),
+        1,
+        "checkpoint progress refreshes should not queue a second canonical event-store flush"
     );
 }
 
@@ -212,7 +225,7 @@ pub(crate) fn derive_post_commit_keeps_partially_committed_turns_available_for_l
 }
 
 #[test]
-pub(crate) fn derive_post_commit_falls_back_to_local_spool_when_flush_fails() {
+pub(crate) fn derive_post_commit_errors_instead_of_falling_back_to_local_spool_when_flush_fails() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     init_devql_schema(dir.path());
@@ -247,7 +260,7 @@ pub(crate) fn derive_post_commit_falls_back_to_local_spool_when_flush_fails() {
     let committed_files = files_changed_in_commit(dir.path(), &head).expect("committed files");
 
     let strategy = ManualCommitStrategy::new(dir.path());
-    let checkpoint_id = strategy
+    let err = strategy
         .derive_post_commit_from_interaction_sources(
             &head,
             &committed_files,
@@ -255,26 +268,24 @@ pub(crate) fn derive_post_commit_falls_back_to_local_spool_when_flush_fails() {
             &repository,
             Some(&spool),
         )
-        .expect("derive from local spool fallback")
-        .expect("checkpoint id");
+        .expect_err(
+            "flush failure should stop post_commit derivation instead of reading spool-local turns",
+        );
 
-    let summary = read_committed(dir.path(), &checkpoint_id)
-        .expect("read derived checkpoint")
-        .expect("derived checkpoint summary");
-    assert_eq!(summary.files_touched, vec!["change.txt"]);
+    assert!(
+        format!("{err:#}").contains("flushing interaction spool before post_commit derivation"),
+        "unexpected error: {err:#}"
+    );
     assert_eq!(
         spool.checkpoint_id_for("turn-spool-fallback").as_deref(),
-        Some(checkpoint_id.as_str())
+        None,
+        "spool-only turn data must not be treated as canonical after a flush failure"
     );
 
     let sequence = operations.lock().expect("lock operations").clone();
     assert_eq!(
-        sequence[..3],
-        [
-            "spool.flush",
-            "spool.list_uncheckpointed_turns",
-            "spool.load_session"
-        ],
-        "post_commit should fall back to the local spool when the event store flush fails"
+        sequence,
+        ["spool.flush"],
+        "post_commit should stop after the canonical event-store flush fails instead of querying the local spool"
     );
 }

@@ -2,10 +2,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 use crate::capability_packs::semantic_clones::types::{
-    SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::daemon::types::unix_timestamp_now;
@@ -47,6 +48,11 @@ pub(crate) fn claim_next_workplane_job(
             )?;
             for mut job in jobs {
                 if job_is_paused_for_mailbox(control_state, &job.mailbox_name) {
+                    continue;
+                }
+                if job.mailbox_name == SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+                    && repo_has_active_embedding_work(conn, &job.repo_id)?
+                {
                     continue;
                 }
                 if mailbox_claim_readiness(runtime_store, &mut readiness_cache, &job)?.blocked {
@@ -122,6 +128,8 @@ fn load_workplane_claim_candidates(
                    AND available_at_unix <= ?2
                  ORDER BY CASE mailbox_name
                               WHEN 'semantic_clones.embedding.code' THEN 0
+                              WHEN 'semantic_clones.embedding.identity' THEN 0
+                              WHEN 'semantic_clones.embedding.architecture' THEN 0
                               WHEN 'semantic_clones.embedding.summary' THEN 0
                               WHEN 'semantic_clones.summary_refresh' THEN 1
                               WHEN 'semantic_clones.clone_rebuild' THEN 2
@@ -138,7 +146,7 @@ fn load_workplane_claim_candidates(
             for row in rows {
                 let job = row?;
                 if job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
-                    || is_generic_text_generation_job(runtime_store, readiness_cache, &job)?
+                    || is_generic_inference_job(runtime_store, readiness_cache, &job)?
                 {
                     values.push(job);
                 }
@@ -152,10 +160,12 @@ fn load_workplane_claim_candidates(
                         lease_expires_at_unix, last_error
                  FROM capability_workplane_jobs
                  WHERE status = ?1
-                   AND mailbox_name IN (?2, ?3)
-                   AND available_at_unix <= ?4
+                   AND mailbox_name IN (?2, ?3, ?4, ?5)
+                   AND available_at_unix <= ?6
                  ORDER BY CASE mailbox_name
                               WHEN 'semantic_clones.embedding.code' THEN 0
+                              WHEN 'semantic_clones.embedding.identity' THEN 0
+                              WHEN 'semantic_clones.embedding.architecture' THEN 0
                               WHEN 'semantic_clones.embedding.summary' THEN 0
                               WHEN 'semantic_clones.summary_refresh' THEN 1
                               WHEN 'semantic_clones.clone_rebuild' THEN 2
@@ -163,12 +173,14 @@ fn load_workplane_claim_candidates(
                           END ASC,
                           available_at_unix ASC,
                           submitted_at_unix ASC
-                 LIMIT ?5",
+                 LIMIT ?7",
             )?;
             let rows = stmt.query_map(
                 params![
                     WorkplaneJobStatus::Pending.as_str(),
                     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+                    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX,
                     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
                     now,
                     limit,
@@ -191,6 +203,8 @@ fn load_workplane_claim_candidates(
                    AND available_at_unix <= ?3
                  ORDER BY CASE mailbox_name
                               WHEN 'semantic_clones.embedding.code' THEN 0
+                              WHEN 'semantic_clones.embedding.identity' THEN 0
+                              WHEN 'semantic_clones.embedding.architecture' THEN 0
                               WHEN 'semantic_clones.embedding.summary' THEN 0
                               WHEN 'semantic_clones.summary_refresh' THEN 1
                               WHEN 'semantic_clones.clone_rebuild' THEN 2
@@ -217,7 +231,7 @@ fn load_workplane_claim_candidates(
     Ok(values)
 }
 
-fn is_generic_text_generation_job(
+fn is_generic_inference_job(
     runtime_store: &DaemonSqliteRuntimeStore,
     readiness_cache: &mut BTreeMap<(PathBuf, String, String), WorkplaneMailboxReadiness>,
     job: &WorkplaneJobRecord,
@@ -236,11 +250,7 @@ fn is_generic_text_generation_job(
     if !matches!(registration.handler, CapabilityMailboxHandler::Ingester(_)) {
         return Ok(false);
     }
-    if !matches!(
-        registration.readiness_policy,
-        CapabilityMailboxReadinessPolicy::TextGenerationSlot(_)
-            | CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot(_)
-    ) {
+    if !is_generic_inference_readiness_policy(registration.readiness_policy) {
         return Ok(false);
     }
     Ok(!mailbox_claim_readiness_for_registration(
@@ -252,12 +262,104 @@ fn is_generic_text_generation_job(
     .blocked)
 }
 
+const fn is_generic_inference_readiness_policy(policy: CapabilityMailboxReadinessPolicy) -> bool {
+    matches!(
+        policy,
+        CapabilityMailboxReadinessPolicy::TextGenerationSlot(_)
+            | CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot(_)
+            | CapabilityMailboxReadinessPolicy::StructuredGenerationSlot(_)
+            | CapabilityMailboxReadinessPolicy::OptionalStructuredGenerationSlot(_)
+    )
+}
+
+fn repo_has_active_embedding_work(conn: &rusqlite::Connection, repo_id: &str) -> Result<bool> {
+    Ok(embedding_mailbox_work_is_active(conn, repo_id)?
+        || embedding_workplane_jobs_are_active(conn, repo_id)?)
+}
+
+fn embedding_mailbox_work_is_active(conn: &rusqlite::Connection, repo_id: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1
+             FROM semantic_embedding_mailbox_items
+             WHERE repo_id = ?1
+               AND status IN (?2, ?3)
+             LIMIT 1",
+            params![
+                repo_id,
+                crate::host::runtime_store::SemanticMailboxItemStatus::Pending.as_str(),
+                crate::host::runtime_store::SemanticMailboxItemStatus::Leased.as_str(),
+            ],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn embedding_workplane_jobs_are_active(conn: &rusqlite::Connection, repo_id: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1
+             FROM capability_workplane_jobs
+             WHERE repo_id = ?1
+               AND mailbox_name IN (?2, ?3, ?4, ?5)
+               AND status IN (?6, ?7)
+             LIMIT 1",
+            params![
+                repo_id,
+                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+                SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX,
+                SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+                WorkplaneJobStatus::Pending.as_str(),
+                WorkplaneJobStatus::Running.as_str(),
+            ],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
 fn job_is_paused_for_mailbox(state: &EnrichmentControlState, mailbox_name: &str) -> bool {
     match mailbox_name {
         SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => state.paused_semantic,
         SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+        | SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+        | SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
         | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
         | SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => state.paused_embeddings,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_generic_inference_readiness_policy;
+    use crate::host::capability_host::CapabilityMailboxReadinessPolicy;
+
+    #[test]
+    fn generic_inference_readiness_policy_accepts_text_and_structured_generation() {
+        assert!(is_generic_inference_readiness_policy(
+            CapabilityMailboxReadinessPolicy::TextGenerationSlot("slot")
+        ));
+        assert!(is_generic_inference_readiness_policy(
+            CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot("slot")
+        ));
+        assert!(is_generic_inference_readiness_policy(
+            CapabilityMailboxReadinessPolicy::StructuredGenerationSlot("slot")
+        ));
+        assert!(is_generic_inference_readiness_policy(
+            CapabilityMailboxReadinessPolicy::OptionalStructuredGenerationSlot("slot")
+        ));
+    }
+
+    #[test]
+    fn generic_inference_readiness_policy_rejects_none_and_embeddings() {
+        assert!(!is_generic_inference_readiness_policy(
+            CapabilityMailboxReadinessPolicy::None
+        ));
+        assert!(!is_generic_inference_readiness_policy(
+            CapabilityMailboxReadinessPolicy::EmbeddingsSlot("slot")
+        ));
     }
 }

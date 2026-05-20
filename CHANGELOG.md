@@ -6,16 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.29] - 2026-05-19
+
+### Added
+
+- **Architecture role intelligence for DevQL**: added repository-scoped architecture role taxonomy, detection rules, extracted facts, rule signals, current assignments, assignment history, role-change proposals, assignment migrations, and adjudication attempts inside the `architecture_graph` capability. DevQL sync now classifies current files and artefacts into architecture roles, supports deterministic rule assignments, marks removed targets stale, and can queue ambiguous or high-impact classifications for structured-generation adjudication.
+- **CLI management for architecture roles**: added `bitloops devql architecture roles ...` commands to seed/bootstrap role taxonomies, classify current state, inspect role/adjudication status, rename/deprecate/remove/merge/split roles, create aliases, manage detection rules, and show/apply role proposals.
+- **Architecture role context in slim DevQL GraphQL**: `selectArtefacts(...)` now exposes `architectureRoles` and `architectureGraphContext`, and selection `overview` includes architecture-role summary data plus follow-up query hints.
+- **Architecture-aware semantic search**: semantic embeddings now support an `architecture` representation based on assigned architecture roles. `selectArtefacts(by: { search: "...", searchMode: ARCHITECTURE })` and `AUTO` search can use architecture-role signals alongside lexical, identity, code, and summary retrieval.
+
+### Changed
+
+- **Architecture graph capability work now uses dedicated background workplane lanes**: role classification runs as a current-state consumer, role adjudication runs through its own mailbox, and role assignment changes enqueue targeted architecture embedding refresh/cleanup jobs.
+- **Structured-generation configuration now documents architecture slots and CLI-agent thinking levels**: the configuration reference covers `[architecture.inference].fact_synthesis`, `[architecture.inference].role_adjudication`, and optional `thinking_level` values for local CLI-agent drivers.
+- **Repo-local DevQL guidance now includes architecture search patterns**: managed guidance surfaces mention `searchMode: ARCHITECTURE` and compact architecture-role query shapes.
+
+### Fixed
+- **Large-repo init embeddings now avoid several avoidable SQLite contention paths**: Bitloops no longer re-initializes the runtime SQLite schema on every open, managed embeddings bootstrap no longer stays blocked behind stale bootstrap state, embedding commits release relational writes before runtime-mailbox finalization, clone rebuild waits until a repo's embedding backlog drains, and sqlite-vec current-row mirror writes are batched per dimension instead of per artefact. Together these changes keep code embeddings progressing on larger repos, reduce `runtime.sqlite` / `relational.db` lock contention during init backfills, and prevent clone rebuild from competing with active embedding work.
+- **Architecture role status can inspect runtime queue state read-only**: `bitloops devql architecture roles status` reads queued adjudication jobs and review items without requiring current-state classification context.
+- **C++ language support in the host-managed language adapter runtime**: added a built-in `cpp-language-pack` with extension-host profile resolution (`.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`, `.h++`), typed `CppKind` language kinds, canonical mappings, C++ artefact extraction, dependency-edge extraction, and source-level C++ `LanguageTestSupport` discovery. C++ now participates in built-in language adapter registration, readiness/registry reporting, DevQL language detection, sync cache extraction/materialization, and cached-kind parsing alongside existing Rust/TS-JS/Python/Go/Java/C#/PHP support.
+- **WorkOS auth token storage now falls back on headless Linux** (`CLI-1875`): when the platform secure store is unavailable, such as a Linux server without DBus Secret Service, Bitloops now persists auth tokens to a private file-backed fallback store instead of aborting sign-in.
+- **Interactive init now uses the same optional setup prompt path with or without the default daemon** (`CLI-1872`): `bitloops init` now offers embeddings, semantic summaries, and context guidance setup when those features are unconfigured, matching `bitloops init --install-default-daemon`; the daemon flag now only adds default-daemon bootstrap behavior.
+- **DevQL sync now handles Vite's package fixtures and duplicate test names** (`CLI-1858`, `CLI-1859`, `CLI-1866`): project-aware classification now accepts `package.json` files with a leading UTF-8 BOM and reports the package path on parse failures. Test-harness materialization now keeps semantic `symbol_id`s independent of source line spans, collapses repeated source suite containers into one logical suite, then applies duplicate-aware tokens when repeated case or doctest identities collide. Current-state sync reuses prior duplicate tokens by source order so legal repeated Vitest `it` names, Gitea tests, NestJS specs, and Rust doctests no longer collapse to the same test artefact ID when line numbers shift.
+
+## [0.0.28] - 2026-05-18
+
 ### Changed
 
 - Updated readme so that the video is inline and it doesn't open over the github page itself.
 - **Semantic embeddings are now opt-in per repo policy instead of daemon-global intent**: repo policy files (`.bitloops.toml` / `.bitloops.local.toml`) now own `semantic_clones` embedding mode and profile bindings, while the daemon `config.toml` owns the available inference runtimes and profiles. `bitloops init`, `--no-embeddings`, and local/platform embeddings setup now persist the selected repo's intent without silently enabling embeddings for every repo that shares the same daemon.
+- **Storage ownership is now more explicit across local and remote backends**: Bitloops now follows a clearer split between local runtime/current projection data and shared remote historical/event/project data, reducing ambiguous routing across SQLite, Postgres, ClickHouse, and blob backends.
 
 ### Fixed
 
 - **Local embeddings setup now honors repo-bound daemon configs**: local managed embeddings bootstrap now writes the `local_code` runtime profile into the daemon config bound by the repo's `.bitloops.local.toml`, matching the platform embeddings path and avoiding accidental writes to an unrelated default daemon config.
 - **Plain init no longer disables embeddings implicitly**: running `bitloops init` without an embeddings flag now keeps the repo's semantic embeddings policy unchanged instead of writing `embedding_mode = "off"` into `.bitloops.local.toml`.
+- **Default-daemon init now recovers when a service exists without a live daemon runtime**: `bitloops init --install-default-daemon` now detects existing always-on service metadata and restarts through the service path instead of attempting a detached daemon start, avoiding the contradictory second-repo flow where init reported both an already-running service and a missing daemon.
 - **Repo semantic profile bindings inherit daemon mode when mode is omitted**: repo-local `code_embeddings` or `summary_embeddings` bindings now keep the daemon's active semantic embedding mode unless the repo policy explicitly overrides it.
+- **Remote relational mode no longer mixes current and shared ownership during init/sync**: Bitloops now preserves the intended local-vs-remote relational split during bootstrap and sync, avoiding misplaced writes and the SQLite foreign-key failures that could happen when initializing repos with remote relational/event backends.
+- **Shared storage reads and writes now follow the owning backend more consistently**: historical relational data, checkpoint provenance, semantic state, event data, and blob payload families now avoid the previous local/remote mirroring behavior and use their configured authority more consistently.
 
 ## [0.0.27] - 2026-05-15
 

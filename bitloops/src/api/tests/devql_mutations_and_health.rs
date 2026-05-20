@@ -1838,7 +1838,7 @@ async fn slim_select_artefacts_reports_embedding_representations_for_current_row
     );
     assert_eq!(
         target_artefact["embeddingRepresentations"],
-        json!(["IDENTITY", "CODE", "SUMMARY"])
+        json!(["IDENTITY", "ARCHITECTURE", "CODE", "SUMMARY"])
     );
 }
 
@@ -2428,7 +2428,7 @@ async fn slim_select_artefacts_search_resolves_code_and_summary_embedding_hits()
     );
     assert_eq!(
         artefacts[1]["embeddingRepresentations"],
-        json!(["IDENTITY", "CODE", "SUMMARY"])
+        json!(["IDENTITY", "ARCHITECTURE", "CODE", "SUMMARY"])
     );
 }
 
@@ -2471,6 +2471,82 @@ async fn slim_select_artefacts_search_dedupes_overlapping_fuzzy_and_embedding_hi
     assert_eq!(
         artefacts[0]["symbolFqn"],
         "packages/api/src/caller.ts::caller"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_resolves_architecture_embedding_hits() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_scoring_inputs(repo.path());
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "api endpoint", searchMode: ARCHITECTURE }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                  embeddingRepresentations
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    assert_eq!(
+        json["selectArtefacts"]["artefacts"][0]["symbolFqn"],
+        "packages/api/src/target.ts::target"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["artefacts"][0]["embeddingRepresentations"],
+        json!(["IDENTITY", "ARCHITECTURE", "CODE", "SUMMARY"])
+    );
+
+    let auto_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "api endpoint" }) {
+                artefacts {
+                  symbolFqn
+                }
+                searchBreakdown {
+                  architecture {
+                    symbolFqn
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        auto_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        auto_response.errors
+    );
+    let auto_json = auto_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(
+        auto_json["selectArtefacts"]["searchBreakdown"]["architecture"][0]["symbolFqn"],
+        "packages/api/src/target.ts::target"
     );
 }
 

@@ -3,6 +3,20 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+mod architecture;
+mod schemas;
+
+pub(super) use architecture::{
+    architecture_overview_expand_hint, architecture_role_assignment_item,
+    build_architecture_graph_context_summary, build_architecture_overview_stage,
+};
+pub(super) use schemas::{
+    ARCHITECTURE_GRAPH_CONTEXT_STAGE_SCHEMA, ARCHITECTURE_OVERVIEW_SCHEMA,
+    ARCHITECTURE_ROLE_STAGE_SCHEMA, CHECKPOINT_STAGE_SCHEMA, CLONE_STAGE_SCHEMA,
+    CONTEXT_GUIDANCE_STAGE_SCHEMA, DEPENDENCY_STAGE_SCHEMA, HISTORICAL_CONTEXT_STAGE_SCHEMA,
+    TESTS_STAGE_SCHEMA,
+};
+
 use crate::capability_packs::semantic_clones::scoring::{
     RELATION_KIND_DIVERGED_IMPLEMENTATION, RELATION_KIND_EXACT_DUPLICATE,
     RELATION_KIND_SHARED_LOGIC_CANDIDATE, RELATION_KIND_SIMILAR_IMPLEMENTATION,
@@ -16,9 +30,9 @@ use super::super::{
     ExpandHintParameter, TestHarnessTestsResult,
 };
 use super::stages::{
-    CheckpointStageData, CloneExpandHint, CloneStageData, ContextGuidanceStageData,
-    DependencyExpandHint, DependencyStageData, HistoricalContextItem, HistoricalContextStageData,
-    HistoricalMatchReason, TestsStageData,
+    ArchitectureOverviewStageData, CheckpointStageData, CloneExpandHint, CloneStageData,
+    ContextGuidanceStageData, DependencyExpandHint, DependencyStageData, HistoricalContextItem,
+    HistoricalContextStageData, HistoricalMatchReason, TestsStageData,
 };
 
 pub(super) fn decode_stage_rows<T: DeserializeOwned>(
@@ -335,6 +349,7 @@ pub(super) struct SelectionSummaryStages<'a> {
     pub(super) historical_context: &'a HistoricalContextStageData,
     pub(super) context_guidance: &'a ContextGuidanceStageData,
     pub(super) http: &'a Value,
+    pub(super) architecture: &'a ArchitectureOverviewStageData,
 }
 
 pub(super) fn build_selection_summary(
@@ -362,6 +377,11 @@ pub(super) fn build_selection_summary(
             stages.context_guidance.schema.as_deref(),
         ),
         "http": stages.http,
+        "architecture": json_selection_stage_entry(
+            &stages.architecture.summary,
+            stages.architecture.expand_hint.as_ref(),
+            stages.architecture.schema.as_deref(),
+        ),
     })
 }
 
@@ -410,6 +430,21 @@ fn selection_stage_entry(
             dependency_expand_hint_to_value(expand_hint),
         );
     }
+    entry.insert("schema".to_string(), json!(schema));
+    Value::Object(entry)
+}
+
+fn json_selection_stage_entry(
+    summary: &Value,
+    expand_hint: Option<&Value>,
+    schema: Option<&str>,
+) -> Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert("overview".to_string(), summary.clone());
+    entry.insert(
+        "expandHint".to_string(),
+        expand_hint.cloned().unwrap_or(Value::Null),
+    );
     entry.insert("schema".to_string(), json!(schema));
     Value::Object(entry)
 }
@@ -475,234 +510,3 @@ fn deps_direction_name(direction: DepsDirection) -> &'static str {
         DepsDirection::Both => "BOTH",
     }
 }
-
-pub(super) const CHECKPOINT_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  checkpoints(agent: String, since: DateTime): CheckpointStageResult!
-}
-
-type CheckpointStageResult {
-  overview: JSON!
-  schema: String
-  items(first: Int! = 20): [Checkpoint!]!
-}
-
-type Checkpoint {
-  id: ID!
-  sessionId: String!
-  commitSha: String
-  branch: String
-  agent: String
-  eventTime: DateTime!
-  strategy: String
-  filesTouched: [String!]!
-  payload: JSON
-  commit: Commit
-  fileRelations: [CheckpointFileRelation!]!
-}"#;
-
-pub(super) const CLONE_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  codeMatches(relationKind: String, minScore: Float): CloneStageResult!
-}
-
-type CloneStageResult {
-  overview: JSON!
-  expandHint: CloneExpandHint
-  schema: String
-  items(first: Int! = 20): [Clone!]!
-}
-
-interface ExpandHint {
-  intent: String!
-  template: String!
-  parameters: [ExpandHintParameter!]!
-}
-
-type ExpandHintParameter {
-  name: String!
-  intent: String!
-  supportedValues: [String!]!
-}
-
-type CloneExpandHint implements ExpandHint {
-  intent: String!
-  template: String!
-  parameters: [ExpandHintParameter!]!
-}
-
-type Clone {
-  id: ID!
-  sourceArtefactId: ID!
-  targetArtefactId: ID!
-  relationKind: String!
-  score: Float!
-  metadata: JSON
-  sourceArtefact: Artefact!
-  targetArtefact: Artefact!
-}"#;
-
-pub(super) const DEPENDENCY_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  dependencies(kind: EdgeKind, direction: DependenciesDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
-}
-
-type DependencyStageResult {
-  overview: JSON!
-  expandHint: DependencyExpandHint
-  schema: String
-  items(first: Int! = 20): [DependencyEdge!]!
-}
-
-interface ExpandHint {
-  intent: String!
-  template: String!
-  parameters: [ExpandHintParameter!]!
-}
-
-type ExpandHintParameter {
-  name: String!
-  intent: String!
-  supportedValues: [String!]!
-}
-
-type DependencyExpandHint implements ExpandHint {
-  intent: String!
-  template: String!
-  parameters: [ExpandHintParameter!]!
-}
-
-type DependencyEdge {
-  id: ID!
-  edgeKind: EdgeKind!
-  fromArtefactId: ID!
-  toArtefactId: ID
-  toSymbolRef: String
-  startLine: Int
-  endLine: Int
-  metadata: JSON
-  fromArtefact: Artefact!
-  toArtefact: Artefact
-}"#;
-
-pub(super) const TESTS_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  tests(minConfidence: Float, linkageSource: String): TestsStageResult!
-}
-
-type TestsStageResult {
-  overview: JSON!
-  schema: String
-  items(first: Int! = 20): [TestHarnessTestsResult!]!
-}
-
-type TestHarnessTestsResult {
-  artefact: TestHarnessArtefactRef!
-  coveringTests: [TestHarnessCoveringTest!]!
-  summary: TestHarnessTestsSummary!
-}"#;
-
-pub(super) const HISTORICAL_CONTEXT_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  historicalContext(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind): HistoricalContextStageResult!
-}
-
-type HistoricalContextStageResult {
-  overview: JSON!
-  schema: String
-  items(first: Int! = 20): [HistoricalContextItem!]!
-}
-
-enum HistoricalEvidenceKind {
-  SYMBOL_PROVENANCE
-  FILE_RELATION
-  LINE_OVERLAP
-}
-
-type HistoricalContextItem {
-  checkpointId: ID!
-  sessionId: String!
-  turnId: String
-  agentType: String
-  model: String
-  eventTime: DateTime!
-  matchReason: HistoricalMatchReason!
-  matchStrength: HistoricalMatchStrength!
-  promptPreview: String
-  turnSummary: String
-  transcriptPreview: String
-  filesModified: [String!]!
-  fileRelations: [CheckpointFileRelation!]!
-  toolEvents: [HistoricalToolEvent!]!
-}
-
-enum HistoricalMatchReason {
-  SYMBOL_PROVENANCE
-  FILE_RELATION
-  LINE_OVERLAP
-}
-
-enum HistoricalMatchStrength {
-  HIGH
-  MEDIUM
-  LOW
-}
-
-type HistoricalToolEvent {
-  toolKind: String
-  inputSummary: String
-  outputSummary: String
-  command: String
-}"#;
-
-pub(super) const CONTEXT_GUIDANCE_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  contextGuidance(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind, category: ContextGuidanceCategory, kind: String): ContextGuidanceStageResult!
-}
-
-type ContextGuidanceStageResult {
-  overview: JSON!
-  schema: String
-  items(first: Int! = 20): [ContextGuidanceItem!]!
-}
-
-type ContextGuidanceItem {
-  id: ID!
-  category: ContextGuidanceCategory!
-  kind: String!
-  label: String!
-  guidance: String!
-  evidenceExcerpt: String!
-  confidence: ContextGuidanceConfidence!
-  relevanceScore: Float!
-  generatedAt: DateTime
-  sourceModel: String
-  sourceCount: Int!
-  sources: [ContextGuidanceSource!]!
-}
-
-type ContextGuidanceSource {
-  sourceType: String!
-  sourceId: String!
-  checkpointId: ID
-  sessionId: String
-  turnId: String
-  toolKind: String
-  knowledgeItemId: ID
-  knowledgeItemVersionId: ID
-  relationAssertionId: ID
-  provider: String
-  sourceKind: String
-  title: String
-  url: String
-  excerpt: String
-}
-
-enum ContextGuidanceCategory {
-  DECISION
-  CONSTRAINT
-  PATTERN
-  RISK
-  VERIFICATION
-  CONTEXT
-}
-
-enum ContextGuidanceConfidence {
-  HIGH
-  MEDIUM
-  LOW
-}"#;

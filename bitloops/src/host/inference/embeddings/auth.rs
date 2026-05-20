@@ -1,7 +1,5 @@
 use anyhow::{Result, bail};
 
-use super::session::PythonEmbeddingsSessionConfig;
-
 #[cfg(test)]
 pub(crate) type PlatformRuntimeAuthEnvironmentHook = dyn Fn(&str) -> Result<Vec<(String, String)>>;
 #[cfg(test)]
@@ -37,10 +35,8 @@ fn platform_runtime_api_key_env(args: &[String]) -> &str {
         .unwrap_or(crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV)
 }
 
-pub(crate) fn platform_runtime_auth_environment(
-    config: &PythonEmbeddingsSessionConfig,
-) -> Vec<(String, String)> {
-    let api_key_env = platform_runtime_api_key_env(&config.args);
+fn platform_runtime_auth_environment(args: &[String]) -> Vec<(String, String)> {
+    let api_key_env = platform_runtime_api_key_env(args);
 
     #[cfg(test)]
     if let Some(result) = PLATFORM_RUNTIME_AUTH_ENVIRONMENT_HOOK
@@ -69,15 +65,17 @@ pub(crate) fn platform_runtime_auth_environment(
     }
 }
 
-pub(crate) fn ensure_platform_runtime_auth_environment_available(
-    config: &PythonEmbeddingsSessionConfig,
-) -> Result<()> {
-    if !config.platform_backed {
-        return Ok(());
+pub(crate) fn resolve_platform_runtime_auth_environment(
+    args: &[String],
+    platform_backed: bool,
+) -> Result<Vec<(String, String)>> {
+    if !platform_backed {
+        return Ok(Vec::new());
     }
 
-    if !platform_runtime_auth_environment(config).is_empty() {
-        return Ok(());
+    let environment = platform_runtime_auth_environment(args);
+    if !environment.is_empty() {
+        return Ok(environment);
     }
 
     bail!(

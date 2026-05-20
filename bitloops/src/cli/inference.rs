@@ -5,7 +5,7 @@ mod setup;
 #[cfg(test)]
 mod tests;
 
-pub use args::{InferenceArgs, InferenceCommand, InferenceInstallArgs, run};
+pub use args::{InferenceArgs, InferenceCommand, run};
 #[allow(unused_imports)]
 pub(crate) use managed::{
     ManagedInferenceInstallPhase, ManagedInferenceInstallProgress,
@@ -26,6 +26,12 @@ pub(crate) use setup::{
     prepare_cloud_summary_generation_plan, prepare_local_summary_generation_plan,
     prompt_context_guidance_setup_selection, prompt_summary_setup_selection,
     summary_generation_configured,
+};
+
+#[cfg(test)]
+pub(crate) use setup::{
+    bitloops_inference_generation_configured, configure_cloud_bitloops_inference,
+    configure_local_bitloops_inference,
 };
 
 #[cfg(test)]

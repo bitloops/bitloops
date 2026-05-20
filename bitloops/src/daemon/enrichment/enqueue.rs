@@ -32,6 +32,7 @@ impl EnrichmentCoordinator {
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_semantic".to_string());
         self.save_state(&mut state)?;
+        self.refresh_worker_capacity_after_enqueue();
         self.notify.notify_waiters();
         publish_workplane_runtime_event(
             &target,
@@ -57,6 +58,7 @@ impl EnrichmentCoordinator {
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_embeddings".to_string());
         self.save_state(&mut state)?;
+        self.refresh_worker_capacity_after_enqueue();
         self.notify.notify_waiters();
         let mailbox_name = match representation_kind {
             EmbeddingRepresentationKind::Code => {
@@ -64,6 +66,9 @@ impl EnrichmentCoordinator {
             }
             EmbeddingRepresentationKind::Identity => {
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+            }
+            EmbeddingRepresentationKind::Architecture => {
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
             }
             EmbeddingRepresentationKind::Summary => {
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
@@ -79,6 +84,7 @@ impl EnrichmentCoordinator {
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_clone_edges_rebuild".to_string());
         self.save_state(&mut state)?;
+        self.refresh_worker_capacity_after_enqueue();
         self.notify.notify_waiters();
         publish_workplane_runtime_event(
             &target,
@@ -199,6 +205,7 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_embeddings".to_string());
         self.save_state(&mut state)?;
+        self.refresh_worker_capacity_after_enqueue();
         self.notify.notify_waiters();
         let mailbox_name = match representation_kind {
             EmbeddingRepresentationKind::Code => {
@@ -206,6 +213,9 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
             }
             EmbeddingRepresentationKind::Identity => {
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+            }
+            EmbeddingRepresentationKind::Architecture => {
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
             }
             EmbeddingRepresentationKind::Summary => {
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
@@ -225,6 +235,7 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_embeddings".to_string());
         self.save_state(&mut state)?;
+        self.refresh_worker_capacity_after_enqueue();
         self.notify.notify_waiters();
         let mailbox_name = match representation_kind {
             EmbeddingRepresentationKind::Code => {
@@ -232,6 +243,9 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
             }
             EmbeddingRepresentationKind::Identity => {
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+            }
+            EmbeddingRepresentationKind::Architecture => {
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
             }
             EmbeddingRepresentationKind::Summary => {
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
@@ -250,6 +264,7 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_semantic".to_string());
         self.save_state(&mut state)?;
+        self.refresh_worker_capacity_after_enqueue();
         self.notify.notify_waiters();
         publish_workplane_runtime_event(
             &target,

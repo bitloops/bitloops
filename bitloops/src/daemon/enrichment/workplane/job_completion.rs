@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use rusqlite::params;
 
 use crate::capability_packs::semantic_clones::types::{
-    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
 };
 use crate::capability_packs::semantic_clones::workplane::payload_work_item_count;
 use crate::daemon::types::unix_timestamp_now;
@@ -198,7 +199,10 @@ pub(crate) fn transient_embedding_retry_backoff_secs(attempts: u32) -> u64 {
 fn is_embedding_mailbox(mailbox_name: &str) -> bool {
     matches!(
         mailbox_name,
-        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+            | SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+            | SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
+            | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
     )
 }
 

@@ -9,6 +9,9 @@ use super::types::{
 };
 use super::unified_config::UnifiedSettings;
 
+const CODEX_EXEC_DRIVER: &str = "codex_exec";
+const CLAUDE_CODE_PRINT_DRIVER: &str = "claude_code_print";
+
 pub(crate) fn resolve_inference_from_unified_with<F>(
     settings: &UnifiedSettings,
     config_root: &Path,
@@ -121,6 +124,16 @@ where
             );
             let max_output_tokens = read_any_u64(profile_root, &["max_output_tokens"])
                 .map(|value| value.min(u32::MAX as u64) as u32);
+            let thinking_level = resolve_runtime_string_opt(
+                Some(profile_root),
+                "thinking_level",
+                &env_lookup,
+                &mut warnings,
+                &format!("inference.profiles.{name}.thinking_level"),
+            )
+            .and_then(|value| {
+                normalise_thinking_level(name, driver.as_str(), value.as_str(), &mut warnings)
+            });
             if matches!(
                 task,
                 InferenceTask::TextGeneration | InferenceTask::StructuredGeneration
@@ -185,13 +198,7 @@ where
                     ),
                     temperature,
                     max_output_tokens,
-                    thinking_level: resolve_runtime_string_opt(
-                        Some(profile_root),
-                        "thinking_level",
-                        &env_lookup,
-                        &mut warnings,
-                        &format!("inference.profiles.{name}.thinking_level"),
-                    ),
+                    thinking_level,
                     cache_dir: resolve_runtime_string_opt(
                         Some(profile_root),
                         "cache_dir",
@@ -292,4 +299,40 @@ fn parse_inference_task(raw: &str) -> InferenceTask {
         "structured_generation" | "structured-generation" => InferenceTask::StructuredGeneration,
         _ => InferenceTask::Embeddings,
     }
+}
+
+fn normalise_thinking_level(
+    profile_name: &str,
+    driver: &str,
+    raw: &str,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return None;
+    }
+
+    let supported = match driver.trim() {
+        CODEX_EXEC_DRIVER => matches!(
+            value.as_str(),
+            "low" | "medium" | "high" | "extra_high" | "xhigh"
+        ),
+        CLAUDE_CODE_PRINT_DRIVER => {
+            matches!(value.as_str(), "low" | "medium" | "high" | "xhigh" | "max")
+        }
+        other => {
+            warnings.push(format!(
+                "inference.profiles.{profile_name}.thinking_level is only supported by local CLI-agent drivers; driver `{other}` will ignore `{value}`"
+            ));
+            return Some(value);
+        }
+    };
+
+    if !supported {
+        warnings.push(format!(
+            "inference.profiles.{profile_name}.thinking_level `{value}` is not supported by driver `{}`",
+            driver.trim()
+        ));
+    }
+    Some(value)
 }

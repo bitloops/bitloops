@@ -2,6 +2,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::types::{
+    InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn,
+};
 use crate::storage::sqlite::SqliteConnectionPool;
 
 mod projections;
@@ -36,19 +40,79 @@ pub struct SqliteInteractionSpool {
     pub(super) repo_id: String,
 }
 
+pub(crate) fn initialise_interaction_spool_schema(sqlite: &SqliteConnectionPool) -> Result<()> {
+    sqlite
+        .with_write_connection(schema::initialise_schema)
+        .context("initialising interaction spool schema")
+}
+
+pub(crate) fn rebuild_interaction_search_projections(
+    sqlite: &SqliteConnectionPool,
+    repo_id: &str,
+) -> Result<()> {
+    sqlite
+        .with_write_connection(|conn| projections::rebuild_all_projections(conn, repo_id))
+        .context("rebuilding interaction search projections")
+}
+
 impl SqliteInteractionSpool {
     pub fn new(sqlite: SqliteConnectionPool, repo_id: String) -> Result<Self> {
-        sqlite
-            .with_write_connection(schema::initialise_schema)
-            .context("initialising interaction spool schema")?;
-        sqlite
-            .with_write_connection(|conn| projections::rebuild_all_projections(conn, &repo_id))
-            .context("rebuilding interaction search projections")?;
+        initialise_interaction_spool_schema(&sqlite)?;
         Ok(Self { sqlite, repo_id })
+    }
+
+    pub fn rebuild_search_projections(&self) -> Result<()> {
+        rebuild_interaction_search_projections(&self.sqlite, &self.repo_id)
     }
 
     pub fn repo_id(&self) -> &str {
         &self.repo_id
+    }
+
+    pub fn assign_checkpoint_to_turns(
+        &self,
+        turn_ids: &[String],
+        checkpoint_id: &str,
+        assigned_at: &str,
+    ) -> Result<()> {
+        <Self as InteractionSpool>::assign_checkpoint_to_turns(
+            self,
+            turn_ids,
+            checkpoint_id,
+            assigned_at,
+        )
+    }
+
+    pub fn list_sessions(
+        &self,
+        agent: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<InteractionSession>> {
+        <Self as InteractionSpool>::list_sessions(self, agent, limit)
+    }
+
+    pub fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>> {
+        <Self as InteractionSpool>::load_session(self, session_id)
+    }
+
+    pub fn list_turns_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<InteractionTurn>> {
+        <Self as InteractionSpool>::list_turns_for_session(self, session_id, limit)
+    }
+
+    pub fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
+        <Self as InteractionSpool>::list_uncheckpointed_turns(self)
+    }
+
+    pub fn list_events(
+        &self,
+        filter: &InteractionEventFilter,
+        limit: usize,
+    ) -> Result<Vec<InteractionEvent>> {
+        <Self as InteractionSpool>::list_events(self, filter, limit)
     }
 
     pub(crate) fn with_connection<T, F>(&self, f: F) -> Result<T>

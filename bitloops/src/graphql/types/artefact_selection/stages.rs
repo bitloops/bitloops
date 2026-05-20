@@ -2,8 +2,8 @@ use async_graphql::{ComplexObject, Enum, ID, Result, SimpleObject, types::Json};
 use serde_json::Value;
 
 use super::super::{
-    Checkpoint, CheckpointFileRelation, DateTimeScalar, DependencyEdge, ExpandHintParameter,
-    JsonScalar, TestHarnessTestsResult,
+    ArchitectureGraphEdge, ArchitectureGraphNode, Checkpoint, CheckpointFileRelation,
+    DateTimeScalar, DependencyEdge, ExpandHintParameter, JsonScalar, TestHarnessTestsResult,
 };
 use super::support::take_stage_items;
 
@@ -49,6 +49,41 @@ pub(super) struct ContextGuidanceStageData {
     pub(super) summary: Value,
     pub(super) schema: Option<String>,
     pub(super) items: Vec<ContextGuidanceItem>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ArchitectureOverviewStageData {
+    pub(super) summary: Value,
+    pub(super) expand_hint: Option<Value>,
+    pub(super) schema: Option<String>,
+}
+
+impl ArchitectureOverviewStageData {
+    pub(super) fn unavailable(
+        selected_artefact_count: usize,
+        reason: &str,
+        graph_context_available: bool,
+    ) -> Self {
+        Self {
+            summary: serde_json::json!({
+                "available": false,
+                "reason": reason,
+                "selectedArtefactCount": selected_artefact_count,
+                "assignedSelectedArtefactCount": 0,
+                "unassignedSelectedArtefactCount": selected_artefact_count,
+                "roleAssignmentCount": 0,
+                "roleCount": 0,
+                "familyCounts": {},
+                "sourceCounts": {},
+                "targetKindCounts": {},
+                "confidence": null,
+                "primaryRoles": [],
+                "graphContextAvailable": graph_context_available
+            }),
+            expand_hint: Some(super::support::architecture_overview_expand_hint()),
+            schema: Some(super::support::ARCHITECTURE_OVERVIEW_SCHEMA.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -237,6 +272,73 @@ pub struct ContextGuidanceStageResult {
     pub(crate) items: Vec<ContextGuidanceItem>,
 }
 
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(complex)]
+pub struct ArchitectureGraphContextStageResult {
+    #[graphql(name = "overview")]
+    pub summary: JsonScalar,
+    pub schema: Option<String>,
+    #[graphql(skip)]
+    pub(crate) nodes: Vec<ArchitectureGraphNode>,
+    #[graphql(skip)]
+    pub(crate) edges: Vec<ArchitectureGraphEdge>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct ArchitectureRoleInfo {
+    #[graphql(name = "roleId")]
+    pub role_id: String,
+    #[graphql(name = "canonicalKey")]
+    pub canonical_key: String,
+    #[graphql(name = "displayName")]
+    pub display_name: String,
+    pub family: Option<String>,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct ArchitectureRoleTarget {
+    #[graphql(name = "targetKind")]
+    pub target_kind: String,
+    pub path: String,
+    #[graphql(name = "artefactId")]
+    pub artefact_id: Option<String>,
+    #[graphql(name = "symbolId")]
+    pub symbol_id: Option<String>,
+    #[graphql(name = "symbolFqn")]
+    pub symbol_fqn: Option<String>,
+    #[graphql(name = "canonicalKind")]
+    pub canonical_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct ArchitectureRoleAssignmentItem {
+    #[graphql(name = "assignmentId")]
+    pub assignment_id: String,
+    pub role: ArchitectureRoleInfo,
+    pub target: ArchitectureRoleTarget,
+    pub priority: String,
+    pub status: String,
+    pub source: String,
+    pub confidence: f64,
+    #[graphql(name = "classifierVersion")]
+    pub classifier_version: String,
+    #[graphql(name = "ruleVersion")]
+    pub rule_version: Option<i64>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(complex)]
+pub struct ArchitectureRoleStageResult {
+    #[graphql(name = "overview")]
+    pub summary: JsonScalar,
+    #[graphql(name = "expandHint")]
+    pub expand_hint: Option<JsonScalar>,
+    pub schema: Option<String>,
+    #[graphql(skip)]
+    pub(crate) items: Vec<ArchitectureRoleAssignmentItem>,
+}
+
 impl From<CheckpointStageData> for CheckpointStageResult {
     fn from(data: CheckpointStageData) -> Self {
         Self {
@@ -360,6 +462,33 @@ impl HistoricalContextStageResult {
 #[ComplexObject]
 impl ContextGuidanceStageResult {
     async fn items(&self, #[graphql(default = 20)] first: i32) -> Result<Vec<ContextGuidanceItem>> {
+        take_stage_items(&self.items, first)
+    }
+}
+
+#[ComplexObject]
+impl ArchitectureGraphContextStageResult {
+    async fn nodes(
+        &self,
+        #[graphql(default = 20)] first: i32,
+    ) -> Result<Vec<ArchitectureGraphNode>> {
+        take_stage_items(&self.nodes, first)
+    }
+
+    async fn edges(
+        &self,
+        #[graphql(default = 20)] first: i32,
+    ) -> Result<Vec<ArchitectureGraphEdge>> {
+        take_stage_items(&self.edges, first)
+    }
+}
+
+#[ComplexObject]
+impl ArchitectureRoleStageResult {
+    async fn items(
+        &self,
+        #[graphql(default = 20)] first: i32,
+    ) -> Result<Vec<ArchitectureRoleAssignmentItem>> {
         take_stage_items(&self.items, first)
     }
 }

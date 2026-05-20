@@ -19,7 +19,7 @@ use crate::host::devql::sync::semantic_projector::{
     pre_stage_artefacts_for_projection, pre_stage_dependencies_for_projection,
 };
 use crate::host::devql::sync::types::{DesiredFileState, EffectiveSource};
-use crate::host::devql::{self, RelationalStorage, esc_pg};
+use crate::host::devql::{self, RelationalStorage, RelationalStorageRole, esc_pg};
 
 pub(crate) async fn load_pre_stage_artefacts_for_blob(
     relational: &RelationalStorage,
@@ -28,7 +28,10 @@ pub(crate) async fn load_pre_stage_artefacts_for_blob(
     path: &str,
 ) -> Result<Vec<semantic::PreStageArtefactRow>> {
     let rows = relational
-        .query_rows(&build_semantic_get_artefacts_sql(repo_id, blob_sha, path))
+        .query_rows_for_role(
+            RelationalStorageRole::SharedRelational,
+            &build_semantic_get_artefacts_sql(repo_id, blob_sha, path),
+        )
         .await?;
     parse_semantic_artefact_rows(rows)
 }
@@ -40,9 +43,10 @@ pub(crate) async fn load_pre_stage_dependencies_for_blob(
     path: &str,
 ) -> Result<Vec<semantic::PreStageDependencyRow>> {
     let rows = relational
-        .query_rows(&build_semantic_get_dependencies_sql(
-            repo_id, blob_sha, path,
-        ))
+        .query_rows_for_role(
+            RelationalStorageRole::SharedRelational,
+            &build_semantic_get_dependencies_sql(repo_id, blob_sha, path),
+        )
         .await?;
     parse_semantic_dependency_rows(rows)
 }
@@ -102,7 +106,10 @@ pub(crate) async fn load_semantic_feature_inputs_for_artefacts(
     let requested_ids = artefact_ids.iter().cloned().collect::<BTreeSet<_>>();
 
     let target_rows = relational
-        .query_rows(&build_semantic_get_artefacts_by_ids_sql(artefact_ids))
+        .query_rows_for_role(
+            RelationalStorageRole::SharedRelational,
+            &build_semantic_get_artefacts_by_ids_sql(artefact_ids),
+        )
         .await?;
     let target_artefacts = parse_semantic_artefact_rows(target_rows)?;
     hydrate_semantic_feature_inputs(
@@ -158,10 +165,10 @@ pub(crate) async fn load_semantic_feature_inputs_for_current_artefacts(
     let requested_ids = artefact_ids.iter().cloned().collect::<BTreeSet<_>>();
 
     let target_rows = relational
-        .query_rows(&build_current_repo_artefacts_by_ids_sql(
-            repo_id,
-            artefact_ids,
-        ))
+        .query_rows_for_role(
+            RelationalStorageRole::CurrentProjection,
+            &build_current_repo_artefacts_by_ids_sql(repo_id, artefact_ids),
+        )
         .await?;
     let target_artefacts = parse_semantic_artefact_rows(target_rows)?;
     if target_artefacts.is_empty() {
@@ -316,7 +323,10 @@ async fn load_semantic_feature_inputs_for_current_repo_from_historical(
     repo_id: &str,
 ) -> Result<Vec<semantic::SemanticFeatureInput>> {
     let target_rows = relational
-        .query_rows(&build_current_repo_artefacts_sql(repo_id))
+        .query_rows_for_role(
+            RelationalStorageRole::CurrentProjection,
+            &build_current_repo_artefacts_sql(repo_id),
+        )
         .await?;
     let target_artefacts = parse_semantic_artefact_rows(target_rows)?;
     let current_by_key = target_artefacts
@@ -382,14 +392,17 @@ async fn load_current_projection_path_states(
         None => String::new(),
     };
     let rows = relational
-        .query_rows(&format!(
-            "SELECT path, language, extraction_fingerprint, head_content_id, index_content_id, worktree_content_id, effective_content_id, effective_source, parser_version, extractor_version \
+        .query_rows_for_role(
+            RelationalStorageRole::CurrentProjection,
+            &format!(
+                "SELECT path, language, extraction_fingerprint, head_content_id, index_content_id, worktree_content_id, effective_content_id, effective_source, parser_version, extractor_version \
 FROM current_file_state \
 WHERE repo_id = '{repo_id}' AND analysis_mode = 'code'{path_filter} \
 ORDER BY path",
-            repo_id = esc_pg(repo_id),
-            path_filter = path_filter,
-        ))
+                repo_id = esc_pg(repo_id),
+                path_filter = path_filter,
+            ),
+        )
         .await?;
 
     let mut states = Vec::with_capacity(rows.len());

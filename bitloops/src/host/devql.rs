@@ -27,10 +27,13 @@ use crate::host::extension_host::{
     CapabilityIngestContext, CoreExtensionHost, LanguagePackContext, LanguagePackResolutionInput,
 };
 use crate::host::language_adapter::{LanguageAdapterContext, LanguageAdapterRegistry};
+use crate::storage::{EventStorageRole, StorageBackendKind, StorageRoleResolver};
 use crate::utils::terminal::print_db_status_table;
 
 #[path = "devql/analytics.rs"]
 pub(crate) mod analytics;
+#[path = "devql/artefact_query_support.rs"]
+pub(crate) mod artefact_query_support;
 #[path = "devql/artefact_sql.rs"]
 pub(crate) mod artefact_sql;
 #[path = "devql/checkpoint_file_snapshots.rs"]
@@ -58,7 +61,7 @@ mod sqlite_schema_once;
 mod sqlite_write_actor;
 #[path = "devql/sync/mod.rs"]
 pub(crate) mod sync;
-mod types;
+pub(crate) mod types;
 
 pub(crate) use self::analytics::{
     AnalyticsRepoScope, execute_analytics_sql, format_analytics_sql_result_table,
@@ -123,7 +126,8 @@ pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub(crate) use self::sqlite_schema_once::ensure_sqlite_schema_once;
 pub use self::sync::types::SyncMode;
 pub use self::types::{
-    DevqlConfig, RelationalDialect, RelationalPrimaryBackend, RelationalStorage, RepoIdentity,
+    DevqlConfig, RelationalDialect, RelationalPrimaryBackend, RelationalRoleBackend,
+    RelationalStorage, RelationalStorageRole, RepoIdentity,
 };
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
@@ -162,6 +166,8 @@ const JAVA_LANGUAGE_PACK_ID: &str = "java-language-pack";
 const CSHARP_LANGUAGE_PACK_ID: &str = "csharp-language-pack";
 #[cfg(test)]
 const PHP_LANGUAGE_PACK_ID: &str = "php-language-pack";
+#[cfg(test)]
+const CPP_LANGUAGE_PACK_ID: &str = "cpp-language-pack";
 #[allow(dead_code)]
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
@@ -690,11 +696,18 @@ async fn initialise_devql_schema_for_command_with_mode(
     let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .with_context(|| format!("resolving DevQL backend config for `{command}`"))?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, command).await?;
+    let events_backend = StorageRoleResolver::from_events_config(&backends.events)
+        .event_backend_for(EventStorageRole::CanonicalEvents);
 
-    if backends.events.has_clickhouse() {
-        init_clickhouse_schema(cfg).await?;
-    } else {
-        init_duckdb_schema(&cfg.repo_root, &backends.events).await?;
+    match events_backend {
+        StorageBackendKind::ClickHouse => init_clickhouse_schema(cfg).await?,
+        StorageBackendKind::DuckDb => init_duckdb_schema(&cfg.repo_root, &backends.events).await?,
+        other => {
+            bail!(
+                "unsupported canonical events backend for DevQL schema initialisation: {}",
+                other.label()
+            )
+        }
     }
     let outcome = init_relational_schema_with_mode(cfg, &relational, mode).await?;
     Ok((
@@ -708,11 +721,7 @@ async fn initialise_devql_schema_for_command_with_mode(
             } else {
                 "sqlite".to_string()
             },
-            events_backend: if backends.events.has_clickhouse() {
-                "clickhouse".to_string()
-            } else {
-                "duckdb".to_string()
-            },
+            events_backend: events_backend.label().to_string(),
         },
         outcome,
     ))
@@ -730,11 +739,18 @@ pub async fn ensure_relational_and_events_schema(
     let cfg = DevqlConfig::from_roots(config_root.to_path_buf(), repo_root.to_path_buf(), repo)?;
     let relational =
         RelationalStorage::connect(&cfg, &backends.relational, "daemon schema bootstrap").await?;
+    let events_backend = StorageRoleResolver::from_events_config(&backends.events)
+        .event_backend_for(EventStorageRole::CanonicalEvents);
 
-    if backends.events.has_clickhouse() {
-        init_clickhouse_schema(&cfg).await?;
-    } else {
-        init_duckdb_schema(repo_root, &backends.events).await?;
+    match events_backend {
+        StorageBackendKind::ClickHouse => init_clickhouse_schema(&cfg).await?,
+        StorageBackendKind::DuckDb => init_duckdb_schema(repo_root, &backends.events).await?,
+        other => {
+            bail!(
+                "unsupported canonical events backend for daemon schema bootstrap: {}",
+                other.label()
+            )
+        }
     }
     init_relational_schema_with_mode(&cfg, &relational, RelationalSchemaInitMode::SafeBootstrap)
         .await?;
@@ -866,7 +882,9 @@ use self::ingestion_artefact_persistence::*;
 use self::ingestion_artefact_persistence_edges::*;
 use self::ingestion_artefact_persistence_file::*;
 use self::ingestion_artefact_persistence_sql::*;
-pub(crate) use self::ingestion_artefact_persistence_sql::{sql_json_value, sql_now};
+pub(crate) use self::ingestion_artefact_persistence_sql::{
+    sql_json_value, sql_json_value_for_dialect, sql_now, sql_now_for_dialect,
+};
 use self::ingestion_artefact_persistence_symbols::*;
 use self::ingestion_artefact_persistence_types::*;
 use self::ingestion_baseline::*;
