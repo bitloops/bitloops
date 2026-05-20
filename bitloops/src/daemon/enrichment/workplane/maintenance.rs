@@ -1,21 +1,90 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use rusqlite::params;
 
+use crate::capability_packs::architecture_graph::types::{
+    ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+    ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
+};
 use crate::daemon::types::unix_timestamp_now;
+use crate::host::inference::InferenceGateway;
 use crate::host::runtime_store::{
     DaemonSqliteRuntimeStore, SemanticMailboxItemStatus, WorkplaneJobStatus,
 };
 
 use super::super::{WORKPLANE_TERMINAL_RETENTION_SECS, WORKPLANE_TERMINAL_ROW_LIMIT};
+use super::sql::repo_identity_from_runtime_metadata;
 use super::sql::sql_i64;
 
 pub(crate) fn compact_and_prune_workplane_jobs(
     workplane_store: &DaemonSqliteRuntimeStore,
 ) -> Result<()> {
     workplane_store.with_write_connection(|conn| {
+        complete_unconfigured_architecture_role_adjudication_jobs(conn)?;
         prune_terminal_workplane_jobs(conn)?;
         Ok(())
     })
+}
+
+fn complete_unconfigured_architecture_role_adjudication_jobs(
+    conn: &rusqlite::Connection,
+) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT repo_id, repo_root
+         FROM capability_workplane_jobs
+         WHERE capability_id = ?1
+           AND mailbox_name = ?2
+           AND status = ?3",
+    )?;
+    let rows = stmt.query_map(
+        params![
+            ARCHITECTURE_GRAPH_CAPABILITY_ID,
+            ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+            WorkplaneJobStatus::Pending.as_str(),
+        ],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                PathBuf::from(row.get::<_, String>(1)?),
+            ))
+        },
+    )?;
+
+    let now = unix_timestamp_now();
+    for row in rows {
+        let (repo_id, repo_root) = row?;
+        let repo = repo_identity_from_runtime_metadata(&repo_root, &repo_id);
+        let host = crate::host::devql::build_capability_host(&repo_root, repo)?;
+        let inference = host.inference_for_capability(ARCHITECTURE_GRAPH_CAPABILITY_ID);
+        if inference.has_slot(ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT) {
+            continue;
+        }
+        conn.execute(
+            "UPDATE capability_workplane_jobs
+             SET status = ?1,
+                 updated_at_unix = ?2,
+                 completed_at_unix = ?3,
+                 last_error = ?4,
+                 lease_owner = NULL,
+                 lease_expires_at_unix = NULL
+             WHERE repo_id = ?5
+               AND capability_id = ?6
+               AND mailbox_name = ?7
+               AND status = ?8",
+            params![
+                WorkplaneJobStatus::Completed.as_str(),
+                sql_i64(now)?,
+                sql_i64(now)?,
+                "skipped: structured-generation slot `role_adjudication` is not configured",
+                repo_id,
+                ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+                WorkplaneJobStatus::Pending.as_str(),
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 fn prune_terminal_workplane_jobs(conn: &rusqlite::Connection) -> Result<()> {

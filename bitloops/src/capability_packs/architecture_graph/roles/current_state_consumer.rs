@@ -7,7 +7,8 @@ use crate::capability_packs::architecture_graph::roles::{
     RoleAdjudicationEnqueueMetrics, default_queue_store, enqueue_adjudication_requests,
 };
 use crate::capability_packs::architecture_graph::types::{
-    ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
+    ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
+    ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
 };
 use crate::capability_packs::semantic_clones::{
     runtime_config::resolve_semantic_clones_config,
@@ -91,23 +92,41 @@ impl CurrentStateConsumer for ArchitectureGraphRoleCurrentStateConsumer {
                     ArchitectureEmbeddingEnqueueMetrics::default()
                 }
             };
+            let role_adjudication_configured = context
+                .inference
+                .has_slot(ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT);
             let mut role_adjudication_enqueue_failed = false;
-            let adjudication_metrics = match enqueue_adjudication_requests(
-                &outcome.adjudication_requests,
-                context.workplane.as_ref(),
-                default_queue_store().as_ref(),
-            ) {
-                Ok(metrics) => metrics,
-                Err(err) => {
-                    warnings.push(format!(
-                        "Architecture role adjudication enqueue failed: {err:#}"
-                    ));
-                    role_adjudication_enqueue_failed = true;
-                    RoleAdjudicationEnqueueMetrics {
-                        selected: adjudication_request_count,
-                        enqueued: 0,
-                        deduped: 0,
+            let mut role_adjudication_skipped_unconfigured = 0usize;
+            let adjudication_metrics = if role_adjudication_configured {
+                match enqueue_adjudication_requests(
+                    &outcome.adjudication_requests,
+                    context.workplane.as_ref(),
+                    default_queue_store().as_ref(),
+                ) {
+                    Ok(metrics) => metrics,
+                    Err(err) => {
+                        warnings.push(format!(
+                            "Architecture role adjudication enqueue failed: {err:#}"
+                        ));
+                        role_adjudication_enqueue_failed = true;
+                        RoleAdjudicationEnqueueMetrics {
+                            selected: adjudication_request_count,
+                            enqueued: 0,
+                            deduped: 0,
+                        }
                     }
+                }
+            } else {
+                role_adjudication_skipped_unconfigured = adjudication_request_count;
+                if adjudication_request_count > 0 {
+                    warnings.push(format!(
+                        "Architecture role adjudication skipped because inference slot `{ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT}` is not configured"
+                    ));
+                }
+                RoleAdjudicationEnqueueMetrics {
+                    selected: adjudication_request_count,
+                    enqueued: 0,
+                    deduped: 0,
                 }
             };
 
@@ -118,6 +137,7 @@ impl CurrentStateConsumer for ArchitectureGraphRoleCurrentStateConsumer {
                     role_metrics,
                     &adjudication_metrics,
                     role_adjudication_enqueue_failed,
+                    role_adjudication_skipped_unconfigured,
                     &architecture_embedding_metrics,
                     architecture_embedding_enqueue_failed,
                 )),
@@ -207,6 +227,7 @@ fn role_current_state_metrics(
     role_metrics: serde_json::Value,
     adjudication_metrics: &RoleAdjudicationEnqueueMetrics,
     role_adjudication_enqueue_failed: bool,
+    role_adjudication_skipped_unconfigured: usize,
     architecture_embedding_metrics: &ArchitectureEmbeddingEnqueueMetrics,
     architecture_embedding_enqueue_failed: bool,
 ) -> serde_json::Value {
@@ -219,6 +240,10 @@ fn role_current_state_metrics(
         "role_adjudication_enqueued": adjudication_metrics.enqueued,
         "role_adjudication_deduped": adjudication_metrics.deduped,
     });
+    if role_adjudication_skipped_unconfigured > 0 {
+        metrics["role_adjudication_skipped_unconfigured"] =
+            serde_json::Value::Number(role_adjudication_skipped_unconfigured.into());
+    }
     if architecture_embedding_enqueue_failed {
         metrics["architecture_embedding_enqueue_failed"] = serde_json::Value::Bool(true);
     }
