@@ -30,10 +30,13 @@ fn input(path: &str) -> GuidanceDistillationInput {
         transcript_fragment: Some("Rejected std::any::type_name approach".to_string()),
         files_modified: vec![path.to_string()],
         tool_events: vec![GuidanceToolEvidence {
+            event_type: Some("tool_invocation_observed".to_string()),
             tool_kind: Some("shell".to_string()),
             input_summary: Some("cargo nextest".to_string()),
             output_summary: Some("tests passed".to_string()),
             command: Some("cargo nextest".to_string()),
+            file_path: None,
+            evidence_text: None,
         }],
     }
 }
@@ -262,36 +265,51 @@ fn verification_sources_are_relevant_deduplicated_and_capped() {
     let mut input = input("src/target.rs");
     input.tool_events = vec![
         GuidanceToolEvidence {
+            event_type: Some("tool_result_observed".to_string()),
             tool_kind: Some("Bash".to_string()),
             input_summary: Some("cargo nextest run -p axum-macros debug_handler".to_string()),
             output_summary: Some("debug_handler Self receiver regression check passed".to_string()),
             command: Some("cargo nextest run -p axum-macros debug_handler".to_string()),
+            file_path: None,
+            evidence_text: None,
         },
         GuidanceToolEvidence {
+            event_type: Some("tool_result_observed".to_string()),
             tool_kind: Some("Bash".to_string()),
             input_summary: Some("cargo nextest run -p axum-macros debug_handler".to_string()),
             output_summary: Some("debug_handler Self receiver regression check passed".to_string()),
             command: Some("cargo nextest run -p axum-macros debug_handler".to_string()),
+            file_path: None,
+            evidence_text: None,
         },
         GuidanceToolEvidence {
+            event_type: Some("tool_invocation_observed".to_string()),
             tool_kind: Some("Read".to_string()),
             input_summary: Some("src/unrelated.rs".to_string()),
             output_summary: Some("receiver behavior regression notes".to_string()),
             command: None,
+            file_path: Some("src/unrelated.rs".to_string()),
+            evidence_text: None,
         },
         GuidanceToolEvidence {
+            event_type: Some("tool_invocation_observed".to_string()),
             tool_kind: Some("Bash".to_string()),
             input_summary: Some("cargo clippy -p axum-macros".to_string()),
             output_summary: None,
             command: Some("cargo clippy -p axum-macros".to_string()),
+            file_path: None,
+            evidence_text: None,
         },
         GuidanceToolEvidence {
+            event_type: Some("tool_result_observed".to_string()),
             tool_kind: Some("Bash".to_string()),
             input_summary: Some(
                 "cargo nextest run -p axum-macros debug_handler secondary".to_string(),
             ),
             output_summary: Some("debug_handler secondary regression check passed".to_string()),
             command: Some("cargo nextest run -p axum-macros debug_handler secondary".to_string()),
+            file_path: None,
+            evidence_text: None,
         },
     ];
     let output = GuidanceDistillationOutput {

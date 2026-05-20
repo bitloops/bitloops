@@ -32,8 +32,9 @@ use super::lanes::{
     derive_session_status, derive_summaries_lane, derive_summary_embeddings_lane, derive_sync_lane,
 };
 use super::orchestration::{
-    selected_session_workplane_stats, selected_sync_terminal, selected_top_level_terminal,
-    semantic_bootstrap_waiting_reason, semantic_follow_up_ready_for_sync,
+    record_task_completion_seq, selected_session_workplane_stats, selected_sync_terminal,
+    selected_top_level_terminal, semantic_bootstrap_waiting_reason,
+    semantic_follow_up_ready_for_sync,
 };
 use super::progress::load_summary_freshness_state;
 use super::session_stats::{
@@ -2503,6 +2504,145 @@ fn embeddings_can_trigger_a_second_follow_up_after_summary_follow_up_completes()
         Some(&embeddings_task),
         Some(&summary_run),
     ));
+}
+
+#[test]
+fn repeated_follow_up_sync_completion_advances_latest_sync_seq() {
+    let mut session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: false,
+            run_code_embeddings: true,
+            run_summaries: true,
+            run_summary_embeddings: true,
+            ingest_backfill: None,
+            embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
+                config_path: PathBuf::from("/tmp/config-1/config.toml"),
+                profile_name: "local_code".to_string(),
+                mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                gateway_url_override: None,
+                api_key_env: None,
+            }),
+            summaries_bootstrap: Some(SummaryBootstrapRequest {
+                action: SummaryBootstrapAction::ConfigureCloud,
+                message: None,
+                model_name: None,
+                gateway_url_override: None,
+                api_key_env: None,
+            }),
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
+        ingest_task_id: None,
+        ingest_terminal: None,
+        embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
+        summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+        summary_bootstrap_terminal: None,
+        follow_up_sync_required: true,
+        follow_up_sync_task_id: Some("follow-up-sync-2".to_string()),
+        follow_up_sync_terminal: None,
+        next_completion_seq: 4,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: Some(4),
+        summary_bootstrap_completion_seq: Some(2),
+        follow_up_sync_completion_seq: Some(3),
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let second_follow_up_sync = completed_sync_task("follow-up-sync-2", 18);
+    let embeddings_task = DevqlTaskRecord {
+        task_id: "bootstrap-task-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_name: "repo".to_string(),
+        repo_provider: "local".to_string(),
+        repo_organisation: "local".to_string(),
+        repo_identity: "repo".to_string(),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: Some("init-session-1".to_string()),
+        kind: DevqlTaskKind::EmbeddingsBootstrap,
+        source: DevqlTaskSource::Init,
+        spec: crate::daemon::DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
+            config_path: PathBuf::from("/tmp/config-1/config.toml"),
+            profile_name: "local_code".to_string(),
+            mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+            gateway_url_override: None,
+            api_key_env: None,
+        }),
+        status: DevqlTaskStatus::Completed,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix: 20,
+        completed_at_unix: Some(20),
+        queue_position: None,
+        tasks_ahead: None,
+        error: None,
+        progress: crate::daemon::DevqlTaskProgress::EmbeddingsBootstrap(
+            crate::daemon::EmbeddingsBootstrapProgress::default(),
+        ),
+        result: None,
+    };
+    let summary_run = SummaryBootstrapRunRecord {
+        run_id: "summary-task-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: "init-session-1".to_string(),
+        request: SummaryBootstrapRequest {
+            action: SummaryBootstrapAction::ConfigureCloud,
+            message: None,
+            model_name: None,
+            gateway_url_override: None,
+            api_key_env: None,
+        },
+        status: SummaryBootstrapStatus::Completed,
+        progress: SummaryBootstrapProgress::default(),
+        result: None,
+        error: None,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix: 12,
+        completed_at_unix: Some(12),
+    };
+
+    assert!(semantic_follow_up_ready_for_sync(
+        &session,
+        Some(&initial_sync),
+        Some(&second_follow_up_sync),
+        Some(&embeddings_task),
+        Some(&summary_run),
+    ));
+
+    record_task_completion_seq(&mut session, &second_follow_up_sync);
+
+    assert_eq!(session.next_completion_seq, 5);
+    assert_eq!(session.follow_up_sync_completion_seq, Some(5));
+    assert!(!semantic_follow_up_ready_for_sync(
+        &session,
+        Some(&initial_sync),
+        Some(&second_follow_up_sync),
+        Some(&embeddings_task),
+        Some(&summary_run),
+    ));
+
+    session.follow_up_sync_terminal = Some(InitSessionTaskTerminalSnapshot {
+        task_id: second_follow_up_sync.task_id.clone(),
+        status: DevqlTaskStatus::Completed,
+        updated_at_unix: second_follow_up_sync.updated_at_unix,
+        completed_at_unix: second_follow_up_sync.completed_at_unix,
+        error: None,
+    });
+    record_task_completion_seq(&mut session, &second_follow_up_sync);
+
+    assert_eq!(session.next_completion_seq, 5);
+    assert_eq!(session.follow_up_sync_completion_seq, Some(5));
 }
 
 #[test]

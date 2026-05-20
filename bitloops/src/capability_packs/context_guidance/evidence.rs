@@ -38,6 +38,8 @@ pub(super) struct GuidanceEvidenceToolEvent {
     pub input_summary: Option<String>,
     pub output_summary: Option<String>,
     pub command: Option<String>,
+    pub file_path: Option<String>,
+    pub evidence_text: Option<String>,
 }
 
 const MAX_EVIDENCE_BODY_CHARS: usize = 6_000;

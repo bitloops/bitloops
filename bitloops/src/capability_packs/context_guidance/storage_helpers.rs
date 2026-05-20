@@ -116,10 +116,13 @@ pub fn guidance_input_hash(input: &GuidanceDistillationInput) -> String {
             .map(|path| path.trim().to_string()),
     );
     for event in &input.tool_events {
+        parts.push(event.event_type.as_deref().unwrap_or("").to_string());
         parts.push(event.tool_kind.as_deref().unwrap_or("").to_string());
         parts.push(event.input_summary.as_deref().unwrap_or("").to_string());
         parts.push(event.output_summary.as_deref().unwrap_or("").to_string());
         parts.push(event.command.as_deref().unwrap_or("").to_string());
+        parts.push(event.file_path.as_deref().unwrap_or("").to_string());
+        parts.push(event.evidence_text.as_deref().unwrap_or("").to_string());
     }
     sha256_hex(parts.join("\n").as_bytes())
 }
@@ -422,6 +425,8 @@ fn tool_event_supports_fact(event: &GuidanceToolEvidence, fact: &GuidanceFactDra
         event.command.as_deref().unwrap_or(""),
         event.input_summary.as_deref().unwrap_or(""),
         event.output_summary.as_deref().unwrap_or(""),
+        event.file_path.as_deref().unwrap_or(""),
+        event.evidence_text.as_deref().unwrap_or(""),
     ]
     .join("\n")
     .to_ascii_lowercase();
@@ -580,8 +585,9 @@ fn history_tool_source(
         title: None,
         url: None,
         excerpt: event
-            .output_summary
+            .evidence_text
             .as_deref()
+            .or(event.output_summary.as_deref())
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string),

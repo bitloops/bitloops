@@ -118,38 +118,53 @@ fn load_workplane_claim_candidates(
     let mut values = Vec::new();
     match pool {
         EnrichmentWorkerPool::SummaryRefresh => {
-            let mut stmt = conn.prepare(
-                "SELECT job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
-                        init_session_id, dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
-                        started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
-                        lease_expires_at_unix, last_error
-                 FROM capability_workplane_jobs
-                 WHERE status = ?1
-                   AND available_at_unix <= ?2
-                 ORDER BY CASE mailbox_name
-                              WHEN 'semantic_clones.embedding.code' THEN 0
-                              WHEN 'semantic_clones.embedding.identity' THEN 0
-                              WHEN 'semantic_clones.embedding.architecture' THEN 0
-                              WHEN 'semantic_clones.embedding.summary' THEN 0
-                              WHEN 'semantic_clones.summary_refresh' THEN 1
-                              WHEN 'semantic_clones.clone_rebuild' THEN 2
-                          ELSE 3
-                          END ASC,
-                          available_at_unix ASC,
-                          submitted_at_unix ASC
-                 LIMIT ?3",
-            )?;
-            let rows = stmt.query_map(
-                params![WorkplaneJobStatus::Pending.as_str(), now, limit,],
-                map_workplane_job_row,
-            )?;
-            for row in rows {
-                let job = row?;
-                if job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
-                    || is_generic_inference_job(runtime_store, readiness_cache, &job)?
-                {
-                    values.push(job);
+            let mut offset = 0_i64;
+            loop {
+                let mut stmt = conn.prepare(
+                    "SELECT job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                            init_session_id, dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                            started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                            lease_expires_at_unix, last_error
+                     FROM capability_workplane_jobs
+                     WHERE status = ?1
+                       AND available_at_unix <= ?2
+                     ORDER BY CASE mailbox_name
+                                  WHEN 'semantic_clones.embedding.code' THEN 0
+                                  WHEN 'semantic_clones.embedding.identity' THEN 0
+                                  WHEN 'semantic_clones.embedding.architecture' THEN 0
+                                  WHEN 'semantic_clones.embedding.summary' THEN 0
+                                  WHEN 'semantic_clones.summary_refresh' THEN 1
+                                  WHEN 'semantic_clones.clone_rebuild' THEN 2
+                              ELSE 3
+                              END ASC,
+                              available_at_unix ASC,
+                              submitted_at_unix ASC
+                     LIMIT ?3 OFFSET ?4",
+                )?;
+                let rows = stmt.query_map(
+                    params![WorkplaneJobStatus::Pending.as_str(), now, limit, offset],
+                    map_workplane_job_row,
+                )?;
+                let mut page_count = 0_i64;
+                for row in rows {
+                    page_count += 1;
+                    let job = row?;
+                    let claimable = if job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX {
+                        !mailbox_claim_readiness(runtime_store, readiness_cache, &job)?.blocked
+                    } else {
+                        is_generic_inference_job(runtime_store, readiness_cache, &job)?
+                    };
+                    if claimable {
+                        values.push(job);
+                        if values.len() >= WORKPLANE_JOB_CLAIM_CANDIDATE_LIMIT {
+                            return Ok(values);
+                        }
+                    }
                 }
+                if page_count < limit {
+                    break;
+                }
+                offset += page_count;
             }
         }
         EnrichmentWorkerPool::Embeddings => {
@@ -249,6 +264,12 @@ fn is_generic_inference_job(
     }
     if !matches!(registration.handler, CapabilityMailboxHandler::Ingester(_)) {
         return Ok(false);
+    }
+    if matches!(
+        registration.readiness_policy,
+        CapabilityMailboxReadinessPolicy::None
+    ) {
+        return Ok(true);
     }
     if !is_generic_inference_readiness_policy(registration.readiness_policy) {
         return Ok(false);
