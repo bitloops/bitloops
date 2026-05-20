@@ -88,9 +88,11 @@ impl IngesterHandler for ContextGuidanceHistoryDistillationIngester {
             let slot = ctx
                 .inference()
                 .describe(CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT);
-            let output = GuidanceDistiller::new(service)
-                .distill(&input)
+            let distilled = GuidanceDistiller::new(service)
+                .distill_with_report(&input)
                 .context("distilling context guidance history")?;
+            let output = &distilled.output;
+            let report = &distilled.report;
             let store = ctx
                 .context_guidance_store()
                 .ok_or_else(|| anyhow!("context guidance store is not available"))?;
@@ -102,19 +104,30 @@ impl IngesterHandler for ContextGuidanceHistoryDistillationIngester {
             let outcome = store.persist_history_guidance_distillation(
                 repo_id,
                 &input,
-                &output,
+                output,
                 source_model.as_deref(),
                 source_profile.as_deref(),
             )?;
             enqueue_target_compactions(repo_id, &outcome, ctx.workplane())?;
+            log::info!(
+                "context guidance history distillation diagnostics: repo_id={} run_inserted={} facts_inserted={} raw_facts={} validation_kept={} validation_dropped={} quality_kept={} quality_dropped={}",
+                repo_id,
+                outcome.inserted_run,
+                outcome.inserted_facts,
+                report.raw_fact_count,
+                report.validation_kept_fact_count,
+                report.validation_discards.len(),
+                report.quality_kept_fact_count,
+                report.quality_discards.len(),
+            );
             Ok(IngestResult::new(
-                json!({
-                    "accepted": true,
-                    "insertedRun": outcome.inserted_run,
-                    "insertedFacts": outcome.inserted_facts,
-                    "unchanged": outcome.unchanged,
-                    "work_item_count": history_turn_work_item_count(&payload)
-                }),
+                history_distillation_result_payload(
+                    outcome.inserted_run,
+                    outcome.inserted_facts,
+                    outcome.unchanged,
+                    history_turn_work_item_count(&payload),
+                    report,
+                ),
                 "completed context guidance history distillation work",
             ))
         })
@@ -141,6 +154,45 @@ fn enqueue_target_compactions(
         )?;
     }
     Ok(())
+}
+
+fn history_distillation_result_payload(
+    inserted_run: bool,
+    inserted_facts: usize,
+    unchanged: bool,
+    work_item_count: u64,
+    report: &super::super::distillation::GuidanceDistillationReport,
+) -> serde_json::Value {
+    json!({
+        "accepted": true,
+        "insertedRun": inserted_run,
+        "insertedFacts": inserted_facts,
+        "unchanged": unchanged,
+        "work_item_count": work_item_count,
+        "distillation": {
+            "rawResponseChars": report.raw_response_chars,
+            "rawFactCount": report.raw_fact_count,
+            "validationInputFactCount": report.validation_input_fact_count,
+            "validationKeptFactCount": report.validation_kept_fact_count,
+            "validationDropped": report.validation_discards.len(),
+            "validationDropReasons": report.validation_discards.iter().map(|discard| {
+                json!({
+                    "kind": discard.kind,
+                    "reason": format!("{:?}", discard.reason),
+                })
+            }).collect::<Vec<_>>(),
+            "qualityInputFactCount": report.quality_input_fact_count,
+            "qualityKeptFactCount": report.quality_kept_fact_count,
+            "qualityDropped": report.quality_discards.len(),
+            "qualityDropReasons": report.quality_discards.iter().map(|discard| {
+                json!({
+                    "kind": discard.kind,
+                    "category": format!("{:?}", discard.category),
+                    "reason": discard.reason,
+                })
+            }).collect::<Vec<_>>(),
+        }
+    })
 }
 
 #[cfg(test)]
@@ -177,6 +229,45 @@ mod tests {
         fn mailbox_status(&self) -> anyhow::Result<BTreeMap<String, CapabilityMailboxStatus>> {
             Ok(BTreeMap::new())
         }
+    }
+
+    #[test]
+    fn history_distillation_result_payload_includes_diagnostics() {
+        let report =
+            crate::capability_packs::context_guidance::distillation::GuidanceDistillationReport {
+                raw_response_chars: 512,
+                raw_fact_count: 3,
+                validation_input_fact_count: 3,
+                validation_kept_fact_count: 2,
+                validation_discards: vec![
+                    crate::capability_packs::context_guidance::distillation::GuidanceValidationDiscard {
+                        kind: "targetless_fact".to_string(),
+                        reason: crate::capability_packs::context_guidance::distillation::GuidanceValidationDiscardReason::MissingTargetWithoutDefault,
+                    },
+                ],
+                quality_input_fact_count: 2,
+                quality_kept_fact_count: 1,
+                quality_discards: vec![
+                    crate::capability_packs::context_guidance::distillation::GuidanceQualityDiscardSummary {
+                        kind: "generic_tests_passed".to_string(),
+                        category: crate::capability_packs::context_guidance::types::GuidanceFactCategory::Verification,
+                        reason: "LowValueStatusFact".to_string(),
+                    },
+                ],
+            };
+
+        let payload = history_distillation_result_payload(true, 1, false, 1, &report);
+
+        assert_eq!(payload["accepted"], json!(true));
+        assert_eq!(payload["insertedRun"], json!(true));
+        assert_eq!(payload["insertedFacts"], json!(1));
+        assert_eq!(payload["distillation"]["rawFactCount"], json!(3));
+        assert_eq!(payload["distillation"]["validationDropped"], json!(1));
+        assert_eq!(payload["distillation"]["qualityDropped"], json!(1));
+        assert_eq!(
+            payload["distillation"]["qualityDropReasons"][0]["reason"],
+            json!("LowValueStatusFact")
+        );
     }
 
     #[test]

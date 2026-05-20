@@ -7,23 +7,92 @@ use super::types::{
 
 const MAX_SOURCES_PER_FACT: usize = 3;
 
-pub(super) fn filter_value_guidance_output(
-    mut output: GuidanceDistillationOutput,
-) -> GuidanceDistillationOutput {
-    output.guidance_facts = output
-        .guidance_facts
-        .into_iter()
-        .filter(is_valuable_fact)
-        .collect();
-    output
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GuidanceQualityDiscardReason {
+    MissingTarget,
+    GuidanceTooShort,
+    EvidenceTooShort,
+    LowValueStatusFact,
+    NonReusableVerification,
+    NonDurableContext,
 }
 
-pub(super) fn is_valuable_fact(fact: &GuidanceFactDraft) -> bool {
-    has_target(fact)
-        && has_specific_text(fact.guidance.as_str())
-        && has_specific_text(fact.evidence_excerpt.as_str())
-        && !is_low_value_status_fact(fact)
-        && is_category_valuable(fact)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct GuidanceQualityDiscard {
+    pub kind: String,
+    pub category: GuidanceFactCategory,
+    pub reason: GuidanceQualityDiscardReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct GuidanceQualityReport {
+    pub input_fact_count: usize,
+    pub kept_fact_count: usize,
+    pub discarded: Vec<GuidanceQualityDiscard>,
+}
+
+#[cfg(test)]
+pub(crate) fn filter_value_guidance_output(
+    output: GuidanceDistillationOutput,
+) -> GuidanceDistillationOutput {
+    filter_value_guidance_output_with_report(output).0
+}
+
+pub(super) fn filter_value_guidance_output_with_report(
+    mut output: GuidanceDistillationOutput,
+) -> (GuidanceDistillationOutput, GuidanceQualityReport) {
+    let input_fact_count = output.guidance_facts.len();
+    let mut kept = Vec::new();
+    let mut discarded = Vec::new();
+
+    for fact in output.guidance_facts {
+        match discard_reason(&fact) {
+            Some(reason) => discarded.push(GuidanceQualityDiscard {
+                kind: fact.kind.clone(),
+                category: fact.category,
+                reason,
+            }),
+            None => kept.push(fact),
+        }
+    }
+
+    let kept_fact_count = kept.len();
+    output.guidance_facts = kept;
+
+    (
+        output,
+        GuidanceQualityReport {
+            input_fact_count,
+            kept_fact_count,
+            discarded,
+        },
+    )
+}
+
+pub(super) fn discard_reason(fact: &GuidanceFactDraft) -> Option<GuidanceQualityDiscardReason> {
+    if !has_target(fact) {
+        return Some(GuidanceQualityDiscardReason::MissingTarget);
+    }
+    if !has_specific_text(fact.guidance.as_str()) {
+        return Some(GuidanceQualityDiscardReason::GuidanceTooShort);
+    }
+    if !has_specific_text(fact.evidence_excerpt.as_str()) {
+        return Some(GuidanceQualityDiscardReason::EvidenceTooShort);
+    }
+    if is_low_value_status_fact(fact) {
+        return Some(GuidanceQualityDiscardReason::LowValueStatusFact);
+    }
+    match fact.category {
+        GuidanceFactCategory::Decision
+        | GuidanceFactCategory::Constraint
+        | GuidanceFactCategory::Pattern
+        | GuidanceFactCategory::Risk => None,
+        GuidanceFactCategory::Verification => (!is_reusable_verification(fact))
+            .then_some(GuidanceQualityDiscardReason::NonReusableVerification),
+        GuidanceFactCategory::Context => {
+            (!is_durable_context(fact)).then_some(GuidanceQualityDiscardReason::NonDurableContext)
+        }
+    }
 }
 
 pub(super) fn guidance_value_score(
@@ -71,17 +140,6 @@ fn has_target(fact: &GuidanceFactDraft) -> bool {
 
 fn has_specific_text(value: &str) -> bool {
     value.split_whitespace().count() >= 5
-}
-
-fn is_category_valuable(fact: &GuidanceFactDraft) -> bool {
-    match fact.category {
-        GuidanceFactCategory::Decision
-        | GuidanceFactCategory::Constraint
-        | GuidanceFactCategory::Pattern
-        | GuidanceFactCategory::Risk => true,
-        GuidanceFactCategory::Verification => is_reusable_verification(fact),
-        GuidanceFactCategory::Context => is_durable_context(fact),
-    }
 }
 
 fn is_reusable_verification(fact: &GuidanceFactDraft) -> bool {
@@ -290,5 +348,63 @@ mod tests {
         let filtered = filter_value_guidance_output(output);
 
         assert_eq!(filtered.guidance_facts.len(), 1);
+    }
+
+    #[test]
+    fn reports_discard_reasons_for_low_value_facts() {
+        let output = GuidanceDistillationOutput {
+            summary: crate::capability_packs::context_guidance::types::GuidanceSessionSummary {
+                intent: "Capture session guidance.".to_string(),
+                outcome: "Model returned mixed quality facts.".to_string(),
+                decisions: Vec::new(),
+                rejected_approaches: Vec::new(),
+                patterns: Vec::new(),
+                verification: Vec::new(),
+                open_items: Vec::new(),
+            },
+            guidance_facts: vec![
+                GuidanceFactDraft {
+                    category: GuidanceFactCategory::Decision,
+                    kind: "missing_target".to_string(),
+                    guidance:
+                        "Keep handler responses typed so tests assert status and body directly."
+                            .to_string(),
+                    evidence_excerpt:
+                        "The session chose typed HttpResponse values for API handlers.".to_string(),
+                    applies_to: GuidanceAppliesTo::default(),
+                    confidence: GuidanceFactConfidence::High,
+                },
+                fact(
+                    GuidanceFactCategory::Verification,
+                    "generic_tests_passed",
+                    "The tests passed after the refactor completed.",
+                    "4 tests passed after the work completed.",
+                ),
+                fact(
+                    GuidanceFactCategory::Decision,
+                    "typed_api_response",
+                    "Keep API handlers returning HttpResponse so status and body are asserted directly.",
+                    "User chose a new src/api/response.rs HttpResponse and no Display compatibility shim.",
+                ),
+            ],
+        };
+
+        let (filtered, report) = filter_value_guidance_output_with_report(output);
+
+        assert_eq!(report.input_fact_count, 3);
+        assert_eq!(report.kept_fact_count, 1);
+        assert_eq!(filtered.guidance_facts.len(), 1);
+        assert_eq!(filtered.guidance_facts[0].kind, "typed_api_response");
+        assert_eq!(report.discarded.len(), 2);
+        assert_eq!(report.discarded[0].kind, "missing_target");
+        assert_eq!(
+            report.discarded[0].reason,
+            GuidanceQualityDiscardReason::MissingTarget
+        );
+        assert_eq!(report.discarded[1].kind, "generic_tests_passed");
+        assert_eq!(
+            report.discarded[1].reason,
+            GuidanceQualityDiscardReason::LowValueStatusFact
+        );
     }
 }
