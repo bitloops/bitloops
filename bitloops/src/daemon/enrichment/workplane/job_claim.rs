@@ -265,6 +265,12 @@ fn is_generic_inference_job(
     if !matches!(registration.handler, CapabilityMailboxHandler::Ingester(_)) {
         return Ok(false);
     }
+    if matches!(
+        registration.readiness_policy,
+        CapabilityMailboxReadinessPolicy::None
+    ) {
+        return Ok(true);
+    }
     if !is_generic_inference_readiness_policy(registration.readiness_policy) {
         return Ok(false);
     }

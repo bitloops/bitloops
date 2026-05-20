@@ -3083,6 +3083,38 @@ fn summary_refresh_pool_claims_ready_context_guidance_after_blocked_generic_jobs
 }
 
 #[test]
+fn summary_refresh_pool_claims_context_guidance_target_compaction_jobs() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    insert_context_guidance_target_compaction_workplane_job(
+        &coordinator,
+        &target,
+        &repo_id,
+        "context-guidance-target-compaction",
+        10,
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::SummaryRefresh,
+    )
+    .expect("claim workplane job")
+    .expect("target compaction job should be claimable by summary refresh pool");
+
+    assert_eq!(claimed.job_id, "context-guidance-target-compaction");
+    assert_eq!(
+        claimed.capability_id,
+        crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_CAPABILITY_ID
+    );
+    assert_eq!(
+        claimed.mailbox_name,
+        crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_TARGET_COMPACTION_MAILBOX
+    );
+}
+
+#[test]
 fn summary_refresh_pool_leaves_context_guidance_pending_when_configured_generation_is_broken() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
@@ -3948,6 +3980,51 @@ fn insert_architecture_role_adjudication_workplane_job(
             .map_err(anyhow::Error::from)
         })
         .expect("insert architecture role adjudication workplane job");
+}
+
+fn insert_context_guidance_target_compaction_workplane_job(
+    coordinator: &EnrichmentCoordinator,
+    target: &EnrichmentJobTarget,
+    repo_id: &str,
+    job_id: &str,
+    updated_at_unix: u64,
+) {
+    coordinator
+        .workplane_store
+        .with_write_connection(|conn| {
+            conn.execute(
+                "INSERT INTO capability_workplane_jobs (
+                     job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                     dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                     started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                     lease_expires_at_unix, last_error
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, NULL, ?12, NULL, NULL, NULL, NULL)",
+                rusqlite::params![
+                    job_id,
+                    repo_id,
+                    target.repo_root.to_string_lossy().to_string(),
+                    target.config_root.to_string_lossy().to_string(),
+                    crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_CAPABILITY_ID,
+                    crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_TARGET_COMPACTION_MAILBOX,
+                    format!("target_compaction:{repo_id}:path:src/lib.rs"),
+                    json!({
+                        "targetCompaction": {
+                            "repoId": repo_id,
+                            "targetType": "path",
+                            "targetValue": "src/lib.rs"
+                        }
+                    })
+                    .to_string(),
+                    WorkplaneJobStatus::Pending.as_str(),
+                    sql_i64(updated_at_unix)?,
+                    sql_i64(updated_at_unix)?,
+                    sql_i64(updated_at_unix)?,
+                ],
+            )
+            .map(|_| ())
+            .map_err(anyhow::Error::from)
+        })
+        .expect("insert context guidance target compaction workplane job");
 }
 
 fn insert_pending_artefact_jobs_bulk(
