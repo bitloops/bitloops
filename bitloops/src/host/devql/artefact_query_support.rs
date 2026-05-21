@@ -347,20 +347,22 @@ fn pair_lookup_predicate(
     if snapshot_keys.is_empty() {
         return None;
     }
-    Some(
-        snapshot_keys
-            .iter()
-            .map(|(artefact_id, snapshot_id)| {
-                format!(
-                    "(artefact_id = '{artefact_id}' AND {snapshot_column} = '{snapshot_id}')",
-                    artefact_id = esc_pg(artefact_id),
-                    snapshot_column = snapshot_column,
-                    snapshot_id = esc_pg(snapshot_id),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(" OR "),
-    )
+    let values = snapshot_keys
+        .iter()
+        .map(|(artefact_id, snapshot_id)| {
+            format!(
+                "('{artefact_id}', '{snapshot_id}')",
+                artefact_id = esc_pg(artefact_id),
+                snapshot_id = esc_pg(snapshot_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "(artefact_id, {snapshot_column}) IN (VALUES {values})",
+        snapshot_column = snapshot_column,
+        values = values,
+    ))
 }
 
 fn collect_row_snapshot_keys(rows: &[Value]) -> Vec<ArtefactSnapshotKey> {
@@ -567,5 +569,67 @@ mod tests {
             Value::String("shared summary".to_string())
         );
         assert_eq!(rows[1]["embedding_representations"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn hydrate_current_rows_handles_more_than_sqlite_expression_depth() {
+        const ROW_COUNT: usize = 1_100;
+
+        let temp = tempdir().expect("tempdir");
+        let sqlite_path = temp.path().join("relational.sqlite");
+        File::create(&sqlite_path).expect("create sqlite file");
+        let relational = RelationalStorage::local_only(sqlite_path.clone());
+        relational
+            .exec_batch_transactional(&[
+                "CREATE TABLE symbol_semantics_current (artefact_id TEXT, repo_id TEXT, content_id TEXT, summary TEXT)".to_string(),
+                "CREATE TABLE symbol_semantics (artefact_id TEXT, repo_id TEXT, blob_sha TEXT, summary TEXT)".to_string(),
+                "CREATE TABLE symbol_embeddings_current (artefact_id TEXT, repo_id TEXT, content_id TEXT, representation_kind TEXT)".to_string(),
+                "CREATE TABLE symbol_embeddings (artefact_id TEXT, repo_id TEXT, blob_sha TEXT, representation_kind TEXT)".to_string(),
+            ])
+            .await
+            .expect("create semantic tables");
+
+        let statements = (0..ROW_COUNT)
+            .flat_map(|idx| {
+                [
+                    format!(
+                        "INSERT INTO symbol_semantics_current (artefact_id, repo_id, content_id, summary) VALUES ('artefact-{idx}', 'repo-1', 'blob-{idx}', 'summary {idx}')"
+                    ),
+                    format!(
+                        "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, content_id, representation_kind) VALUES ('artefact-{idx}', 'repo-1', 'blob-{idx}', 'identity')"
+                    ),
+                ]
+            })
+            .collect::<Vec<_>>();
+        relational
+            .exec_batch_transactional(&statements)
+            .await
+            .expect("seed many semantic rows");
+
+        let rows = (0..ROW_COUNT)
+            .map(|idx| {
+                serde_json::json!({
+                    "artefact_id": format!("artefact-{idx}"),
+                    "blob_sha": format!("blob-{idx}"),
+                    "summary": Value::Null,
+                    "embedding_representations": "[]"
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let hydrated =
+            hydrate_artefact_rows_for_storage_ownership(&relational, "repo-1", false, rows)
+                .await
+                .expect("hydrate many rows without exceeding SQLite expression depth");
+
+        assert_eq!(hydrated.len(), ROW_COUNT);
+        assert_eq!(
+            hydrated[ROW_COUNT - 1]["summary"],
+            Value::String(format!("summary {}", ROW_COUNT - 1))
+        );
+        assert_eq!(
+            hydrated[ROW_COUNT - 1]["embedding_representations"],
+            serde_json::json!(["identity"])
+        );
     }
 }
