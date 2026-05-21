@@ -56,6 +56,15 @@ pub trait RelationalGateway: Send + Sync {
         Ok(())
     }
     fn load_current_production_artefacts(&self, repo_id: &str) -> Result<Vec<ProductionArtefact>>;
+    fn load_current_artefacts_for_file_lines(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<(String, i64, i64)>> {
+        bail!(
+            "current artefact line lookup is not implemented by this relational gateway (repo {repo_id}, file {file_path})"
+        )
+    }
     fn load_production_artefacts(&self, commit_sha: &str) -> Result<Vec<ProductionArtefact>>;
     fn load_artefacts_for_file_lines(
         &self,

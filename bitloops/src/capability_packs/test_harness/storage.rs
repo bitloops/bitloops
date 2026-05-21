@@ -30,6 +30,12 @@ pub trait TestHarnessCoverageGateway: Send {
         &mut self,
         diagnostics: &[CoverageDiagnosticRecord],
     ) -> Result<()>;
+    fn replace_coverage_capture(
+        &mut self,
+        capture: &CoverageCaptureRecord,
+        hits: &[CoverageHitRecord],
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()>;
     fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize>;
 }
 
@@ -46,6 +52,12 @@ pub trait TestHarnessRepository {
     fn insert_coverage_hits(&mut self, hits: &[CoverageHitRecord]) -> Result<()>;
     fn insert_coverage_diagnostics(
         &mut self,
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()>;
+    fn replace_coverage_capture(
+        &mut self,
+        capture: &CoverageCaptureRecord,
+        hits: &[CoverageHitRecord],
         diagnostics: &[CoverageDiagnosticRecord],
     ) -> Result<()>;
     fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize>;

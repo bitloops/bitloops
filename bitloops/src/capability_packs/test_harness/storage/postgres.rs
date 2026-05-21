@@ -349,6 +349,148 @@ ON CONFLICT(diagnostic_id) DO UPDATE SET
         })
     }
 
+    fn replace_coverage_capture(
+        &mut self,
+        capture: &CoverageCaptureRecord,
+        hits: &[CoverageHitRecord],
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()> {
+        let capture = capture.clone();
+        let hits = hits.to_vec();
+        let diagnostics = diagnostics.to_vec();
+        self.with_client(move |client| {
+            Box::pin(async move {
+                let tx = client
+                    .transaction()
+                    .await
+                    .context("failed to start coverage replacement transaction")?;
+
+                tx.execute(
+                    "DELETE FROM coverage_hits WHERE capture_id = $1",
+                    &[&capture.capture_id],
+                )
+                .await
+                .context("failed deleting stale coverage hits")?;
+                tx.execute(
+                    "DELETE FROM coverage_diagnostics WHERE capture_id = $1",
+                    &[&capture.capture_id],
+                )
+                .await
+                .context("failed deleting stale coverage diagnostics")?;
+
+                tx.execute(
+                    r#"
+INSERT INTO coverage_captures (
+  capture_id, repo_id, commit_sha, tool, format, scope_kind,
+  subject_test_symbol_id, line_truth, branch_truth, captured_at, status, metadata_json
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+ON CONFLICT(capture_id) DO UPDATE SET
+  repo_id = excluded.repo_id,
+  commit_sha = excluded.commit_sha,
+  tool = excluded.tool,
+  format = excluded.format,
+  scope_kind = excluded.scope_kind,
+  subject_test_symbol_id = excluded.subject_test_symbol_id,
+  line_truth = excluded.line_truth,
+  branch_truth = excluded.branch_truth,
+  captured_at = excluded.captured_at,
+  status = excluded.status,
+  metadata_json = excluded.metadata_json
+"#,
+                    &[
+                        &capture.capture_id,
+                        &capture.repo_id,
+                        &capture.commit_sha,
+                        &capture.tool,
+                        &capture.format.as_str(),
+                        &capture.scope_kind.as_str(),
+                        &capture.subject_test_symbol_id,
+                        &(capture.line_truth as i64),
+                        &(capture.branch_truth as i64),
+                        &capture.captured_at,
+                        &capture.status,
+                        &capture.metadata_json,
+                    ],
+                )
+                .await
+                .with_context(|| {
+                    format!("failed inserting coverage capture {}", capture.capture_id)
+                })?;
+
+                for hit in hits {
+                    tx.execute(
+                        r#"
+INSERT INTO coverage_hits (
+  capture_id, production_symbol_id, file_path, line, branch_id, covered, hit_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT(capture_id, production_symbol_id, line, branch_id) DO UPDATE SET
+  file_path = excluded.file_path,
+  covered = excluded.covered,
+  hit_count = excluded.hit_count
+"#,
+                        &[
+                            &hit.capture_id,
+                            &hit.production_symbol_id,
+                            &hit.file_path,
+                            &hit.line,
+                            &hit.branch_id,
+                            &(hit.covered as i64),
+                            &hit.hit_count,
+                        ],
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed inserting coverage hit for capture {} symbol {} line {}",
+                            hit.capture_id, hit.production_symbol_id, hit.line
+                        )
+                    })?;
+                }
+
+                for diag in diagnostics {
+                    tx.execute(
+                        r#"
+INSERT INTO coverage_diagnostics (
+  diagnostic_id, capture_id, repo_id, commit_sha, path, line,
+  severity, code, message, metadata_json
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT(diagnostic_id) DO UPDATE SET
+  capture_id = excluded.capture_id,
+  severity = excluded.severity,
+  code = excluded.code,
+  message = excluded.message,
+  metadata_json = excluded.metadata_json
+"#,
+                        &[
+                            &diag.diagnostic_id,
+                            &diag.capture_id,
+                            &diag.repo_id,
+                            &diag.commit_sha,
+                            &diag.path,
+                            &diag.line,
+                            &diag.severity,
+                            &diag.code,
+                            &diag.message,
+                            &diag.metadata_json,
+                        ],
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed inserting coverage diagnostic {}",
+                            diag.diagnostic_id
+                        )
+                    })?;
+                }
+
+                tx.commit()
+                    .await
+                    .context("failed to commit coverage replacement transaction")?;
+                Ok(())
+            })
+        })
+    }
+
     fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize> {
         let commit_sha = commit_sha.to_string();
         self.with_client(move |client| {

@@ -470,6 +470,48 @@ ORDER BY path ASC, start_line ASC
         })
     }
 
+    pub fn load_current_artefacts_for_file_lines(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<(String, i64, i64)>> {
+        let repo_id = repo_id.to_string();
+        let file_path = file_path.to_string();
+        self.sqlite.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+SELECT DISTINCT
+  COALESCE(NULLIF(a.symbol_id, ''), a.artefact_id) AS production_symbol_id,
+  a.start_line,
+  a.end_line
+FROM artefacts_current a
+WHERE a.repo_id = ?1
+  AND a.canonical_kind != 'file'
+  AND (a.path = ?2 OR substr(?2, -length(a.path)) = a.path)
+ORDER BY a.path ASC, a.start_line ASC
+"#,
+                )
+                .context("failed preparing current artefacts-for-file query")?;
+
+            let rows = stmt
+                .query_map(params![repo_id, file_path], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })
+                .context("failed querying current artefacts for file")?;
+
+            let mut result = Vec::new();
+            for row in rows {
+                result.push(row.context("failed mapping current artefact-for-file row")?);
+            }
+            Ok(result)
+        })
+    }
+
     pub fn load_artefacts_for_file_lines(
         &self,
         commit_sha: &str,
@@ -611,6 +653,14 @@ impl RelationalGateway for SqliteRelationalGateway {
         SqliteRelationalGateway::load_current_production_artefacts(self, repo_id)
     }
 
+    fn load_current_artefacts_for_file_lines(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<(String, i64, i64)>> {
+        SqliteRelationalGateway::load_current_artefacts_for_file_lines(self, repo_id, file_path)
+    }
+
     fn load_production_artefacts(&self, commit_sha: &str) -> Result<Vec<ProductionArtefact>> {
         SqliteRelationalGateway::load_production_artefacts(self, commit_sha)
     }
@@ -744,6 +794,82 @@ mod tests {
             Some("packages/api/src/target.ts::target")
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn load_current_artefacts_for_file_lines_reads_artefacts_current_by_suffix() -> Result<()> {
+        let temp = TempDir::new()?;
+        let db_path = temp.path().join("runtime.sqlite");
+        init_database(&db_path, false, "seed-commit")?;
+        let sqlite = SqliteConnectionPool::connect_existing(db_path)?;
+        let gateway = SqliteRelationalGateway::new(sqlite.clone());
+
+        sqlite.with_write_connection(|conn| {
+            conn.execute(
+                "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
+                 VALUES (?1, 'local', 'bitloops', 'demo', 'main')",
+                rusqlite::params!["repo-current"],
+            )?;
+            conn.execute(
+                "INSERT INTO artefacts_current (
+                    repo_id, path, content_id, symbol_id, artefact_id, language,
+                    extraction_fingerprint, canonical_kind, language_kind, symbol_fqn,
+                    parent_symbol_id, parent_artefact_id, start_line, end_line,
+                    start_byte, end_byte, signature, modifiers, docstring, updated_at
+                ) VALUES (
+                    ?1, 'crates/demo/src/lib.rs', 'content-a', 'symbol::covered', 'artefact::covered', 'rust',
+                    'fingerprint-a', 'function', 'function_item',
+                    'crates/demo/src/lib.rs::covered', NULL, NULL, 10, 14,
+                    0, 40, NULL, '[]', NULL, '2026-05-20T10:00:00Z'
+                )",
+                rusqlite::params!["repo-current"],
+            )?;
+            conn.execute(
+                "INSERT INTO artefacts_current (
+                    repo_id, path, content_id, symbol_id, artefact_id, language,
+                    extraction_fingerprint, canonical_kind, language_kind, symbol_fqn,
+                    parent_symbol_id, parent_artefact_id, start_line, end_line,
+                    start_byte, end_byte, signature, modifiers, docstring, updated_at
+                ) VALUES (
+                    ?1, 'crates/demo/src/lib.rs', 'content-a', 'file-symbol', 'file-artefact', 'rust',
+                    'fingerprint-file', 'file', 'source_file',
+                    'crates/demo/src/lib.rs', NULL, NULL, 1, 30,
+                    0, 240, NULL, '[]', NULL, '2026-05-20T10:00:00Z'
+                )",
+                rusqlite::params!["repo-current"],
+            )?;
+            conn.execute(
+                "INSERT INTO artefacts_current (
+                    repo_id, path, content_id, symbol_id, artefact_id, language,
+                    extraction_fingerprint, canonical_kind, language_kind, symbol_fqn,
+                    parent_symbol_id, parent_artefact_id, start_line, end_line,
+                    start_byte, end_byte, signature, modifiers, docstring, updated_at
+                ) VALUES (
+                    ?1, 'crates/demo/src/lib_rs', 'content-b', 'symbol::underscore', 'artefact::underscore', 'rust',
+                    'fingerprint-b', 'function', 'function_item',
+                    'crates/demo/src/lib_rs::underscore', NULL, NULL, 10, 14,
+                    0, 40, NULL, '[]', NULL, '2026-05-20T10:00:00Z'
+                )",
+                rusqlite::params!["repo-current"],
+            )?;
+            Ok(())
+        })?;
+
+        let rows = gateway.load_current_artefacts_for_file_lines(
+            "repo-current",
+            "/tmp/work/crates/demo/src/lib.rs",
+        )?;
+
+        assert_eq!(rows, vec![("symbol::covered".to_string(), 10, 14)]);
+        let wildcard_rows = gateway.load_current_artefacts_for_file_lines(
+            "repo-current",
+            "/tmp/work/crates/demo/src/libXrs",
+        )?;
+        assert!(
+            wildcard_rows.is_empty(),
+            "underscore in stored path must not act as a LIKE wildcard"
+        );
         Ok(())
     }
 

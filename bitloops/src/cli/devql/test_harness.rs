@@ -79,14 +79,16 @@ async fn run_ingest_coverage(
     let host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
     host.ensure_migrations_applied_sync()?;
 
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "coverage_path": coverage_path.to_string_lossy(),
-        "commit_sha": args.commit,
         "scope_kind": args.scope,
         "tool": args.tool,
         "test_artefact_id": args.test_artefact_id,
         "format": format.as_str(),
     });
+    if let Some(commit) = args.commit.as_ref() {
+        payload["commit_sha"] = serde_json::json!(commit);
+    }
 
     let result = host
         .invoke_ingester("test_harness", TEST_HARNESS_COVERAGE_INGESTER_ID, payload)

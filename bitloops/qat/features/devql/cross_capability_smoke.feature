@@ -18,9 +18,9 @@ Feature: Cross-capability deterministic smoke
     And DevQL pack health for semantic clones is ready in bitloops
     And I make a first change using Claude Code to bitloops
     And I committed today in bitloops
+    And I enqueue DevQL sync task with status in bitloops
     And I run DevQL semantic clones rebuild in bitloops
-    And I run TestHarness ingest-tests for latest commit in bitloops
-    And I run TestHarness ingest-coverage for latest commit in bitloops
+    Then daemon capability-event status shows TestHarness sync handler completed in bitloops
 
   @devql @integration @develop_gate
   Scenario: Hardened DevQL capability surfaces compose in one offline workflow

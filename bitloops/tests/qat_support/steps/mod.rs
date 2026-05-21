@@ -445,6 +445,13 @@ pub fn collection() -> Collection<QatWorld> {
         .given(
             None,
             regex(
+                r"^I run (?:TestHarness|TestLens) ingest-coverage for current workspace in (\S+)$",
+            ),
+            step_fn(given_testlens_ingest_current_coverage),
+        )
+        .given(
+            None,
+            regex(
                 r"^I run (?:TestHarness|TestLens) ingest-results with a failing test for latest commit in (\S+)$",
             ),
             step_fn(given_testlens_ingest_results_failing),

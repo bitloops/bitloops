@@ -7,8 +7,8 @@ use super::SqliteTestHarnessRepository;
 use crate::capability_packs::test_harness::storage::TestHarnessRepository;
 use crate::models::ScopeKind;
 use crate::models::{
-    CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, TestArtefactCurrentRecord,
-    TestArtefactEdgeCurrentRecord, TestRunRecord,
+    CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageFormat, CoverageHitRecord,
+    TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestRunRecord,
 };
 use crate::storage::init::init_database;
 
@@ -93,6 +93,46 @@ fn replace_test_discovery_clears_stale_runs_coverage_and_classifications() {
         .expect("load fresh test scenarios");
     assert_eq!(scenarios.len(), 1);
     assert_eq!(scenarios[0].scenario_id, SCENARIO_ID);
+}
+
+#[test]
+fn replace_coverage_capture_removes_stale_hits_and_diagnostics() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let db_path = temp_dir.path().join("coverage-replacement.db");
+    init_database(&db_path, false, "seed").expect("failed to initialize db");
+
+    let mut repository = SqliteTestHarnessRepository::open_existing(&db_path).expect("open db");
+    let capture = coverage_capture_record();
+    let first_hits = coverage_hits();
+    let first_diagnostics = coverage_diagnostics();
+
+    repository
+        .replace_coverage_capture(&capture, &first_hits, &first_diagnostics)
+        .expect("insert first coverage payload");
+
+    let replacement_hits = vec![first_hits[0].clone()];
+    repository
+        .replace_coverage_capture(&capture, &replacement_hits, &[])
+        .expect("replace coverage payload");
+
+    let conn = Connection::open(&db_path).expect("open sqlite connection");
+    let hit_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM coverage_hits WHERE capture_id = ?1",
+            rusqlite::params![capture.capture_id],
+            |row| row.get(0),
+        )
+        .expect("count coverage hits");
+    assert_eq!(hit_count, 1);
+
+    let diagnostic_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM coverage_diagnostics WHERE capture_id = ?1",
+            rusqlite::params![capture.capture_id],
+            |row| row.get(0),
+        )
+        .expect("count coverage diagnostics");
+    assert_eq!(diagnostic_count, 0);
 }
 
 fn table_count(db_path: &Path, table: &str) -> i64 {
@@ -239,6 +279,21 @@ fn coverage_hits() -> Vec<CoverageHitRecord> {
             hit_count: 0,
         },
     ]
+}
+
+fn coverage_diagnostics() -> Vec<CoverageDiagnosticRecord> {
+    vec![CoverageDiagnosticRecord {
+        diagnostic_id: "diag:coverage:stale".to_string(),
+        capture_id: CAPTURE_ID.to_string(),
+        repo_id: REPO_ID.to_string(),
+        commit_sha: COMMIT_SHA.to_string(),
+        path: Some(FILE_USER.to_string()),
+        line: Some(12),
+        severity: "warning".to_string(),
+        code: "unmapped_file".to_string(),
+        message: "stale diagnostic".to_string(),
+        metadata_json: None,
+    }]
 }
 
 fn test_artefacts() -> Vec<TestArtefactCurrentRecord> {

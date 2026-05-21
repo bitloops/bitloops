@@ -247,6 +247,32 @@ pub fn ingest_test_harness_coverage(
     });
 }
 
+pub fn ingest_current_test_harness_coverage(
+    workspace: &Workspace,
+    coverage_path: &Path,
+    scope_kind: bitloops::models::ScopeKind,
+    tool: &str,
+    format: bitloops::models::CoverageFormat,
+) {
+    with_devql_host(workspace, |host| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime for current ingest-coverage")
+            .block_on(host.invoke_ingester(
+                "test_harness",
+                bitloops::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_INGESTER_ID,
+                json!({
+                    "coverage_path": coverage_path.to_string_lossy(),
+                    "scope_kind": scope_kind.to_string(),
+                    "tool": tool,
+                    "format": format.as_str(),
+                }),
+            ))
+            .expect("ingest current test harness coverage");
+    });
+}
+
 pub fn open_test_harness_repository(
     workspace: &Workspace,
 ) -> bitloops::capability_packs::test_harness::storage::BitloopsTestHarnessRepository {

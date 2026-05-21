@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **Current coverage ingest now maps LCOV reports to current DevQL artefacts**: `bitloops devql test-harness ingest-coverage` now defaults to current-workspace mode when `--commit` is omitted, maps LCOV and LLVM JSON line hits against `artefacts_current`, replaces stale coverage rows on re-ingest, and keeps historical commit-scoped ingest behind explicit `--commit` usage.
+
 ## [0.0.30] - 2026-05-21
 
 ### Fixed
