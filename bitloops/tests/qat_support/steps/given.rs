@@ -1092,6 +1092,19 @@ pub(super) fn given_testlens_ingest_coverage(
     })
 }
 
+pub(super) fn given_testlens_ingest_current_coverage(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run TestHarness ingest-coverage for current workspace",
+            helpers::run_testlens_ingest_current_coverage(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_testlens_ingest_results_failing(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

@@ -23,6 +23,35 @@ pub struct IngestCoverageSummary {
 }
 
 #[derive(Debug, Clone)]
+pub struct CurrentCoverageProvenance {
+    pub observed_head_sha: Option<String>,
+    pub repo_dirty: Option<bool>,
+    pub coverage_file_modified_at_unix: Option<u64>,
+    pub ingested_at_unix: u64,
+    pub coverage_path: String,
+}
+
+impl CurrentCoverageProvenance {
+    fn capture_commit_sha(&self) -> String {
+        self.observed_head_sha
+            .clone()
+            .unwrap_or_else(|| "current".to_string())
+    }
+
+    fn metadata_json(&self) -> String {
+        serde_json::json!({
+            "reference_mode": "current",
+            "observed_head_sha": self.observed_head_sha,
+            "repo_dirty": self.repo_dirty,
+            "coverage_file_modified_at_unix": self.coverage_file_modified_at_unix,
+            "ingested_at_unix": self.ingested_at_unix,
+            "coverage_path": self.coverage_path,
+        })
+        .to_string()
+    }
+}
+
+#[derive(Debug, Clone)]
 struct LcovFileCoverage {
     source_file: String,
     line_hits: HashMap<i64, i64>,
@@ -103,11 +132,91 @@ pub fn execute(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn execute_current(
+    store: &mut dyn TestHarnessCoverageGateway,
+    relational: &dyn RelationalGateway,
+    coverage_path: &Path,
+    repo_id: &str,
+    scope_kind: ScopeKind,
+    tool: &str,
+    test_artefact_id: Option<&str>,
+    format: CoverageFormat,
+    provenance: CurrentCoverageProvenance,
+) -> Result<IngestCoverageSummary> {
+    let commit_sha = provenance.capture_commit_sha();
+    let capture_id = format!(
+        "capture:current:{repo_id}:{}:{}",
+        scope_kind,
+        test_artefact_id.unwrap_or("all")
+    );
+
+    let has_branches = format == CoverageFormat::LlvmJson;
+
+    let capture = CoverageCaptureRecord {
+        capture_id: capture_id.clone(),
+        repo_id: repo_id.to_string(),
+        commit_sha: commit_sha.clone(),
+        tool: tool.to_string(),
+        format,
+        scope_kind,
+        subject_test_symbol_id: test_artefact_id.map(|s| s.to_string()),
+        line_truth: true,
+        branch_truth: has_branches,
+        captured_at: provenance.ingested_at_unix.to_string(),
+        status: "complete".to_string(),
+        metadata_json: Some(provenance.metadata_json()),
+    };
+
+    let (hits, diagnostics) = match format {
+        CoverageFormat::Lcov => {
+            ingest_lcov_current(relational, coverage_path, repo_id, &commit_sha, &capture_id)?
+        }
+        CoverageFormat::LlvmJson => {
+            crate::capability_packs::test_harness::ingest::parse_llvm_json::ingest_llvm_json_current(
+                relational,
+                coverage_path,
+                repo_id,
+                &commit_sha,
+                &capture_id,
+            )?
+        }
+    };
+
+    store.replace_coverage_capture(&capture, &hits, &diagnostics)?;
+
+    let classifications = store.rebuild_classifications_from_coverage(&commit_sha)?;
+
+    Ok(IngestCoverageSummary {
+        format,
+        scope_kind,
+        hits: hits.len(),
+        classifications,
+        diagnostics: diagnostics.len(),
+    })
+}
+
 pub fn format_summary(commit_sha: &str, summary: &IngestCoverageSummary) -> String {
     format!(
         "ingested {} coverage for commit {} (scope: {}, hits: {}, classifications: {}, diagnostics: {})",
         summary.format,
         commit_sha,
+        summary.scope_kind,
+        summary.hits,
+        summary.classifications,
+        summary.diagnostics
+    )
+}
+
+pub fn format_current_summary(
+    summary: &IngestCoverageSummary,
+    observed_head_sha: Option<&str>,
+) -> String {
+    let head = observed_head_sha.unwrap_or("unborn-or-unavailable");
+    format!(
+        "ingested {} coverage for current workspace (observed HEAD: {}, scope: {}, hits: {}, classifications: {}, diagnostics: {})",
+        summary.format,
+        head,
         summary.scope_kind,
         summary.hits,
         summary.classifications,
@@ -126,6 +235,33 @@ fn ingest_lcov(
     repo_id: &str,
     capture_id: &str,
 ) -> Result<(Vec<CoverageHitRecord>, Vec<CoverageDiagnosticRecord>)> {
+    ingest_lcov_with_lookup(lcov_path, commit_sha, repo_id, capture_id, |file_path| {
+        relational.load_artefacts_for_file_lines(commit_sha, file_path)
+    })
+}
+
+fn ingest_lcov_current(
+    relational: &dyn RelationalGateway,
+    lcov_path: &Path,
+    repo_id: &str,
+    commit_sha: &str,
+    capture_id: &str,
+) -> Result<(Vec<CoverageHitRecord>, Vec<CoverageDiagnosticRecord>)> {
+    ingest_lcov_with_lookup(lcov_path, commit_sha, repo_id, capture_id, |file_path| {
+        relational.load_current_artefacts_for_file_lines(repo_id, file_path)
+    })
+}
+
+fn ingest_lcov_with_lookup<F>(
+    lcov_path: &Path,
+    commit_sha: &str,
+    repo_id: &str,
+    capture_id: &str,
+    mut load_artefacts: F,
+) -> Result<(Vec<CoverageHitRecord>, Vec<CoverageDiagnosticRecord>)>
+where
+    F: FnMut(&str) -> Result<Vec<(String, i64, i64)>>,
+{
     let (report, parse_diagnostics) =
         parse_lcov_report(lcov_path, capture_id, repo_id, commit_sha)?;
     let mut hits = Vec::new();
@@ -133,7 +269,7 @@ fn ingest_lcov(
     let mut diag_idx = diagnostics.len();
 
     for file in &report {
-        let artefacts = relational.load_artefacts_for_file_lines(commit_sha, &file.source_file)?;
+        let artefacts = load_artefacts(&file.source_file)?;
         if artefacts.is_empty() {
             diagnostics.push(CoverageDiagnosticRecord {
                 diagnostic_id: format!("diag:{capture_id}:unmapped:{diag_idx}"),
@@ -346,7 +482,9 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::{execute, format_summary, parse_lcov_report};
+    use super::{
+        CurrentCoverageProvenance, execute, execute_current, format_summary, parse_lcov_report,
+    };
     use crate::capability_packs::test_harness::storage::TestHarnessCoverageGateway;
     use crate::host::capability_host::gateways::RelationalGateway;
     use crate::models::{
@@ -382,6 +520,23 @@ mod tests {
             Ok(())
         }
 
+        fn replace_coverage_capture(
+            &mut self,
+            capture: &CoverageCaptureRecord,
+            hits: &[CoverageHitRecord],
+            diagnostics: &[CoverageDiagnosticRecord],
+        ) -> Result<()> {
+            self.captures
+                .retain(|existing| existing.capture_id != capture.capture_id);
+            self.hits.retain(|hit| hit.capture_id != capture.capture_id);
+            self.diagnostics
+                .retain(|diag| diag.capture_id != capture.capture_id);
+            self.captures.push(capture.clone());
+            self.hits.extend_from_slice(hits);
+            self.diagnostics.extend_from_slice(diagnostics);
+            Ok(())
+        }
+
         fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize> {
             self.rebuild_commits.push(commit_sha.to_string());
             Ok(self.classifications)
@@ -392,6 +547,7 @@ mod tests {
     struct FakeRelationalGateway {
         repo_id: String,
         artefacts_by_file: HashMap<String, Vec<(String, i64, i64)>>,
+        current_artefacts_by_file: HashMap<String, Vec<(String, i64, i64)>>,
     }
 
     impl RelationalGateway for FakeRelationalGateway {
@@ -412,6 +568,18 @@ mod tests {
             _repo_id: &str,
         ) -> Result<Vec<crate::models::ProductionArtefact>> {
             unreachable!("unused in coverage tests")
+        }
+
+        fn load_current_artefacts_for_file_lines(
+            &self,
+            _repo_id: &str,
+            file_path: &str,
+        ) -> Result<Vec<(String, i64, i64)>> {
+            Ok(self
+                .current_artefacts_by_file
+                .get(file_path)
+                .cloned()
+                .unwrap_or_default())
         }
 
         fn load_production_artefacts(
@@ -483,6 +651,7 @@ end_of_record
                     ("prod:branch".to_string(), 11, 11),
                 ],
             )]),
+            current_artefacts_by_file: HashMap::new(),
         };
         let temp = tempfile::NamedTempFile::new().expect("temp lcov");
         std::fs::write(
@@ -566,5 +735,59 @@ end_of_record
         assert!(summary_text.contains("ingested lcov coverage for commit commit-sha-123"));
         assert!(summary_text.contains("hits: 5"));
         assert!(summary_text.contains("diagnostics: 1"));
+    }
+
+    #[test]
+    fn execute_current_lcov_maps_against_current_artefacts_and_records_metadata() -> Result<()> {
+        let temp = tempfile::NamedTempFile::new().expect("temp lcov");
+        std::fs::write(
+            temp.path(),
+            "\
+SF:/tmp/work/src/lib.rs
+DA:10,1
+DA:11,0
+DA:99,1
+end_of_record
+",
+        )
+        .expect("write lcov");
+
+        let mut store = FakeCoverageStore::default();
+        let relational = FakeRelationalGateway {
+            repo_id: "repo-current".to_string(),
+            artefacts_by_file: HashMap::new(),
+            current_artefacts_by_file: HashMap::from([(
+                "/tmp/work/src/lib.rs".to_string(),
+                vec![("symbol::current".to_string(), 10, 12)],
+            )]),
+        };
+
+        let summary = execute_current(
+            &mut store,
+            &relational,
+            temp.path(),
+            "repo-current",
+            ScopeKind::Workspace,
+            "cargo-llvm-cov",
+            None,
+            CoverageFormat::Lcov,
+            CurrentCoverageProvenance {
+                observed_head_sha: Some("abc123".to_string()),
+                repo_dirty: Some(true),
+                coverage_file_modified_at_unix: Some(123),
+                ingested_at_unix: 456,
+                coverage_path: temp.path().display().to_string(),
+            },
+        )?;
+
+        assert_eq!(summary.hits, 2);
+        assert_eq!(store.captures.len(), 1);
+        assert_eq!(store.captures[0].commit_sha, "abc123");
+        let metadata = store.captures[0].metadata_json.as_deref().unwrap();
+        assert!(metadata.contains("\"reference_mode\":\"current\""));
+        assert!(metadata.contains("\"repo_dirty\":true"));
+        assert_eq!(store.hits[0].production_symbol_id, "symbol::current");
+        assert_eq!(store.rebuild_commits, vec!["abc123".to_string()]);
+        Ok(())
     }
 }

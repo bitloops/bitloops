@@ -5,9 +5,9 @@ use bitloops::capability_packs::test_harness::storage::TestHarnessQueryRepositor
 use bitloops::models::{CoverageFormat, ScopeKind};
 use rusqlite::{Connection, params};
 use test_harness_support::{
-    Workspace, bootstrap_minimal_workspace, ingest_test_harness_coverage,
-    ingest_test_harness_tests, open_test_harness_repository, run_devql_init,
-    seed_production_artefacts, write_rust_coverage_fixture,
+    Workspace, bootstrap_minimal_workspace, ingest_current_test_harness_coverage,
+    ingest_test_harness_coverage, ingest_test_harness_tests, open_test_harness_repository,
+    run_bitloops_or_panic, run_devql_init, seed_production_artefacts, write_rust_coverage_fixture,
 };
 
 #[test]
@@ -163,4 +163,138 @@ LIMIT 1
         .expect("count C0 coverage hits");
     assert_eq!(c0_hit_count, 0, "expected no coverage hits for C0");
     assert!(c1_hit_count > 0, "expected coverage hits for C1");
+}
+
+#[test]
+fn bitloops_testlens_ingest_current_lcov_uses_current_artefacts_without_commit() {
+    let workspace = Workspace::new("sqlite-current-coverage");
+    write_rust_coverage_fixture(&workspace);
+
+    bootstrap_minimal_workspace(&workspace);
+    run_devql_init(&workspace);
+    seed_production_artefacts(&workspace, "C1");
+
+    let lcov_path = workspace.repo_dir().join("rust-current-coverage.lcov");
+    fs::write(
+        &lcov_path,
+        r#"
+TN:
+SF:src/lib.rs
+DA:4,1
+DA:5,1
+DA:8,0
+DA:9,0
+end_of_record
+"#
+        .trim_start(),
+    )
+    .expect("write current lcov");
+
+    ingest_current_test_harness_coverage(
+        &workspace,
+        &lcov_path,
+        ScopeKind::Workspace,
+        "cargo-llvm-cov",
+        CoverageFormat::Lcov,
+    );
+
+    let conn = Connection::open(workspace.db_path()).expect("open sqlite db");
+    let (commit_sha, metadata_json): (String, String) = conn
+        .query_row(
+            r#"
+SELECT commit_sha, metadata_json
+FROM coverage_captures
+ORDER BY capture_id
+LIMIT 1
+"#,
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load current coverage capture");
+    assert_eq!(
+        commit_sha, "current",
+        "fresh test repositories should store current coverage under the current placeholder"
+    );
+    assert!(
+        metadata_json.contains("\"reference_mode\":\"current\""),
+        "expected current reference metadata, got {metadata_json}"
+    );
+
+    let hit_count: i64 = conn
+        .query_row(
+            r#"
+SELECT COUNT(*)
+FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1
+  AND ch.production_symbol_id IN (
+    SELECT symbol_id FROM artefacts_current WHERE path = 'src/lib.rs'
+  )
+"#,
+            params!["current"],
+            |row| row.get(0),
+        )
+        .expect("count current coverage hits");
+    assert!(
+        hit_count > 0,
+        "expected current LCOV hits to map through artefacts_current"
+    );
+}
+
+#[test]
+fn bitloops_devql_ingest_coverage_defaults_to_current_workspace_without_commit() {
+    let workspace = Workspace::new("sqlite-current-coverage-cli");
+    write_rust_coverage_fixture(&workspace);
+
+    bootstrap_minimal_workspace(&workspace);
+    run_devql_init(&workspace);
+    seed_production_artefacts(&workspace, "C1");
+
+    let lcov_path = workspace.repo_dir().join("rust-current-cli.lcov");
+    fs::write(
+        &lcov_path,
+        r#"
+TN:
+SF:src/lib.rs
+DA:4,1
+DA:5,1
+end_of_record
+"#
+        .trim_start(),
+    )
+    .expect("write current cli lcov");
+
+    let lcov_arg = lcov_path.to_string_lossy().into_owned();
+    let output = run_bitloops_or_panic(
+        workspace.repo_dir(),
+        &[
+            "devql",
+            "test-harness",
+            "ingest-coverage",
+            "--lcov",
+            &lcov_arg,
+        ],
+    );
+    assert!(
+        output.contains("coverage for current workspace"),
+        "expected current-workspace ingest output, got {output}"
+    );
+
+    let conn = Connection::open(workspace.db_path()).expect("open sqlite db");
+    let hit_count: i64 = conn
+        .query_row(
+            r#"
+SELECT COUNT(*)
+FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = 'current'
+"#,
+            [],
+            |row| row.get(0),
+        )
+        .expect("count current CLI coverage hits");
+    assert!(
+        hit_count > 0,
+        "expected CLI current ingest to persist coverage hits"
+    );
 }
