@@ -40,16 +40,33 @@ impl DuckDbInteractionRepository {
         super::super::ensure_repo_id(&self.repo_id, &session.repo_id, "interaction session")?;
         let conn = self.open_or_create()?;
         ensure_current_schema(&conn)?;
+        let existing_is_auxiliary = conn
+            .query_row(
+                &format!(
+                    "SELECT is_auxiliary
+                     FROM interaction_sessions
+                     WHERE repo_id = '{repo_id}' AND session_id = '{session_id}'
+                     LIMIT 1",
+                    repo_id = esc_pg(&self.repo_id),
+                    session_id = esc_pg(&session.session_id),
+                ),
+                [],
+                |row| row.get::<_, i32>(0),
+            )
+            .optional()?
+            .unwrap_or_default()
+            == 1;
+        let is_auxiliary = session.is_auxiliary || existing_is_auxiliary;
         let sql = format!(
             "INSERT OR REPLACE INTO interaction_sessions (
                 session_id, repo_id, branch, actor_id, actor_name, actor_email, actor_source,
                 agent_type, model, first_prompt, transcript_path, worktree_path, worktree_id,
-                started_at, ended_at, last_event_at, updated_at
+                started_at, ended_at, last_event_at, updated_at, is_auxiliary
              ) VALUES (
                 '{session_id}', '{repo_id}', '{branch}', '{actor_id}', '{actor_name}',
                 '{actor_email}', '{actor_source}', '{agent_type}', '{model}', '{first_prompt}',
                 '{transcript_path}', '{worktree_path}', '{worktree_id}', '{started_at}',
-                {ended_at}, '{last_event_at}', '{updated_at}'
+                {ended_at}, '{last_event_at}', '{updated_at}', {is_auxiliary}
              )",
             session_id = esc_pg(&session.session_id),
             repo_id = esc_pg(&self.repo_id),
@@ -68,6 +85,7 @@ impl DuckDbInteractionRepository {
             ended_at = quoted_nullable(&session.ended_at),
             last_event_at = esc_pg(&session.last_event_at),
             updated_at = esc_pg(&session.updated_at),
+            is_auxiliary = i32::from(is_auxiliary),
         );
         conn.execute_batch(&sql)
             .context("upserting interaction session in DuckDB")?;
@@ -213,7 +231,7 @@ impl DuckDbInteractionRepository {
         let mut sql = format!(
             "SELECT session_id, repo_id, branch, actor_id, actor_name, actor_email, actor_source,
                     agent_type, model, first_prompt, transcript_path, worktree_path, worktree_id,
-                    started_at, ended_at, last_event_at, updated_at
+                    started_at, ended_at, last_event_at, updated_at, is_auxiliary
              FROM interaction_sessions
              WHERE repo_id = '{repo_id}'",
             repo_id = esc_pg(&self.repo_id),
@@ -238,7 +256,7 @@ impl DuckDbInteractionRepository {
         let sql = format!(
             "SELECT session_id, repo_id, branch, actor_id, actor_name, actor_email, actor_source,
                     agent_type, model, first_prompt, transcript_path, worktree_path, worktree_id,
-                    started_at, ended_at, last_event_at, updated_at
+                    started_at, ended_at, last_event_at, updated_at, is_auxiliary
              FROM interaction_sessions
              WHERE repo_id = '{repo_id}' AND session_id = '{session_id}'
              LIMIT 1",

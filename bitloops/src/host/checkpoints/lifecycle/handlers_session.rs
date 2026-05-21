@@ -92,6 +92,7 @@ pub fn handle_lifecycle_session_start(
     {
         state.first_prompt = truncate_prompt_for_storage(prompt);
     }
+    state.is_auxiliary |= event.is_auxiliary;
 
     backend.save_session(&state)?;
 
@@ -110,6 +111,7 @@ pub fn handle_lifecycle_session_start(
             ended_at: None,
             last_event_at: now.clone(),
             updated_at: now.clone(),
+            is_auxiliary: state.is_auxiliary,
             ..Default::default()
         };
         if let Err(err) = spool.record_session(&session) {
@@ -233,6 +235,7 @@ pub fn handle_lifecycle_turn_start(
     if state.agent_type.trim().is_empty() {
         state.agent_type = canonical_request.agent.agent_key.clone();
     }
+    state.is_auxiliary |= event.is_auxiliary;
 
     backend.save_session(&state)?;
 
@@ -254,6 +257,7 @@ pub fn handle_lifecycle_turn_start(
             ended_at: state.ended_at.clone(),
             last_event_at: now.clone(),
             updated_at: now.clone(),
+            is_auxiliary: state.is_auxiliary,
             ..Default::default()
         };
         if let Err(err) = spool.record_session(&session) {

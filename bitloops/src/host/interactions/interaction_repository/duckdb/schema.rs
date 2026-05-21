@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS interaction_sessions (
     ended_at VARCHAR,
     last_event_at VARCHAR,
     updated_at VARCHAR,
+    is_auxiliary INTEGER DEFAULT 0,
     PRIMARY KEY (repo_id, session_id)
 )
 "#;
@@ -132,6 +133,11 @@ fn ensure_promoted_columns(conn: &duckdb::Connection) -> Result<()> {
             "interaction_sessions",
             "actor_source",
             "ALTER TABLE interaction_sessions ADD COLUMN actor_source VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_sessions",
+            "is_auxiliary",
+            "ALTER TABLE interaction_sessions ADD COLUMN is_auxiliary INTEGER DEFAULT 0",
         ),
         (
             "interaction_turns",

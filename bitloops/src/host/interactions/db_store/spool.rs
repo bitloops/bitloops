@@ -44,11 +44,11 @@ impl SqliteInteractionSpool {
             "INSERT INTO interaction_sessions (
                 session_id, repo_id, branch, actor_id, actor_name, actor_email, actor_source,
                 agent_type, model, first_prompt, transcript_path, worktree_path, worktree_id,
-                started_at, ended_at, last_event_at, updated_at
+                started_at, ended_at, last_event_at, updated_at, is_auxiliary
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7,
                 ?8, ?9, ?10, ?11, ?12, ?13,
-                ?14, ?15, ?16, ?17
+                ?14, ?15, ?16, ?17, ?18
              )
              ON CONFLICT(repo_id, session_id) DO UPDATE SET
                 branch = CASE
@@ -107,6 +107,10 @@ impl SqliteInteractionSpool {
                 updated_at = CASE
                     WHEN excluded.updated_at = '' THEN interaction_sessions.updated_at
                     ELSE excluded.updated_at
+                END,
+                is_auxiliary = CASE
+                    WHEN excluded.is_auxiliary = 1 THEN 1
+                    ELSE interaction_sessions.is_auxiliary
                 END",
             rusqlite::params![
                 session.session_id,
@@ -126,6 +130,7 @@ impl SqliteInteractionSpool {
                 session.ended_at,
                 session.last_event_at,
                 session.updated_at,
+                i64::from(session.is_auxiliary),
             ],
         )
         .context("upserting interaction session in local spool")?;
@@ -598,7 +603,7 @@ impl InteractionSpool for SqliteInteractionSpool {
                             "SELECT session_id, repo_id, branch, actor_id, actor_name, actor_email,
                                     actor_source, agent_type, model, first_prompt, transcript_path,
                                     worktree_path, worktree_id, started_at, ended_at, last_event_at,
-                                    updated_at
+                                    updated_at, is_auxiliary
                              FROM interaction_sessions
                              WHERE repo_id = ?1 AND agent_type = ?2
                              ORDER BY COALESCE(NULLIF(last_event_at, ''), started_at) DESC, session_id DESC
@@ -612,7 +617,7 @@ impl InteractionSpool for SqliteInteractionSpool {
                             "SELECT session_id, repo_id, branch, actor_id, actor_name, actor_email,
                                     actor_source, agent_type, model, first_prompt, transcript_path,
                                     worktree_path, worktree_id, started_at, ended_at, last_event_at,
-                                    updated_at
+                                    updated_at, is_auxiliary
                              FROM interaction_sessions
                              WHERE repo_id = ?1
                              ORDER BY COALESCE(NULLIF(last_event_at, ''), started_at) DESC, session_id DESC
@@ -636,7 +641,8 @@ impl InteractionSpool for SqliteInteractionSpool {
             conn.query_row(
                 "SELECT session_id, repo_id, branch, actor_id, actor_name, actor_email,
                         actor_source, agent_type, model, first_prompt, transcript_path,
-                        worktree_path, worktree_id, started_at, ended_at, last_event_at, updated_at
+                        worktree_path, worktree_id, started_at, ended_at, last_event_at, updated_at,
+                        is_auxiliary
                  FROM interaction_sessions
                  WHERE session_id = ?1 AND repo_id = ?2
                  LIMIT 1",

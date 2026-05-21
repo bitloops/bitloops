@@ -49,6 +49,7 @@ pub(super) fn map_session_row(row: &duckdb::Row<'_>) -> duckdb::Result<Interacti
         ended_at: ended_at.filter(|value| !value.trim().is_empty()),
         last_event_at: row.get(15)?,
         updated_at: row.get(16)?,
+        is_auxiliary: row.get::<_, i32>(17).unwrap_or_default() == 1,
     })
 }
 

@@ -487,6 +487,7 @@ pub(super) fn seed_graphql_historical_context_data(repo_root: &Path) {
         ended_at: Some("2026-03-26T09:11:00Z".to_string()),
         last_event_at: "2026-03-26T09:11:00Z".to_string(),
         updated_at: "2026-03-26T09:11:00Z".to_string(),
+        is_auxiliary: false,
     };
     spool
         .record_session(&session)

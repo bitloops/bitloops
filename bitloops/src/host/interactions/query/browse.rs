@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -19,6 +19,28 @@ use crate::host::checkpoints::lifecycle::interaction::resolve_interaction_spool;
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
 use crate::host::interactions::types::InteractionEvent;
 
+fn session_is_visible(summary: &InteractionSessionSummary) -> bool {
+    !summary.session.is_auxiliary
+}
+
+fn turn_is_visible(
+    summary: &InteractionTurnSummary,
+    session_summaries: &HashMap<String, InteractionSessionSummary>,
+) -> bool {
+    session_summaries
+        .get(&summary.turn.session_id)
+        .is_some_and(|session| !session.session.is_auxiliary)
+}
+
+fn event_is_visible(
+    event: &InteractionEvent,
+    session_summaries: &HashMap<String, InteractionSessionSummary>,
+) -> bool {
+    session_summaries
+        .get(&event.session_id)
+        .is_some_and(|session| !session.session.is_auxiliary)
+}
+
 pub(crate) fn list_session_summaries(
     repo_root: &Path,
     filter: &InteractionBrowseFilter,
@@ -27,7 +49,7 @@ pub(crate) fn list_session_summaries(
     let mut sessions = state
         .session_summaries
         .into_values()
-        .filter(|session| session_matches_filter(session, filter))
+        .filter(|session| session_is_visible(session) && session_matches_filter(session, filter))
         .collect::<Vec<_>>();
     sessions.sort_by_key(|session| Reverse(session_sort_key(session)));
     Ok(sessions)
@@ -38,10 +60,13 @@ pub(crate) fn list_turn_summaries(
     filter: &InteractionBrowseFilter,
 ) -> Result<Vec<InteractionTurnSummary>> {
     let state = load_state(repo_root)?;
+    let session_summaries = state.session_summaries.clone();
     let mut turns = state
         .turn_summaries
         .into_values()
-        .filter(|turn| turn_matches_filter(turn, filter))
+        .filter(|turn| {
+            turn_is_visible(turn, &session_summaries) && turn_matches_filter(turn, filter)
+        })
         .collect::<Vec<_>>();
     turns.sort_by_key(|turn| Reverse(turn_sort_key(turn)));
     Ok(turns)
@@ -55,7 +80,10 @@ pub(crate) fn list_events(
     let mut events = state
         .events
         .iter()
-        .filter(|event| event_matches_filter(event, &state, filter))
+        .filter(|event| {
+            event_is_visible(event, &state.session_summaries)
+                && event_matches_filter(event, &state, filter)
+        })
         .cloned()
         .collect::<Vec<_>>();
     events.sort_by(|left, right| {
@@ -183,7 +211,7 @@ pub(crate) fn interaction_change_snapshot(repo_root: &Path) -> Result<Interactio
         let session_count = conn.query_row(
             "SELECT COUNT(*)
              FROM interaction_sessions
-             WHERE repo_id = ?1",
+             WHERE repo_id = ?1 AND is_auxiliary = 0",
             rusqlite::params![spool.repo_id()],
             |row| row.get::<_, i64>(0),
         )?;
@@ -199,7 +227,7 @@ pub(crate) fn interaction_change_snapshot(repo_root: &Path) -> Result<Interactio
                                ''
                            ) AS changed_at
                     FROM interaction_sessions
-                    WHERE repo_id = ?1
+                    WHERE repo_id = ?1 AND is_auxiliary = 0
                  )
                  ORDER BY changed_at DESC, session_id DESC
                  LIMIT 1",
@@ -210,8 +238,11 @@ pub(crate) fn interaction_change_snapshot(repo_root: &Path) -> Result<Interactio
 
         let turn_count = conn.query_row(
             "SELECT COUNT(*)
-             FROM interaction_turns
-             WHERE repo_id = ?1",
+             FROM interaction_turns AS turns
+             INNER JOIN interaction_sessions AS sessions
+                ON sessions.repo_id = turns.repo_id
+               AND sessions.session_id = turns.session_id
+             WHERE turns.repo_id = ?1 AND sessions.is_auxiliary = 0",
             rusqlite::params![spool.repo_id()],
             |row| row.get::<_, i64>(0),
         )?;
@@ -219,15 +250,18 @@ pub(crate) fn interaction_change_snapshot(repo_root: &Path) -> Result<Interactio
             .query_row(
                 "SELECT turn_id, changed_at
                  FROM (
-                    SELECT turn_id,
+                    SELECT turns.turn_id,
                            COALESCE(
-                               NULLIF(updated_at, ''),
-                               NULLIF(ended_at, ''),
-                               NULLIF(started_at, ''),
+                               NULLIF(turns.updated_at, ''),
+                               NULLIF(turns.ended_at, ''),
+                               NULLIF(turns.started_at, ''),
                                ''
                            ) AS changed_at
-                    FROM interaction_turns
-                    WHERE repo_id = ?1
+                    FROM interaction_turns AS turns
+                    INNER JOIN interaction_sessions AS sessions
+                       ON sessions.repo_id = turns.repo_id
+                      AND sessions.session_id = turns.session_id
+                    WHERE turns.repo_id = ?1 AND sessions.is_auxiliary = 0
                  )
                  ORDER BY changed_at DESC, turn_id DESC
                  LIMIT 1",
