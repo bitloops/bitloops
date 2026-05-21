@@ -4297,6 +4297,94 @@ fn run_init_with_install_default_daemon_can_skip_summaries_via_flag() {
 }
 
 #[test]
+fn run_init_no_summaries_persists_repo_summary_mode_off_even_with_daemon_provider() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_generation_configured(&app_dirs, false, true, true, true, || {
+        let config_path = ensure_daemon_config_exists().expect("create default daemon config");
+        std::fs::write(
+            &config_path,
+            r#"
+[runtime]
+local_dev = false
+
+[semantic_clones]
+summary_mode = "auto"
+
+[semantic_clones.inference]
+summary_generation = "daemon_summary"
+
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+
+[inference.profiles.daemon_summary]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "daemon-summary-model"
+"#,
+        )
+        .expect("write daemon config");
+
+        with_global_graphql_executor_hook(
+            |_runtime_root, _query, variables| {
+                assert_eq!(variables["telemetry"], serde_json::json!(false));
+                Ok(serde_json::json!({
+                    "updateCliTelemetryConsent": {
+                        "telemetry": false,
+                        "needsPrompt": false
+                    }
+                }))
+            },
+            || {
+                let mut out = Vec::new();
+                let mut input = Cursor::new("");
+                let runtime = test_runtime();
+                runtime
+                    .block_on(run_with_io_async_for_project_root(
+                        InitArgs {
+                            command: None,
+                            install_default_daemon: false,
+                            force: false,
+                            disable_devql_guidance: false,
+                            agent: vec![DEFAULT_AGENT.to_string()],
+                            telemetry: Some(false),
+                            no_telemetry: false,
+                            skip_baseline: false,
+                            sync: Some(false),
+                            ingest: Some(false),
+                            backfill: None,
+                            exclude: Vec::new(),
+                            exclude_from: Vec::new(),
+                            embeddings_runtime: None,
+                            no_embeddings: false,
+                            no_summaries: true,
+                            context_guidance_runtime: None,
+                            no_context_guidance: true,
+                            context_guidance_gateway_url: None,
+                            context_guidance_api_key_env: None,
+                            embeddings_gateway_url: None,
+                            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                        },
+                        repo.path(),
+                        &mut out,
+                        &mut input,
+                        None,
+                    ))
+                    .expect("run init");
+
+                let policy = std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+                    .expect("read policy");
+                assert!(policy.contains("summary_mode = \"off\""));
+                assert!(!policy.contains("summary_generation = "));
+            },
+        );
+    });
+}
+
+#[test]
 fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_accepted() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
