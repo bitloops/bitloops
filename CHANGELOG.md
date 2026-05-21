@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Changed
+
+- **Init summaries configuration now uses runtime selection**: replaced `--summaries-mode` with `--summaries-runtime local|platform`, kept `--no-summaries` as explicit opt-out, and aligned summaries setup UX with embeddings.
+
 ## [0.0.30] - 2026-05-21
 
 ### Fixed
