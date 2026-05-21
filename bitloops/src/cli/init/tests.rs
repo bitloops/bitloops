@@ -5489,7 +5489,7 @@ model = "text-embedding-3-small"
                                 .expect("read local policy");
                         assert!(policy.contains("embedding_mode = \"semantic_aware_once\""));
                         assert!(policy.contains("code_embeddings = \"daemon_code_profile\""));
-                        assert!(policy.contains("summary_embeddings = \"daemon_code_profile\""));
+                        assert!(policy.contains("summary_embeddings = \"daemon_summary_profile\""));
                     },
                 );
             },

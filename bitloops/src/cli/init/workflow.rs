@@ -272,7 +272,8 @@ pub(crate) async fn run_for_project_root(
     let mut embeddings_bootstrap = None;
     let mut embeddings_bootstrap_rollback_plan = None;
     let mut prepared_summary_setup = None;
-    let mut selected_embedding_profile_name: Option<String> = None;
+    let mut selected_code_embedding_profile_name: Option<String> = None;
+    let mut selected_summary_embedding_profile_name: Option<String> = None;
     let mut selected_summary_generation_profile_name: Option<String> = None;
     let mut login_required = false;
     let embeddings_selection = should_install_embeddings_during_init(
@@ -285,10 +286,17 @@ pub(crate) async fn run_for_project_root(
     match embeddings_selection {
         InitEmbeddingsSetupSelection::Unchanged => {}
         InitEmbeddingsSetupSelection::Existing => {
-            selected_embedding_profile_name =
-                embedding_profile_name_from_policy(&previous_embeddings_policy)
-                    .map(str::to_string)
-                    .or(existing_init_embedding_profile_name(project_root)?);
+            let profile_names = {
+                let previous_profile_names =
+                    embedding_profile_names_from_policy(&previous_embeddings_policy);
+                if previous_profile_names.has_any() {
+                    previous_profile_names
+                } else {
+                    existing_init_embedding_profile_names(project_root)?
+                }
+            };
+            selected_code_embedding_profile_name = profile_names.code_embeddings;
+            selected_summary_embedding_profile_name = profile_names.summary_embeddings;
         }
         InitEmbeddingsSetupSelection::Cloud => {
             login_required = true;
@@ -301,7 +309,9 @@ pub(crate) async fn run_for_project_root(
                     gateway_url.as_deref(),
                     Some(args.embeddings_api_key_env.as_str()),
                 )?;
-                selected_embedding_profile_name =
+                selected_code_embedding_profile_name =
+                    Some(prepared_bootstrap.request.profile_name.clone());
+                selected_summary_embedding_profile_name =
                     Some(prepared_bootstrap.request.profile_name.clone());
                 embeddings_bootstrap_rollback_plan = prepared_bootstrap.rollback_plan;
                 embeddings_bootstrap = Some(prepared_bootstrap.request);
@@ -313,8 +323,9 @@ pub(crate) async fn run_for_project_root(
                 )? {
                     writeln!(out, "{line}")?;
                 }
-                selected_embedding_profile_name =
-                    existing_init_embedding_profile_name(project_root)?;
+                let profile_names = existing_init_embedding_profile_names(project_root)?;
+                selected_code_embedding_profile_name = profile_names.code_embeddings;
+                selected_summary_embedding_profile_name = profile_names.summary_embeddings;
             }
         }
         InitEmbeddingsSetupSelection::Local => {
@@ -325,14 +336,17 @@ pub(crate) async fn run_for_project_root(
                     None,
                     None,
                 )?;
-                selected_embedding_profile_name =
+                selected_code_embedding_profile_name =
+                    Some(prepared_bootstrap.request.profile_name.clone());
+                selected_summary_embedding_profile_name =
                     Some(prepared_bootstrap.request.profile_name.clone());
                 embeddings_bootstrap_rollback_plan = prepared_bootstrap.rollback_plan;
                 embeddings_bootstrap = Some(prepared_bootstrap.request);
             } else {
                 install_embeddings_during_init(project_root, out)?;
-                selected_embedding_profile_name =
-                    existing_init_embedding_profile_name(project_root)?;
+                let profile_names = existing_init_embedding_profile_names(project_root)?;
+                selected_code_embedding_profile_name = profile_names.code_embeddings;
+                selected_summary_embedding_profile_name = profile_names.summary_embeddings;
             }
         }
         InitEmbeddingsSetupSelection::Skip => {}
@@ -459,7 +473,8 @@ pub(crate) async fn run_for_project_root(
     persist_init_semantic_policy(
         &local_policy_path,
         &final_setup_selection,
-        selected_embedding_profile_name.as_deref(),
+        selected_code_embedding_profile_name.as_deref(),
+        selected_summary_embedding_profile_name.as_deref(),
         selected_summary_generation_profile_name.as_deref(),
     )?;
     let summaries_selected =
@@ -707,13 +722,15 @@ model = "local-model"
 fn persist_init_semantic_policy(
     local_policy_path: &Path,
     selection: &super::final_setup::InitFinalSetupSelection,
-    embedding_profile_name: Option<&str>,
+    code_embedding_profile_name: Option<&str>,
+    summary_embedding_profile_name: Option<&str>,
     summary_generation_profile_name: Option<&str>,
 ) -> Result<()> {
     let summaries = selection.summaries && summary_generation_profile_name.is_some();
-    let code_embeddings = selection.code_embeddings && embedding_profile_name.is_some();
-    let summary_embeddings =
-        selection.summary_embeddings && selection.summaries && embedding_profile_name.is_some();
+    let code_embeddings = selection.code_embeddings && code_embedding_profile_name.is_some();
+    let summary_embeddings = selection.summary_embeddings
+        && selection.summaries
+        && summary_embedding_profile_name.is_some();
     let embedding_mode = if code_embeddings || summary_embeddings {
         Some(SemanticCloneEmbeddingMode::SemanticAwareOnce)
     } else {
@@ -737,13 +754,13 @@ fn persist_init_semantic_policy(
                         .to_string()
                 }),
                 code_embeddings: code_embeddings.then(|| {
-                    embedding_profile_name
-                        .expect("embedding profile checked above")
+                    code_embedding_profile_name
+                        .expect("code embedding profile checked above")
                         .to_string()
                 }),
                 summary_embeddings: summary_embeddings.then(|| {
-                    embedding_profile_name
-                        .expect("embedding profile checked above")
+                    summary_embedding_profile_name
+                        .expect("summary embedding profile checked above")
                         .to_string()
                 }),
             },
@@ -751,33 +768,69 @@ fn persist_init_semantic_policy(
     )
 }
 
-fn existing_init_embedding_profile_name(repo_root: &Path) -> Result<Option<String>> {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct InitEmbeddingProfileNames {
+    code_embeddings: Option<String>,
+    summary_embeddings: Option<String>,
+}
+
+impl InitEmbeddingProfileNames {
+    fn has_any(&self) -> bool {
+        self.code_embeddings.is_some() || self.summary_embeddings.is_some()
+    }
+}
+
+fn existing_init_embedding_profile_names(repo_root: &Path) -> Result<InitEmbeddingProfileNames> {
     let existing_policy = repo_semantic_embedding_policy(repo_root)?;
-    if let Some(profile_name) = embedding_profile_name_from_policy(&existing_policy) {
-        return Ok(Some(profile_name.to_string()));
+    let policy_profile_names = embedding_profile_names_from_policy(&existing_policy);
+    if policy_profile_names.has_any() {
+        return Ok(policy_profile_names);
     }
 
     let config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)
         .or_else(|_| crate::config::resolve_daemon_config_path_for_repo(repo_root))?;
     let capability = crate::cli::embeddings::embedding_capability_for_config_path(&config_path)?;
-    Ok(crate::cli::embeddings::selected_inference_profile_name(&capability).map(str::to_string))
-}
-
-fn embedding_profile_name_from_policy(policy: &RepoSemanticEmbeddingPolicy) -> Option<&str> {
-    policy
-        .inference
-        .code_embeddings
-        .as_deref()
-        .map(str::trim)
-        .filter(|profile| !profile.is_empty())
-        .or_else(|| {
-            policy
+    let mut profile_names = InitEmbeddingProfileNames {
+        code_embeddings: trimmed_profile_name(
+            capability
+                .semantic_clones
+                .inference
+                .code_embeddings
+                .as_deref(),
+        ),
+        summary_embeddings: trimmed_profile_name(
+            capability
+                .semantic_clones
                 .inference
                 .summary_embeddings
-                .as_deref()
-                .map(str::trim)
-                .filter(|profile| !profile.is_empty())
-        })
+                .as_deref(),
+        ),
+    };
+    if !profile_names.has_any()
+        && let Some(profile_name) =
+            crate::cli::embeddings::selected_inference_profile_name(&capability)
+    {
+        let profile_name = profile_name.to_string();
+        profile_names.code_embeddings = Some(profile_name.clone());
+        profile_names.summary_embeddings = Some(profile_name);
+    }
+    Ok(profile_names)
+}
+
+fn embedding_profile_names_from_policy(
+    policy: &RepoSemanticEmbeddingPolicy,
+) -> InitEmbeddingProfileNames {
+    InitEmbeddingProfileNames {
+        code_embeddings: trimmed_profile_name(policy.inference.code_embeddings.as_deref()),
+        summary_embeddings: trimmed_profile_name(policy.inference.summary_embeddings.as_deref()),
+    }
+}
+
+fn trimmed_profile_name(profile_name: Option<&str>) -> Option<String> {
+    profile_name
+        .map(str::trim)
+        .filter(|profile| !profile.is_empty())
+        .map(str::to_string)
 }
 
 fn existing_init_summary_generation_profile_name(repo_root: &Path) -> Option<String> {
