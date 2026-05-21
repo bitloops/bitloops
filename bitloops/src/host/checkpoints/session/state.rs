@@ -127,6 +127,10 @@ pub struct SessionState {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub agent_type: String,
 
+    /// Whether this session came from an auxiliary/background rollout.
+    #[serde(default)]
+    pub is_auxiliary: bool,
+
     /// Checkpoint ID from the most recent condensation.
     /// Used by `prepare-commit-msg` on `git commit --amend`.
     #[serde(default, skip_serializing_if = "String::is_empty")]

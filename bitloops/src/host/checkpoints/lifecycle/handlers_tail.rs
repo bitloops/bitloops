@@ -159,6 +159,11 @@ pub fn handle_lifecycle_session_end(
     }
     let ended_at = now_rfc3339();
     let maybe_state = backend.load_session(&session_id)?;
+    let session_is_auxiliary = maybe_state
+        .as_ref()
+        .map(|state| state.is_auxiliary)
+        .unwrap_or(false)
+        || event.is_auxiliary;
     if let Some(mut state) = maybe_state.clone() {
         let context = SessionTransitionContext {
             has_files_touched: !state.pending.files_touched.is_empty(),
@@ -169,6 +174,7 @@ pub fn handle_lifecycle_session_end(
         apply_session_transition(&mut state, transition, &mut SessionNoOpActionHandler)?;
         state.ended_at = Some(ended_at.clone());
         state.last_interaction_time = Some(ended_at.clone());
+        state.is_auxiliary = session_is_auxiliary;
         backend.save_session(&state)?;
     }
     let transcript_path = maybe_state
@@ -192,6 +198,7 @@ pub fn handle_lifecycle_session_end(
                 ended_at: Some(ended_at.clone()),
                 last_event_at: ended_at.clone(),
                 updated_at: ended_at.clone(),
+                is_auxiliary: session_is_auxiliary,
                 ..Default::default()
             })
             .unwrap_or(InteractionSession {
@@ -201,6 +208,7 @@ pub fn handle_lifecycle_session_end(
                 ended_at: Some(ended_at.clone()),
                 last_event_at: ended_at.clone(),
                 updated_at: ended_at.clone(),
+                is_auxiliary: session_is_auxiliary,
                 ..Default::default()
             });
         if let Err(err) = spool.record_session(&session) {

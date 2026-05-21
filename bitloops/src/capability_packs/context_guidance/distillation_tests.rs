@@ -6,6 +6,7 @@ use super::{
     GuidanceDistillationInput, GuidanceDistiller, GuidanceToolEvidence,
     build_guidance_distillation_prompt, parse_guidance_distillation_output,
     parse_guidance_distillation_output_for_input,
+    parse_guidance_distillation_output_for_input_with_report,
 };
 use crate::capability_packs::context_guidance::types::{
     GuidanceFactCategory, GuidanceFactConfidence,
@@ -49,10 +50,13 @@ fn input_with_one_modified_file() -> GuidanceDistillationInput {
         transcript_fragment: Some("Replaced fragile keyword-name parsing.".to_string()),
         files_modified: vec!["axum-macros/src/attr_parsing.rs".to_string()],
         tool_events: vec![GuidanceToolEvidence {
+            event_type: Some("tool_invocation_observed".to_string()),
             tool_kind: Some("shell".to_string()),
             input_summary: Some("cargo nextest run --lib artefact_selection".to_string()),
             output_summary: Some("passed".to_string()),
             command: Some("cargo nextest run --lib artefact_selection".to_string()),
+            file_path: None,
+            evidence_text: None,
         }],
     }
 }
@@ -348,6 +352,7 @@ fn parse_guidance_distillation_output_drops_low_value_facts() -> Result<()> {
   },
   "confidence": "HIGH"
 }
+
   ]
 }"#;
 
@@ -366,6 +371,119 @@ fn parse_guidance_distillation_output_drops_low_value_facts() -> Result<()> {
 }
 
 #[test]
+fn parse_guidance_distillation_output_for_input_reports_target_and_quality_drops() -> Result<()> {
+    let mut input = input_with_one_modified_file();
+    input.files_modified = vec![
+        "src/api/response.rs".to_string(),
+        "src/api/users_handler.rs".to_string(),
+    ];
+
+    let raw = r#"{
+      "summary": {
+        "intent": "Refactor API responses.",
+        "outcome": "Introduced typed response values.",
+        "decisions": ["Use HttpResponse instead of raw strings."],
+        "rejectedApproaches": [],
+        "patterns": [],
+        "verification": ["4 tests passed."],
+        "openItems": []
+      },
+      "guidanceFacts": [
+        {
+          "category": "DECISION",
+          "kind": "typed_response_without_target",
+          "guidance": "Keep API handlers returning typed response values instead of raw strings.",
+          "evidenceExcerpt": "User chose HttpResponse and no Display compatibility shim.",
+          "appliesTo": { "paths": [], "symbols": [] },
+          "confidence": "HIGH"
+        },
+        {
+          "category": "VERIFICATION",
+          "kind": "generic_tests_passed",
+          "guidance": "The tests passed after the refactor completed.",
+          "evidenceExcerpt": "4 tests passed after the work completed.",
+          "appliesTo": { "paths": ["tests/api_contract_test.rs"], "symbols": [] },
+          "confidence": "MEDIUM"
+        },
+        {
+          "category": "DECISION",
+          "kind": "typed_response_targeted",
+          "guidance": "Keep API handlers returning HttpResponse so status and body remain explicit.",
+          "evidenceExcerpt": "The implementation introduced src/api/response.rs and updated handlers to return HttpResponse.",
+          "appliesTo": { "paths": ["src/api/response.rs"], "symbols": [] },
+          "confidence": "HIGH"
+        }
+      ]
+    }"#;
+
+    let distilled = parse_guidance_distillation_output_for_input_with_report(raw, &input)?;
+
+    assert_eq!(distilled.report.raw_fact_count, 3);
+    assert_eq!(distilled.report.validation_input_fact_count, 3);
+    assert_eq!(distilled.report.validation_kept_fact_count, 2);
+    assert_eq!(distilled.report.quality_input_fact_count, 2);
+    assert_eq!(distilled.report.quality_kept_fact_count, 1);
+    assert_eq!(distilled.output.guidance_facts.len(), 1);
+    assert_eq!(
+        distilled.output.guidance_facts[0].kind,
+        "typed_response_targeted"
+    );
+    assert_eq!(
+        distilled.report.validation_discards[0].kind,
+        "typed_response_without_target"
+    );
+    assert_eq!(
+        distilled.report.quality_discards[0].kind,
+        "generic_tests_passed"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn parse_guidance_distillation_output_infers_targets_from_fact_text_for_multifile_turn()
+-> Result<()> {
+    let mut input = input_with_one_modified_file();
+    input.files_modified = vec![
+        "src/api/response.rs".to_string(),
+        "src/api/users_handler.rs".to_string(),
+        "tests/api_contract_test.rs".to_string(),
+    ];
+
+    let raw = r#"{
+      "summary": {
+        "intent": "Refactor API responses.",
+        "outcome": "Introduced typed response values.",
+        "decisions": ["Use HttpResponse instead of raw strings."],
+        "rejectedApproaches": [],
+        "patterns": [],
+        "verification": [],
+        "openItems": []
+      },
+      "guidanceFacts": [
+        {
+          "category": "DECISION",
+          "kind": "typed_http_response",
+          "guidance": "Keep API handlers returning HttpResponse so status and body stay explicit in src/api/response.rs.",
+          "evidenceExcerpt": "The implementation introduced src/api/response.rs and updated handlers to return HttpResponse.",
+          "appliesTo": { "paths": [], "symbols": [] },
+          "confidence": "HIGH"
+        }
+      ]
+    }"#;
+
+    let parsed = parse_guidance_distillation_output_for_input(raw, &input)?;
+
+    assert_eq!(parsed.guidance_facts.len(), 1);
+    assert_eq!(
+        parsed.guidance_facts[0].applies_to.paths,
+        vec!["src/api/response.rs"]
+    );
+
+    Ok(())
+}
+
+#[test]
 fn build_guidance_distillation_prompt_bounds_large_history_input() {
     let mut input = input_with_one_modified_file();
     input.prompt = Some("large prompt ".repeat(1_000));
@@ -375,10 +493,13 @@ fn build_guidance_distillation_prompt_bounds_large_history_input() {
         .collect();
     input.tool_events = (0..20)
         .map(|index| GuidanceToolEvidence {
+            event_type: Some("tool_invocation_observed".to_string()),
             tool_kind: Some("shell".to_string()),
             input_summary: Some(format!("input {index} {}", "x".repeat(5_000))),
             output_summary: Some(format!("output {index} {}", "y".repeat(5_000))),
             command: Some(format!("cargo check {index} {}", "z".repeat(5_000))),
+            file_path: None,
+            evidence_text: None,
         })
         .collect();
 
@@ -389,6 +510,114 @@ fn build_guidance_distillation_prompt_bounds_large_history_input() {
     assert!(prompt.contains("omitted_tool_events: 14"));
     assert!(prompt.contains("omitted_paths: 30"));
     assert!(prompt.contains("src/generated/path_0.rs"));
+}
+
+#[test]
+fn build_guidance_distillation_prompt_prioritizes_write_edit_and_test_evidence() {
+    let mut input = input_with_one_modified_file();
+    input.prompt = Some("Do it".to_string());
+    input.files_modified = vec![
+        "src/api/response.rs".to_string(),
+        "src/api/routes.rs".to_string(),
+        "src/api/users_handler.rs".to_string(),
+        "tests/api_contract_test.rs".to_string(),
+    ];
+    input.transcript_fragment = Some(format!(
+        "{}\nDecisions locked in: use HttpResponse, no Display shim, typed routes.\n{}",
+        "exploration noise ".repeat(1_000),
+        "more noise ".repeat(1_000)
+    ));
+    input.tool_events = vec![
+        GuidanceToolEvidence {
+            event_type: Some("tool_invocation_observed".to_string()),
+            tool_kind: Some("Read".to_string()),
+            input_summary: Some("src/unrelated_0.rs".to_string()),
+            output_summary: None,
+            command: None,
+            file_path: Some("src/unrelated_0.rs".to_string()),
+            evidence_text: None,
+        },
+        GuidanceToolEvidence {
+            event_type: Some("tool_invocation_observed".to_string()),
+            tool_kind: Some("Read".to_string()),
+            input_summary: Some("src/unrelated_1.rs".to_string()),
+            output_summary: None,
+            command: None,
+            file_path: Some("src/unrelated_1.rs".to_string()),
+            evidence_text: None,
+        },
+        GuidanceToolEvidence {
+            event_type: Some("tool_invocation_observed".to_string()),
+            tool_kind: Some("Read".to_string()),
+            input_summary: Some("src/unrelated_2.rs".to_string()),
+            output_summary: None,
+            command: None,
+            file_path: Some("src/unrelated_2.rs".to_string()),
+            evidence_text: None,
+        },
+        GuidanceToolEvidence {
+            event_type: Some("tool_invocation_observed".to_string()),
+            tool_kind: Some("Write".to_string()),
+            input_summary: Some("src/api/response.rs".to_string()),
+            output_summary: None,
+            command: None,
+            file_path: Some("src/api/response.rs".to_string()),
+            evidence_text: Some(
+                "create src/api/response.rs with HttpResponse { status: u16, body: ResponseBody } and ResponseBody::UserCreated".to_string(),
+            ),
+        },
+        GuidanceToolEvidence {
+            event_type: Some("tool_result_observed".to_string()),
+            tool_kind: Some("Bash".to_string()),
+            input_summary: Some("cargo test --quiet".to_string()),
+            output_summary: Some(
+                "error[E0277]: HttpResponse doesn't implement std::fmt::Display in src/main.rs"
+                    .to_string(),
+            ),
+            command: Some("cargo test --quiet".to_string()),
+            file_path: None,
+            evidence_text: Some(
+                "cargo test failed because main.rs still formatted HttpResponse with Display"
+                    .to_string(),
+            ),
+        },
+        GuidanceToolEvidence {
+            event_type: Some("tool_result_observed".to_string()),
+            tool_kind: Some("Bash".to_string()),
+            input_summary: Some("cargo test --quiet".to_string()),
+            output_summary: Some("running 4 tests .... test result: ok. 4 passed".to_string()),
+            command: Some("cargo test --quiet".to_string()),
+            file_path: None,
+            evidence_text: Some(
+                "reran cargo test --quiet after updating main.rs debug formatting; 4 api contract tests passed"
+                    .to_string(),
+            ),
+        },
+    ];
+
+    let prompt = build_guidance_distillation_prompt(&input);
+
+    assert!(prompt.contains("high_value_tool_events:"));
+    assert!(prompt.contains("src/api/response.rs"));
+    assert!(prompt.contains("HttpResponse { status: u16, body: ResponseBody }"));
+    assert!(prompt.contains("Display"));
+    assert!(prompt.contains("4 api contract tests passed"));
+    assert!(prompt.contains("Decisions locked in: use HttpResponse"));
+}
+
+#[test]
+fn build_guidance_distillation_prompt_preserves_multiple_high_value_transcript_lines() {
+    let mut input = input_with_one_modified_file();
+    input.transcript_fragment = Some(format!(
+        "Decision: keep the early routing behavior.\n{}\nDecisions locked in: use HttpResponse and no Display shim.\n{}",
+        "middle exploration noise ".repeat(1_000),
+        "tail exploration noise ".repeat(1_000)
+    ));
+
+    let prompt = build_guidance_distillation_prompt(&input);
+
+    assert!(prompt.contains("Decision: keep the early routing behavior."));
+    assert!(prompt.contains("Decisions locked in: use HttpResponse and no Display shim."));
 }
 
 #[test]
@@ -429,6 +658,28 @@ fn build_guidance_distillation_prompt_declares_future_session_value_contract() {
     assert!(prompt.contains("invariant"));
     assert!(prompt.contains("dependency"));
     assert!(prompt.contains("ownership"));
+}
+
+#[test]
+fn build_guidance_distillation_prompt_requires_decisions_to_be_fact_candidates() {
+    let prompt = build_guidance_distillation_prompt(&input_with_one_modified_file());
+
+    assert!(
+        prompt.contains(
+            "Durable decisions in summary.decisions must also be emitted as guidanceFacts"
+        )
+    );
+    assert!(
+        prompt.contains("Every guidanceFact must include appliesTo.paths or appliesTo.symbols")
+    );
+    assert!(
+        prompt.contains(
+            "For multi-file refactors, target the production files that own the decision"
+        )
+    );
+    assert!(prompt.contains(
+        "Use tests as evidence unless the guidance is specifically about test contracts"
+    ));
 }
 
 struct FakeTextGenerationService {

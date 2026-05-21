@@ -32,9 +32,18 @@ pub(crate) fn record_task_completion_seq(session: &mut InitSessionRecord, task: 
         return;
     }
     if session.follow_up_sync_task_id.as_deref() == Some(task.task_id.as_str()) {
-        assign_completion_seq(
+        let completion_already_recorded =
+            session
+                .follow_up_sync_terminal
+                .as_ref()
+                .is_some_and(|terminal| {
+                    terminal.task_id == task.task_id
+                        && terminal.status == DevqlTaskStatus::Completed
+                });
+        assign_completion_seq_for_repeatable_task(
             &mut session.next_completion_seq,
             &mut session.follow_up_sync_completion_seq,
+            completion_already_recorded,
         );
         return;
     }
@@ -55,6 +64,18 @@ pub(crate) fn record_task_completion_seq(session: &mut InitSessionRecord, task: 
 
 fn assign_completion_seq(next_completion_seq: &mut u64, target: &mut Option<u64>) {
     if target.is_some() {
+        return;
+    }
+    *next_completion_seq += 1;
+    *target = Some(*next_completion_seq);
+}
+
+fn assign_completion_seq_for_repeatable_task(
+    next_completion_seq: &mut u64,
+    target: &mut Option<u64>,
+    completion_already_recorded: bool,
+) {
+    if completion_already_recorded {
         return;
     }
     *next_completion_seq += 1;

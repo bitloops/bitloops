@@ -143,6 +143,7 @@ pub(super) fn record_session_start_interaction(
             ended_at: state.ended_at.clone(),
             last_event_at: event_time.clone(),
             updated_at: event_time.clone(),
+            is_auxiliary: state.is_auxiliary,
         };
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
@@ -212,6 +213,7 @@ pub(super) fn record_turn_start_interaction(
             ended_at: state.ended_at.clone(),
             last_event_at: event_time.clone(),
             updated_at: event_time.clone(),
+            is_auxiliary: state.is_auxiliary,
         };
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
@@ -338,6 +340,7 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
             ended_at: state.and_then(|state| state.ended_at.clone()),
             last_event_at: event_time.clone(),
             updated_at: event_time.clone(),
+            is_auxiliary: state.map(|state| state.is_auxiliary).unwrap_or(false),
         };
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
@@ -506,6 +509,7 @@ pub(super) fn record_session_end_interaction(
             ended_at: Some(ended_at.clone()),
             last_event_at: ended_at.clone(),
             updated_at: ended_at.clone(),
+            is_auxiliary: state.map(|state| state.is_auxiliary).unwrap_or(false),
         };
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session end: {err}");

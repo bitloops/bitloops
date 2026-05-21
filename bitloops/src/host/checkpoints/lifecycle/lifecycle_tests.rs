@@ -58,6 +58,7 @@ fn sample_event(event_type: LifecycleEventType) -> LifecycleEvent {
         tool_response: None,
         subagent_id: String::from("subagent-1"),
         model: String::new(),
+        is_auxiliary: false,
         finalize_open_turn: false,
     }
 }
@@ -109,6 +110,17 @@ fn session_transcript_path_for(repo_root: &Path, session_id: &str) -> String {
     .unwrap_or_else(|err| {
         panic!("read interaction_sessions.transcript_path for {session_id}: {err}")
     })
+}
+
+fn session_is_auxiliary_for(repo_root: &Path, session_id: &str) -> bool {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT is_auxiliary FROM interaction_sessions WHERE session_id = ?1",
+        [session_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|value| value == 1)
+    .unwrap_or_else(|err| panic!("read interaction_sessions.is_auxiliary for {session_id}: {err}"))
 }
 
 fn latest_turn_end_payload(repo_root: &Path) -> serde_json::Value {
@@ -274,6 +286,35 @@ fn test_handle_lifecycle_session_start_persists_session_state() {
         assert_eq!(state.transcript_path, event.session_ref);
         assert_eq!(state.agent_type, "copilot");
         assert!(state.last_interaction_time.is_some());
+    });
+}
+
+#[test]
+fn test_handle_lifecycle_session_start_spools_auxiliary_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_cwd(dir.path(), || {
+        let adapter = CodexLifecycleAdapter;
+        let mut event = sample_event(LifecycleEventType::SessionStart);
+        event.session_id = "codex-aux-session".to_string();
+        event.session_ref = dir
+            .path()
+            .join("aux-session.jsonl")
+            .to_string_lossy()
+            .to_string();
+        event.is_auxiliary = true;
+
+        handle_lifecycle_session_start(&adapter, &event)
+            .expect("session start should persist auxiliary flag");
+
+        let backend = create_session_backend_or_local(dir.path());
+        let state = backend
+            .load_session("codex-aux-session")
+            .unwrap()
+            .expect("session should exist");
+        assert!(state.is_auxiliary);
+        assert!(session_is_auxiliary_for(dir.path(), "codex-aux-session"));
     });
 }
 

@@ -165,6 +165,39 @@ impl crate::host::capability_host::gateways::CapabilityWorkplaneGateway
     }
 }
 
+struct ConfiguredRoleAdjudicationInferenceGateway;
+
+impl crate::host::inference::InferenceGateway for ConfiguredRoleAdjudicationInferenceGateway {
+    fn embeddings(
+        &self,
+        slot_name: &str,
+    ) -> anyhow::Result<std::sync::Arc<dyn crate::host::inference::EmbeddingService>> {
+        anyhow::bail!("embedding inference is not available for slot `{slot_name}`")
+    }
+
+    fn text_generation(
+        &self,
+        slot_name: &str,
+    ) -> anyhow::Result<std::sync::Arc<dyn crate::host::inference::TextGenerationService>> {
+        anyhow::bail!("text-generation inference is not available for slot `{slot_name}`")
+    }
+
+    fn structured_generation(
+        &self,
+        slot_name: &str,
+    ) -> anyhow::Result<std::sync::Arc<dyn crate::host::inference::StructuredGenerationService>>
+    {
+        anyhow::bail!(
+            "structured-generation inference should not execute in current-state tests for slot `{slot_name}`"
+        )
+    }
+
+    fn has_slot(&self, slot_name: &str) -> bool {
+        slot_name
+            == crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT
+    }
+}
+
 struct ArchitectureConsumerTestContext {
     _temp: tempfile::TempDir,
     sqlite_path: std::path::PathBuf,
@@ -177,6 +210,14 @@ async fn architecture_consumer_test_context(
     repo_id: &str,
 ) -> anyhow::Result<ArchitectureConsumerTestContext> {
     architecture_consumer_test_context_with_config(repo_id, json!({})).await
+}
+
+async fn architecture_consumer_test_context_with_role_adjudication_slot(
+    repo_id: &str,
+) -> anyhow::Result<ArchitectureConsumerTestContext> {
+    let mut test = architecture_consumer_test_context(repo_id).await?;
+    test.context.inference = std::sync::Arc::new(ConfiguredRoleAdjudicationInferenceGateway);
+    Ok(test)
 }
 
 async fn architecture_consumer_test_context_with_config(
@@ -707,10 +748,76 @@ async fn current_state_reconcile_skips_architecture_embedding_jobs_without_embed
 }
 
 #[tokio::test]
+async fn current_state_reconcile_skips_role_adjudication_when_slot_unconfigured()
+-> anyhow::Result<()> {
+    let repo_id = "repo-role-adjudication-unconfigured";
+    let test = architecture_consumer_test_context(repo_id).await?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/api.rs", "rust")?;
+    upsert_test_role(test.storage.as_ref(), repo_id, "role-api-low-review", "api").await?;
+    upsert_path_suffix_rule(
+        test.storage.as_ref(),
+        repo_id,
+        "role-api-low-review",
+        "rule-api-low-review",
+        "api.rs",
+        0.6,
+    )
+    .await?;
+
+    let request = CurrentStateConsumerRequest {
+        run_id: Some("run".to_string()),
+        repo_id: repo_id.to_string(),
+        repo_root: test._temp.path().to_path_buf(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        from_generation_seq_exclusive: 0,
+        to_generation_seq_inclusive: 41,
+        reconcile_mode: crate::host::capability_host::ReconcileMode::MergedDelta,
+        file_upserts: Vec::new(),
+        file_removals: Vec::new(),
+        affected_paths: vec!["src/api.rs".to_string()],
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    };
+
+    let result = ArchitectureGraphRoleCurrentStateConsumer
+        .reconcile(&request, &test.context)
+        .await?;
+
+    assert!(
+        test.workplane.jobs().is_empty(),
+        "unconfigured role_adjudication must not enqueue workplane jobs"
+    );
+    let metrics = result.metrics.as_ref().expect("metrics should be present");
+    assert_eq!(
+        metrics
+            .get("role_adjudication_selected")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        metrics
+            .get("role_adjudication_enqueued")
+            .and_then(serde_json::Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        metrics
+            .get("role_adjudication_skipped_unconfigured")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert!(result.warnings.iter().any(|warning| {
+        warning.contains("role_adjudication") && warning.contains("not configured")
+    }));
+    Ok(())
+}
+
+#[tokio::test]
 async fn current_state_reconcile_enqueues_low_confidence_role_adjudication_job()
 -> anyhow::Result<()> {
     let repo_id = "repo-low-confidence-current-state";
-    let test = architecture_consumer_test_context(repo_id).await?;
+    let test = architecture_consumer_test_context_with_role_adjudication_slot(repo_id).await?;
     insert_current_file(&test.sqlite_path, repo_id, "src/api.rs", "rust")?;
     upsert_test_role(test.storage.as_ref(), repo_id, "role-api-low-review", "api").await?;
     upsert_path_suffix_rule(
@@ -847,7 +954,7 @@ async fn graph_snapshot_reconcile_does_not_enqueue_role_adjudication_jobs() -> a
 #[tokio::test]
 async fn current_state_reconcile_enqueues_conflict_role_adjudication_job() -> anyhow::Result<()> {
     let repo_id = "repo-conflict-current-state";
-    let test = architecture_consumer_test_context(repo_id).await?;
+    let test = architecture_consumer_test_context_with_role_adjudication_slot(repo_id).await?;
     insert_current_file(&test.sqlite_path, repo_id, "src/api.rs", "rust")?;
     upsert_test_role(test.storage.as_ref(), repo_id, "role-api-conflict", "api").await?;
     upsert_test_role(
@@ -931,7 +1038,7 @@ async fn current_state_reconcile_enqueues_conflict_role_adjudication_job() -> an
 async fn current_state_reconcile_enqueues_high_impact_role_adjudication_job() -> anyhow::Result<()>
 {
     let repo_id = "repo-high-impact-current-state";
-    let test = architecture_consumer_test_context(repo_id).await?;
+    let test = architecture_consumer_test_context_with_role_adjudication_slot(repo_id).await?;
     insert_current_file(&test.sqlite_path, repo_id, "src/main.rs", "rust")?;
 
     let request = CurrentStateConsumerRequest {
@@ -978,7 +1085,7 @@ async fn current_state_reconcile_enqueues_high_impact_role_adjudication_job() ->
 async fn current_state_reconcile_warns_when_role_adjudication_enqueue_fails() -> anyhow::Result<()>
 {
     let repo_id = "repo-role-enqueue-failure";
-    let test = architecture_consumer_test_context(repo_id).await?;
+    let test = architecture_consumer_test_context_with_role_adjudication_slot(repo_id).await?;
     insert_current_file(&test.sqlite_path, repo_id, "src/api.rs", "rust")?;
     upsert_test_role(
         test.storage.as_ref(),

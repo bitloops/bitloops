@@ -269,6 +269,7 @@ fn seed_dashboard_interactions(repo_root: &Path, checkpoint_id: &str) {
         ended_at: Some("2026-02-27T12:05:00Z".to_string()),
         last_event_at: "2026-02-27T12:05:00Z".to_string(),
         updated_at: "2026-02-27T12:05:00Z".to_string(),
+        is_auxiliary: false,
     };
     spool
         .record_session(&session)
@@ -579,6 +580,7 @@ pub(super) fn seed_dashboard_analytics_sources(repo_root: &Path) {
             ended_at: None,
             last_event_at: "2026-04-22T09:02:00Z".to_string(),
             updated_at: "2026-04-22T09:02:00Z".to_string(),
+            is_auxiliary: false,
         })
         .expect("upsert analytics session");
     repository

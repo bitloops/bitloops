@@ -36,10 +36,14 @@ impl InteractionEventRepository for MockRepository {
     }
 
     fn upsert_session(&self, session: &InteractionSession) -> Result<()> {
-        self.sessions
-            .lock()
-            .unwrap()
-            .insert(session.session_id.clone(), session.clone());
+        let mut sessions = self.sessions.lock().unwrap();
+        let mut stored = session.clone();
+        stored.is_auxiliary = session.is_auxiliary
+            || sessions
+                .get(&session.session_id)
+                .map(|existing| existing.is_auxiliary)
+                .unwrap_or(false);
+        sessions.insert(session.session_id.clone(), stored);
         Ok(())
     }
 
@@ -346,6 +350,40 @@ fn record_and_flush_interactions() {
             .len(),
         1
     );
+}
+
+#[test]
+fn auxiliary_session_flag_stays_sticky_and_flushes() {
+    let (_dir, spool) = test_spool();
+    let repository = MockRepository::new("repo-test");
+
+    let mut session = sample_session();
+    session.is_auxiliary = true;
+    spool
+        .record_session(&session)
+        .expect("record auxiliary session");
+
+    session.is_auxiliary = false;
+    session.first_prompt = "updated prompt".into();
+    session.updated_at = "2026-04-05T10:10:00Z".into();
+    spool
+        .record_session(&session)
+        .expect("record non-auxiliary upsert");
+
+    let local = spool
+        .load_session("session-1")
+        .expect("load local session")
+        .expect("local session");
+    assert!(local.is_auxiliary);
+    assert!(spool.list_sessions(None, 10).unwrap()[0].is_auxiliary);
+
+    let flushed = spool.flush(&repository).expect("flush auxiliary session");
+    assert_eq!(flushed, 2);
+    let remote = repository
+        .load_session("session-1")
+        .expect("load remote session")
+        .expect("remote session");
+    assert!(remote.is_auxiliary);
 }
 
 #[test]

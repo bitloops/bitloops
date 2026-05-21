@@ -115,11 +115,17 @@ fn dashboard_kpis_query() -> &'static str {
     "#
 }
 
-fn record_dashboard_interaction(
+#[allow(clippy::too_many_arguments)]
+fn record_dashboard_interaction_with_options(
     repo_root: &Path,
     session_id: &str,
     turn_id: &str,
     turn_number: u32,
+    is_auxiliary: bool,
+    actor_email: &str,
+    agent_type: &str,
+    first_prompt: &str,
+    turn_prompt: &str,
 ) {
     use crate::host::checkpoints::lifecycle::interaction::resolve_interaction_spool;
     use crate::host::interactions::store::InteractionSpool;
@@ -143,11 +149,11 @@ fn record_dashboard_interaction(
             branch: "main".to_string(),
             actor_id: "actor-2".to_string(),
             actor_name: "Bob".to_string(),
-            actor_email: "bob@example.com".to_string(),
+            actor_email: actor_email.to_string(),
             actor_source: "bitloops-session".to_string(),
-            agent_type: "codex".to_string(),
+            agent_type: agent_type.to_string(),
             model: "gpt-5.4".to_string(),
-            first_prompt: format!("Start {session_id}"),
+            first_prompt: first_prompt.to_string(),
             transcript_path: transcript_path.to_string_lossy().to_string(),
             worktree_path: repo_root.to_string_lossy().to_string(),
             worktree_id: "worktree-2".to_string(),
@@ -155,6 +161,7 @@ fn record_dashboard_interaction(
             ended_at: None,
             last_event_at: timestamp.clone(),
             updated_at: timestamp.clone(),
+            is_auxiliary,
         })
         .expect("record interaction session");
     spool
@@ -165,11 +172,11 @@ fn record_dashboard_interaction(
             branch: "main".to_string(),
             actor_id: "actor-2".to_string(),
             actor_name: "Bob".to_string(),
-            actor_email: "bob@example.com".to_string(),
+            actor_email: actor_email.to_string(),
             actor_source: "bitloops-session".to_string(),
             turn_number,
-            prompt: format!("Prompt {turn_id}"),
-            agent_type: "codex".to_string(),
+            prompt: turn_prompt.to_string(),
+            agent_type: agent_type.to_string(),
             model: "gpt-5.4".to_string(),
             started_at: timestamp.clone(),
             ended_at: None,
@@ -184,6 +191,25 @@ fn record_dashboard_interaction(
             updated_at: timestamp,
         })
         .expect("record interaction turn");
+}
+
+fn record_dashboard_interaction(
+    repo_root: &Path,
+    session_id: &str,
+    turn_id: &str,
+    turn_number: u32,
+) {
+    record_dashboard_interaction_with_options(
+        repo_root,
+        session_id,
+        turn_id,
+        turn_number,
+        false,
+        "bob@example.com",
+        "codex",
+        &format!("Start {session_id}"),
+        &format!("Prompt {turn_id}"),
+    );
 }
 
 #[tokio::test]
@@ -680,6 +706,174 @@ async fn dashboard_interaction_queries_return_session_detail_buckets_and_search_
     assert_eq!(
         payload["data"]["searchInteractionTurns"][0]["session"]["sessionId"],
         "session-1"
+    );
+}
+
+#[tokio::test]
+async fn dashboard_interactions_hide_auxiliary_sessions_but_preserve_detail_lookup() {
+    use crate::host::checkpoints::lifecycle::interaction::resolve_interaction_spool;
+    use crate::host::interactions::store::InteractionSpool;
+    use crate::host::interactions::types::{InteractionEvent, InteractionEventType};
+
+    let repo = seed_dashboard_repo();
+    record_dashboard_interaction_with_options(
+        repo.path(),
+        "aux-session",
+        "aux-turn",
+        2,
+        true,
+        "aux@example.com",
+        "aux-agent",
+        "Auxiliary only prompt",
+        "Auxiliary only prompt",
+    );
+
+    let spool = resolve_interaction_spool(repo.path()).expect("resolve interaction spool");
+    spool
+        .record_event(&InteractionEvent {
+            event_id: "aux-event-1".to_string(),
+            session_id: "aux-session".to_string(),
+            turn_id: Some("aux-turn".to_string()),
+            repo_id: spool.repo_id().to_string(),
+            branch: "main".to_string(),
+            actor_id: "actor-aux".to_string(),
+            actor_name: "Aux".to_string(),
+            actor_email: "aux@example.com".to_string(),
+            actor_source: "bitloops-session".to_string(),
+            event_type: InteractionEventType::TurnStart,
+            event_time: "2026-04-01T10:02:30Z".to_string(),
+            agent_type: "aux-agent".to_string(),
+            model: "gpt-5.4-mini".to_string(),
+            payload: serde_json::json!({"note": "auxiliary"}),
+            ..Default::default()
+        })
+        .expect("record auxiliary event");
+
+    let visible_events = crate::host::interactions::query::list_events(
+        repo.path(),
+        &crate::host::interactions::query::InteractionBrowseFilter::default(),
+    )
+    .expect("list visible events");
+    assert!(
+        visible_events
+            .iter()
+            .all(|event| event.session_id != "aux-session"),
+        "broad event listings should exclude auxiliary sessions"
+    );
+
+    let snapshot = crate::host::interactions::query::interaction_change_snapshot(repo.path())
+        .expect("interaction snapshot");
+    assert_eq!(snapshot.session_count, 1);
+    assert_eq!(snapshot.turn_count, 1);
+    assert_eq!(snapshot.latest_session_id.as_deref(), Some("session-1"));
+    assert_eq!(snapshot.latest_turn_id.as_deref(), Some("turn-1"));
+
+    let app = dashboard_app(
+        repo.path(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    );
+
+    let (status, payload) = request_dashboard_graphql(
+        app,
+        r#"
+        {
+          interactionKpis {
+            totalSessions
+            totalTurns
+          }
+          interactionSessions {
+            sessionId
+            isAuxiliary
+          }
+          interactionActors {
+            actorEmail
+          }
+          interactionAgents {
+            key
+          }
+          searchInteractionSessions(input: { query: "Auxiliary only prompt" }) {
+            session {
+              sessionId
+            }
+          }
+          interactionSession(sessionId: "aux-session") {
+            summary {
+              sessionId
+              isAuxiliary
+            }
+            turns {
+              turnId
+            }
+            rawEvents {
+              sessionId
+              eventType
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        payload["data"]["interactionKpis"]["totalSessions"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        payload["data"]["interactionKpis"]["totalTurns"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        payload["data"]["interactionSessions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        payload["data"]["interactionSessions"][0]["sessionId"],
+        "session-1"
+    );
+    assert_eq!(
+        payload["data"]["interactionSessions"][0]["isAuxiliary"],
+        Value::Bool(false)
+    );
+    assert!(
+        payload["data"]["interactionActors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|bucket| bucket["actorEmail"] != "aux@example.com")
+    );
+    assert!(
+        payload["data"]["interactionAgents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|bucket| bucket["key"] != "aux-agent")
+    );
+    assert!(
+        payload["data"]["searchInteractionSessions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        payload["data"]["interactionSession"]["summary"]["sessionId"],
+        "aux-session"
+    );
+    assert_eq!(
+        payload["data"]["interactionSession"]["summary"]["isAuxiliary"],
+        Value::Bool(true)
+    );
+    assert_eq!(
+        payload["data"]["interactionSession"]["turns"][0]["turnId"],
+        "aux-turn"
+    );
+    assert_eq!(
+        payload["data"]["interactionSession"]["rawEvents"][0]["sessionId"],
+        "aux-session"
     );
 }
 

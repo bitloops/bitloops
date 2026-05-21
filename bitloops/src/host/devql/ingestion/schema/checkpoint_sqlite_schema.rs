@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     token_usage TEXT,
     prompt_attributions TEXT DEFAULT '[]',
     pending_prompt_attribution TEXT,
+    is_auxiliary INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (repo_id, session_id)
@@ -347,6 +348,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     token_usage TEXT,
     prompt_attributions TEXT DEFAULT '[]',
     pending_prompt_attribution TEXT,
+    is_auxiliary INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (repo_id, session_id)
