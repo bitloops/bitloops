@@ -40,9 +40,10 @@ use crate::config::settings::{
     write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance,
 };
 use crate::config::{
-    DaemonEmbeddingsInstallPlan, REPO_POLICY_LOCAL_FILE_NAME, RepoSemanticEmbeddingPolicy,
-    SemanticCloneEmbeddingMode, default_daemon_config_exists,
-    prepare_daemon_local_embeddings_profile_install, resolve_semantic_clones_config_for_repo,
+    DaemonEmbeddingsInstallPlan, InferenceProfileConfig, InferenceTask,
+    REPO_POLICY_LOCAL_FILE_NAME, RepoSemanticEmbeddingPolicy, SemanticCloneEmbeddingMode,
+    default_daemon_config_exists, prepare_daemon_local_embeddings_profile_install,
+    resolve_semantic_clones_config_for_repo,
 };
 
 struct PreparedEmbeddingsBootstrapRequest {
@@ -369,7 +370,7 @@ pub(crate) async fn run_for_project_root(
             if args.install_default_daemon {
                 let plan = prepare_cloud_summary_generation_plan(gateway_url_override.as_deref());
                 selected_summary_generation_profile_name =
-                    prepared_summary_generation_profile_name(&plan).map(str::to_string);
+                    prepared_summary_generation_profile_name(project_root, &plan);
                 prepared_summary_setup = Some(plan);
             } else {
                 let message = configure_cloud_summary_generation(
@@ -399,7 +400,7 @@ pub(crate) async fn run_for_project_root(
                     )
                 })?;
                 selected_summary_generation_profile_name =
-                    prepared_summary_generation_profile_name(&plan).map(str::to_string);
+                    prepared_summary_generation_profile_name(project_root, &plan);
                 prepared_summary_setup = Some(plan);
             } else {
                 configure_local_summary_generation(
@@ -610,6 +611,20 @@ fn init_repo_selected_embedding_lanes(
 mod tests {
     use super::*;
 
+    fn write_bound_daemon_config(repo_root: &Path, contents: &str) {
+        let config_path = repo_root
+            .join("daemon")
+            .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+        std::fs::create_dir_all(config_path.parent().expect("config parent"))
+            .expect("create config parent");
+        std::fs::write(&config_path, contents).expect("write daemon config");
+        crate::config::settings::write_repo_daemon_binding(
+            &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+            &config_path,
+        )
+        .expect("write daemon binding");
+    }
+
     fn final_setup_selection(
         code_embeddings: bool,
         summaries: bool,
@@ -635,6 +650,57 @@ mod tests {
         let code_embeddings = final_setup_selection(true, false, false);
 
         assert!(init_repo_selected_embedding_lanes(code_embeddings, true));
+    }
+
+    #[test]
+    fn prepared_local_summary_profile_name_uses_suffix_when_default_is_not_managed() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        write_bound_daemon_config(
+            repo.path(),
+            r#"
+[inference.profiles.summary_local]
+task = "embeddings"
+driver = "custom_driver"
+runtime = "custom_runtime"
+model = "custom-model"
+"#,
+        );
+        let plan = crate::cli::inference::PreparedSummarySetupPlan::new(
+            PreparedSummarySetupAction::ConfigureLocal {
+                model_name: "model".to_string(),
+            },
+        );
+
+        assert_eq!(
+            prepared_summary_generation_profile_name(repo.path(), &plan),
+            Some("summary_local_1".to_string())
+        );
+    }
+
+    #[test]
+    fn prepared_platform_summary_profile_name_uses_suffix_when_default_is_not_managed() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        write_bound_daemon_config(
+            repo.path(),
+            r#"
+[inference.profiles.summary_llm]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "local-model"
+"#,
+        );
+        let plan = crate::cli::inference::PreparedSummarySetupPlan::new(
+            PreparedSummarySetupAction::ConfigureCloud {
+                gateway_url_override: None,
+                api_key_env: None,
+            },
+        );
+
+        assert_eq!(
+            prepared_summary_generation_profile_name(repo.path(), &plan),
+            Some("summary_llm_1".to_string())
+        );
     }
 }
 
@@ -726,15 +792,91 @@ fn existing_init_summary_generation_profile_name(repo_root: &Path) -> Option<Str
         .map(str::to_string)
 }
 
+#[derive(Clone, Copy)]
+enum PreparedSummaryProfileKind {
+    Local,
+    Platform,
+}
+
 fn prepared_summary_generation_profile_name(
+    repo_root: &Path,
     plan: &crate::cli::inference::PreparedSummarySetupPlan,
-) -> Option<&'static str> {
+) -> Option<String> {
     match plan.action() {
-        PreparedSummarySetupAction::ConfigureCloud { .. } => Some("summary_llm"),
-        PreparedSummarySetupAction::ConfigureLocal { .. } => Some("summary_local"),
+        PreparedSummarySetupAction::ConfigureCloud { .. } => Some(planned_summary_profile_name(
+            repo_root,
+            "summary_llm",
+            PreparedSummaryProfileKind::Platform,
+        )),
+        PreparedSummarySetupAction::ConfigureLocal { .. } => Some(planned_summary_profile_name(
+            repo_root,
+            "summary_local",
+            PreparedSummaryProfileKind::Local,
+        )),
         PreparedSummarySetupAction::InstallRuntimeOnly { .. }
         | PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe { .. } => None,
     }
+}
+
+fn planned_summary_profile_name(
+    repo_root: &Path,
+    default_name: &str,
+    kind: PreparedSummaryProfileKind,
+) -> String {
+    let capability = crate::config::resolve_inference_capability_config_for_repo(repo_root);
+    let profiles = &capability.inference.profiles;
+
+    match profiles.get(default_name) {
+        None => default_name.to_string(),
+        Some(profile) if is_managed_prepared_summary_profile(profile, kind) => {
+            default_name.to_string()
+        }
+        Some(_) => next_available_summary_profile_name(profiles, default_name),
+    }
+}
+
+fn next_available_summary_profile_name(
+    profiles: &std::collections::BTreeMap<String, InferenceProfileConfig>,
+    prefix: &str,
+) -> String {
+    let mut suffix = 1usize;
+    loop {
+        let candidate = format!("{prefix}_{suffix}");
+        if !profiles.contains_key(&candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn is_managed_prepared_summary_profile(
+    profile: &InferenceProfileConfig,
+    kind: PreparedSummaryProfileKind,
+) -> bool {
+    match kind {
+        PreparedSummaryProfileKind::Local => is_managed_local_summary_profile(profile),
+        PreparedSummaryProfileKind::Platform => is_managed_platform_summary_profile(profile),
+    }
+}
+
+fn is_managed_local_summary_profile(profile: &InferenceProfileConfig) -> bool {
+    profile.task == InferenceTask::TextGeneration
+        && profile.runtime.as_deref().map(str::trim) == Some("bitloops_inference")
+        && profile.driver.trim() == "ollama_chat"
+}
+
+fn is_managed_platform_summary_profile(profile: &InferenceProfileConfig) -> bool {
+    profile.task == InferenceTask::TextGeneration
+        && profile.runtime.as_deref().map(str::trim) == Some("bitloops_inference")
+        && matches!(
+            profile.driver.trim(),
+            "bitloops_platform_chat" | "openai_chat_completions"
+        )
+        && profile
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(|api_key| api_key == "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}")
 }
 
 async fn bound_running_daemon_config_path() -> Result<std::path::PathBuf> {
