@@ -78,15 +78,6 @@ fn validate_context_guidance_init_args(args: &InitArgs) -> Result<()> {
     Ok(())
 }
 
-fn validate_summaries_init_args(args: &InitArgs) -> Result<()> {
-    if args.summaries_mode_legacy.is_some() {
-        bail!(
-            "`--summaries-mode` was removed. Use `--summaries-runtime local|platform` or `--no-summaries`."
-        );
-    }
-    Ok(())
-}
-
 pub(crate) async fn run_for_project_root(
     args: InitArgs,
     project_root: &Path,
@@ -102,7 +93,6 @@ pub(crate) async fn run_for_project_root(
         bail!("`bitloops init --backfill` cannot be combined with `--ingest=false`.");
     }
     validate_context_guidance_init_args(&args)?;
-    validate_summaries_init_args(&args)?;
     let effective_ingest = if args.backfill.is_some() {
         Some(true)
     } else {

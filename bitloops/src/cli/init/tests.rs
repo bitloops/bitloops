@@ -211,7 +211,6 @@ fn init_status_command_args(status_args: InitStatusArgs) -> InitArgs {
         no_embeddings: false,
         no_summaries: false,
         summaries_runtime: None,
-        summaries_mode_legacy: None,
         context_guidance_runtime: None,
         no_context_guidance: false,
         context_guidance_gateway_url: None,
@@ -290,7 +289,6 @@ fn render_install_default_daemon_handoff_with_mkcert(
                                         no_embeddings: true,
                                         no_summaries: false,
                                         summaries_runtime: None,
-                                        summaries_mode_legacy: None,
                                         context_guidance_runtime: None,
                                         no_context_guidance: false,
                                         context_guidance_gateway_url: None,
@@ -805,28 +803,12 @@ fn init_args_reject_conflicting_no_summaries_and_summaries_runtime_flags() {
 }
 
 #[test]
-fn run_init_rejects_legacy_summaries_mode_flag_with_migration_message() {
-    let repo = tempfile::tempdir().expect("tempdir");
-    setup_git_repo(&repo);
-    let parsed = Cli::try_parse_from([
-        "bitloops",
-        "init",
-        "--summaries-mode",
-        "off",
-        "--sync=false",
-        "--ingest=false",
-    ])
-    .expect("legacy summaries-mode should parse for migration handling");
-    let Some(Commands::Init(args)) = parsed.command else {
-        panic!("expected init command");
-    };
-    let mut out = Vec::new();
+fn init_args_reject_legacy_summaries_mode_flag() {
+    let err = Cli::try_parse_from(["bitloops", "init", "--summaries-mode", "off"])
+        .err()
+        .expect("legacy summaries-mode flag should fail to parse");
 
-    let err = run_with_writer_for_project_root(args, repo.path(), &mut out, None)
-        .expect_err("legacy summaries-mode flag should fail fast");
-    let rendered = format!("{err:#}");
-    assert!(rendered.contains("`--summaries-mode` was removed"));
-    assert!(rendered.contains("--summaries-runtime local|platform"));
+    assert!(err.to_string().contains("--summaries-mode"));
 }
 
 #[test]
@@ -1669,7 +1651,6 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
                 no_embeddings: false,
                 no_summaries: false,
                 summaries_runtime: None,
-                summaries_mode_legacy: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -1762,7 +1743,6 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
                 no_embeddings: false,
                 no_summaries: false,
                 summaries_runtime: None,
-                summaries_mode_legacy: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -1824,7 +1804,6 @@ keep = true
                 no_embeddings: false,
                 no_summaries: false,
                 summaries_runtime: None,
-                summaries_mode_legacy: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -1886,7 +1865,6 @@ fn run_init_binds_repo_to_running_daemon_config() {
                 no_embeddings: false,
                 no_summaries: false,
                 summaries_runtime: None,
-                summaries_mode_legacy: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -1959,7 +1937,6 @@ fn run_init_requests_daemon_watcher_reconcile_when_sync_is_disabled() {
                         no_embeddings: false,
                         no_summaries: false,
                         summaries_runtime: None,
-                        summaries_mode_legacy: None,
                         context_guidance_runtime: None,
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
@@ -2077,7 +2054,6 @@ fn run_init_reconciles_daemon_watcher_before_sync_progress_when_sync_is_enabled(
                                 no_embeddings: true,
                                 no_summaries: true,
                                 summaries_runtime: None,
-                                summaries_mode_legacy: None,
                                 context_guidance_runtime: None,
                                 no_context_guidance: true,
                                 context_guidance_gateway_url: None,
@@ -2158,7 +2134,6 @@ fn run_init_surfaces_daemon_watcher_reconcile_failures() {
                         no_embeddings: false,
                         no_summaries: false,
                         summaries_runtime: None,
-                        summaries_mode_legacy: None,
                         context_guidance_runtime: None,
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
@@ -2244,7 +2219,6 @@ fn run_init_sync_enabled_fails_when_daemon_watcher_reconcile_fails() {
                                 no_embeddings: true,
                                 no_summaries: true,
                                 summaries_runtime: None,
-                                summaries_mode_legacy: None,
                                 context_guidance_runtime: None,
                                 no_context_guidance: true,
                                 context_guidance_gateway_url: None,
@@ -2324,7 +2298,6 @@ fn run_init_requests_nested_repo_daemon_watcher_reconcile_when_sync_is_disabled(
                         no_embeddings: false,
                         no_summaries: false,
                         summaries_runtime: None,
-                        summaries_mode_legacy: None,
                         context_guidance_runtime: None,
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
@@ -2396,7 +2369,6 @@ fn run_init_does_not_request_daemon_watcher_reconcile_when_repo_setup_fails() {
                         no_embeddings: false,
                         no_summaries: false,
                         summaries_runtime: None,
-                        summaries_mode_legacy: None,
                         context_guidance_runtime: None,
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
@@ -2456,7 +2428,6 @@ fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
                 no_embeddings: false,
                 no_summaries: false,
                 summaries_runtime: None,
-                summaries_mode_legacy: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2514,7 +2485,6 @@ fn run_init_rewrites_existing_daemon_binding() {
                 no_embeddings: false,
                 no_summaries: false,
                 summaries_runtime: None,
-                summaries_mode_legacy: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2580,7 +2550,6 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
                 no_embeddings: false,
                 no_summaries: false,
                 summaries_runtime: None,
-                summaries_mode_legacy: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2642,7 +2611,6 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                         no_embeddings: false,
                         no_summaries: false,
                         summaries_runtime: None,
-                        summaries_mode_legacy: None,
                         context_guidance_runtime: None,
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
@@ -2705,7 +2673,6 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
                     no_embeddings: false,
                     no_summaries: false,
                     summaries_runtime: None,
-                    summaries_mode_legacy: None,
                     context_guidance_runtime: None,
                     no_context_guidance: false,
                     context_guidance_gateway_url: None,
@@ -2761,7 +2728,6 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
                 no_embeddings: false,
                 no_summaries: false,
                 summaries_runtime: None,
-                summaries_mode_legacy: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2814,7 +2780,6 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
                 no_embeddings: false,
                 no_summaries: false,
                 summaries_runtime: None,
-                summaries_mode_legacy: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2874,7 +2839,6 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
                 no_embeddings: false,
                 no_summaries: false,
                 summaries_runtime: None,
-                summaries_mode_legacy: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2998,7 +2962,6 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
                 no_embeddings: false,
                 no_summaries: false,
                 summaries_runtime: None,
-                summaries_mode_legacy: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -3080,7 +3043,6 @@ fn run_init_with_invalid_explicit_agent_errors() {
                 no_embeddings: false,
                 no_summaries: false,
                 summaries_runtime: None,
-                summaries_mode_legacy: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -3461,7 +3423,6 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                             no_embeddings: false,
                             no_summaries: false,
                             summaries_runtime: None,
-                            summaries_mode_legacy: None,
                             context_guidance_runtime: None,
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
@@ -3527,7 +3488,6 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                             no_embeddings: false,
                             no_summaries: false,
                             summaries_runtime: None,
-                            summaries_mode_legacy: None,
                             context_guidance_runtime: None,
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
@@ -3579,7 +3539,6 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                     no_embeddings: false,
                     no_summaries: false,
                     summaries_runtime: None,
-                    summaries_mode_legacy: None,
                     context_guidance_runtime: None,
                     no_context_guidance: false,
                     context_guidance_gateway_url: None,
@@ -3677,7 +3636,6 @@ fn run_init_with_install_default_daemon_shows_shell_escaped_config_path() {
                                                                 no_embeddings: true,
                                                                 no_summaries: false,
                                                                 summaries_runtime: None,
-                                                                summaries_mode_legacy: None,
                                                                 context_guidance_runtime: None,
                                                                 no_context_guidance: false,
                                                                 context_guidance_gateway_url: None,
@@ -3817,7 +3775,6 @@ fn run_init_without_install_default_daemon_prompts_for_skippable_embeddings_setu
                             no_embeddings: false,
                             no_summaries: false,
                             summaries_runtime: None,
-                            summaries_mode_legacy: None,
                             context_guidance_runtime: None,
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
@@ -3899,7 +3856,6 @@ fn run_init_interactive_without_install_default_daemon_uses_full_setup_prompt_pa
                                     no_embeddings: false,
                                     no_summaries: false,
                                     summaries_runtime: None,
-                                    summaries_mode_legacy: None,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -3991,7 +3947,6 @@ fn run_init_without_install_default_daemon_explicit_local_persists_repo_policy()
                         no_embeddings: false,
                         no_summaries: false,
                         summaries_runtime: None,
-                        summaries_mode_legacy: None,
                         context_guidance_runtime: None,
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
@@ -4069,7 +4024,6 @@ fn run_init_without_install_default_daemon_explicit_platform_persists_repo_polic
                                 no_embeddings: false,
                                 no_summaries: false,
                                 summaries_runtime: None,
-                                summaries_mode_legacy: None,
                                 context_guidance_runtime: None,
                                 no_context_guidance: false,
                                 context_guidance_gateway_url: None,
@@ -4402,7 +4356,6 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                             no_embeddings: false,
                                                                             no_summaries: false,
                                                                             summaries_runtime: None,
-                                                                            summaries_mode_legacy: None,
                                                                             context_guidance_runtime: None,
                                                                             no_context_guidance: false,
                                                                             context_guidance_gateway_url: None,
@@ -4584,7 +4537,6 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                             no_embeddings: false,
                                             no_summaries: false,
                                             summaries_runtime: None,
-                                            summaries_mode_legacy: None,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
@@ -4694,7 +4646,6 @@ fn run_init_with_install_default_daemon_leaves_embeddings_unchanged_when_noninte
                                     no_embeddings: false,
                                     no_summaries: false,
                                     summaries_runtime: None,
-                                    summaries_mode_legacy: None,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -4774,7 +4725,6 @@ fn run_init_with_install_default_daemon_can_skip_embeddings_via_flag() {
                                 no_embeddings: true,
                                 no_summaries: false,
                                 summaries_runtime: None,
-                                summaries_mode_legacy: None,
                                 context_guidance_runtime: None,
                                 no_context_guidance: false,
                                 context_guidance_gateway_url: None,
@@ -4910,7 +4860,6 @@ clickhouse_database = "bitloops"
                                     no_embeddings: true,
                                     no_summaries: true,
                                     summaries_runtime: None,
-                                    summaries_mode_legacy: None,
                                     context_guidance_runtime: None,
                                     no_context_guidance: true,
                                     context_guidance_gateway_url: None,
@@ -5007,7 +4956,6 @@ model = "bge-m3"
             no_embeddings: true,
             no_summaries: false,
             summaries_runtime: None,
-            summaries_mode_legacy: None,
             context_guidance_runtime: None,
             no_context_guidance: false,
             context_guidance_gateway_url: None,
@@ -5073,7 +5021,6 @@ fn run_init_no_embeddings_persists_repo_embedding_policy_off() {
                                     no_embeddings: true,
                                     no_summaries: false,
                                     summaries_runtime: None,
-                                    summaries_mode_legacy: None,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -5206,7 +5153,6 @@ model = "bge-m3"
                                             no_embeddings: false,
                                             no_summaries: false,
                                             summaries_runtime: None,
-                                            summaries_mode_legacy: None,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
@@ -5325,7 +5271,6 @@ model = "text-embedding-3-small"
                                     no_embeddings: false,
                                     no_summaries: false,
                                     summaries_runtime: None,
-                                    summaries_mode_legacy: None,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -5427,7 +5372,6 @@ model = "text-embedding-3-small"
                                     no_embeddings: false,
                                     no_summaries: false,
                                     summaries_runtime: None,
-                                    summaries_mode_legacy: None,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -5631,7 +5575,6 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                                     no_embeddings: false,
                                                                     no_summaries: false,
                                                                     summaries_runtime: None,
-                                                                    summaries_mode_legacy: None,
                                                                     context_guidance_runtime: None,
                                                                     no_context_guidance: false,
                                                                     context_guidance_gateway_url: None,
@@ -5835,7 +5778,6 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                                 no_embeddings: false,
                                                                 no_summaries: false,
                                                                 summaries_runtime: None,
-                                                                summaries_mode_legacy: None,
                                                                 context_guidance_runtime: None,
                                                                 no_context_guidance: false,
                                                                 context_guidance_gateway_url: None,
@@ -6028,7 +5970,6 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                                     no_embeddings: false,
                                                                     no_summaries: false,
                                                                     summaries_runtime: None,
-                                                                    summaries_mode_legacy: None,
                                                                     context_guidance_runtime: None,
                                                                     no_context_guidance: false,
                                                                     context_guidance_gateway_url: None,
@@ -6193,7 +6134,6 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                                 no_embeddings: false,
                                                 no_summaries: false,
                                                 summaries_runtime: None,
-                                                summaries_mode_legacy: None,
                                                 context_guidance_runtime: None,
                                                 no_context_guidance: false,
                                                 context_guidance_gateway_url: None,
@@ -6365,8 +6305,9 @@ fn run_init_with_install_default_daemon_renders_follow_up_sync_waiting_state() {
                                                         Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                     no_embeddings: false,
                                                     no_summaries: false,
-                                                    summaries_runtime: None,
-                                                    summaries_mode_legacy: None,
+                                                    summaries_runtime: Some(
+                                                        crate::cli::init::SummariesRuntime::Local,
+                                                    ),
                                                     context_guidance_runtime: None,
                                                     no_context_guidance: false,
                                                     context_guidance_gateway_url: None,
@@ -6532,7 +6473,6 @@ fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_w
                                                     no_embeddings: false,
                                                     no_summaries: false,
                                                     summaries_runtime: None,
-                                                    summaries_mode_legacy: None,
                                                     context_guidance_runtime: None,
                                                     no_context_guidance: false,
                                                     context_guidance_gateway_url: None,
@@ -6571,6 +6511,7 @@ fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_w
 #[test]
 fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
     let events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let login_calls = std::rc::Rc::new(std::cell::RefCell::new(0usize));
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     let repo_id = test_repo_id(repo.path());
@@ -6610,17 +6551,28 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
                                         }))
                                     },
                                     || {
-                                        with_ollama_probe_hook(
-                                            || Ok(OllamaAvailability::MissingCli),
+                                        with_ensure_logged_in_hook(
+                                            {
+                                                let login_calls = std::rc::Rc::clone(&login_calls);
+                                                move || {
+                                                    *login_calls.borrow_mut() += 1;
+                                                    Ok(fake_logged_in_session())
+                                                }
+                                            },
                                             || {
-                                                with_ingest_daemon_bootstrap_hook(
-                                                    |_repo_root| Ok(()),
+                                                with_ollama_probe_hook(
+                                                    || Ok(OllamaAvailability::MissingCli),
                                                     || {
-                                                        with_graphql_executor_hook(
-                                                            {
-                                                                let events = Arc::clone(&events);
-                                                                let repo_id = repo_id.clone();
-                                                                move |_repo_root, query, variables| {
+                                                        with_ingest_daemon_bootstrap_hook(
+                                                            |_repo_root| Ok(()),
+                                                            || {
+                                                                with_graphql_executor_hook(
+                                                                    {
+                                                                        let events =
+                                                                            Arc::clone(&events);
+                                                                        let repo_id =
+                                                                            repo_id.clone();
+                                                                        move |_repo_root, query, variables| {
                                                                     if query.contains("startInit(") {
                                                                         events
                                                                             .lock()
@@ -6631,7 +6583,7 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
                                                                         assert_eq!(variables["input"]["runIngest"], json!(false));
                                                                         assert_eq!(
                                                                             variables["input"]["summariesBootstrap"]["action"],
-                                                                            json!("INSTALL_RUNTIME_ONLY")
+                                                                            json!("CONFIGURE_CLOUD")
                                                                         );
                                                                         return Ok(runtime_start_init_result_json(session_id));
                                                                     }
@@ -6660,12 +6612,14 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
 
                                                                     panic!("unexpected repo-scoped query: {query}");
                                                                 }
-                                                            },
-                                                            || {
-                                                                let mut out = Vec::new();
-                                                                let mut input = Cursor::new("");
-                                                                let runtime = test_runtime();
-                                                                runtime
+                                                                    },
+                                                                    || {
+                                                                        let mut out = Vec::new();
+                                                                        let mut input =
+                                                                            Cursor::new("");
+                                                                        let runtime =
+                                                                            test_runtime();
+                                                                        runtime
                                                                     .block_on(run_with_io_async_for_project_root(
                                                                         InitArgs {
                                         command: None,
@@ -6684,8 +6638,9 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
                                                                             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                                             no_embeddings: false,
                                                                             no_summaries: false,
-                                                                            summaries_runtime: None,
-                                                                            summaries_mode_legacy: None,
+                                                                            summaries_runtime: Some(
+                                                                                crate::cli::init::SummariesRuntime::Platform,
+                                                                            ),
                                                                             context_guidance_runtime: None,
                                                                             no_context_guidance: false,
                                                                             context_guidance_gateway_url: None,
@@ -6700,22 +6655,31 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
                                                                     ))
                                                                     .expect("run init");
 
-                                                                let rendered =
-                                                                    String::from_utf8(out)
-                                                                        .expect("utf8 output");
-                                                                assert!(rendered.contains(
+                                                                        let rendered =
+                                                                            String::from_utf8(out)
+                                                                                .expect(
+                                                                                    "utf8 output",
+                                                                                );
+                                                                        assert!(rendered.contains(
                                                                     "This may take a few minutes depending on your codebase size."
                                                                 ));
-                                                                assert!(
-                                                                    rendered.contains("Summaries")
-                                                                );
-                                                                assert!(!rendered.contains(
+                                                                        assert!(
+                                                                            rendered.contains(
+                                                                                "Summaries"
+                                                                            )
+                                                                        );
+                                                                        assert!(!rendered.contains(
                                                                     "Starting initial DevQL sync..."
                                                                 ));
+                                                                        assert!(
+                                                                    !rendered.contains("Sign in to Bitloops")
+                                                                );
+                                                                    },
+                                                                )
                                                             },
-                                                        )
+                                                        );
                                                     },
-                                                );
+                                                )
                                             },
                                         );
                                     },
@@ -6733,6 +6697,7 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
         &*events,
         &["start_init".to_string(), "snapshot".to_string()]
     );
+    assert_eq!(*login_calls.borrow(), 1);
 }
 
 #[test]
@@ -6778,7 +6743,6 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                             no_embeddings: false,
                             no_summaries: false,
                             summaries_runtime: None,
-                            summaries_mode_legacy: None,
                             context_guidance_runtime: None,
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
@@ -6969,7 +6933,6 @@ fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
                                             no_embeddings: true,
                                             no_summaries: false,
                                             summaries_runtime: None,
-                                            summaries_mode_legacy: None,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
@@ -7069,7 +7032,6 @@ fn run_init_with_install_default_daemon_can_skip_auto_start() {
                                             no_embeddings: true,
                                             no_summaries: false,
                                             summaries_runtime: None,
-                                            summaries_mode_legacy: None,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
@@ -7128,7 +7090,6 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                     no_embeddings: false,
                     no_summaries: false,
                     summaries_runtime: None,
-                    summaries_mode_legacy: None,
                     context_guidance_runtime: None,
                     no_context_guidance: false,
                     context_guidance_gateway_url: None,
@@ -7256,7 +7217,6 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                             no_embeddings: false,
                                             no_summaries: false,
                                             summaries_runtime: None,
-                                            summaries_mode_legacy: None,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
@@ -7407,7 +7367,6 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                             no_embeddings: false,
                                             no_summaries: false,
                                             summaries_runtime: None,
-                                            summaries_mode_legacy: None,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,

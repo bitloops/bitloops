@@ -126,10 +126,6 @@ pub struct InitArgs {
     #[arg(long, value_enum, conflicts_with = "no_summaries")]
     pub summaries_runtime: Option<SummariesRuntime>,
 
-    /// Legacy flag kept only to emit a clear migration error.
-    #[arg(long = "summaries-mode", hide = true)]
-    pub summaries_mode_legacy: Option<String>,
-
     /// Select which text-generation runtime to configure for context guidance during init.
     #[arg(long, value_enum)]
     pub context_guidance_runtime: Option<TextGenerationRuntime>,
