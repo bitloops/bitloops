@@ -5249,7 +5249,7 @@ model = "bge-m3"
                                     .expect("run init");
                                 std::mem::forget(runtime);
 
-                                assert_repo_embedding_policy(&repo, "local_code");
+                                assert_repo_code_embedding_policy(&repo, "local_code");
                                 let config_path =
                                     default_daemon_config_path().expect("default daemon config");
                                 let daemon_config = std::fs::read_to_string(config_path)
@@ -6159,11 +6159,11 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                                 );
                                                 assert_eq!(
                                                     variables["input"]["runSummaries"],
-                                                    json!(true)
+                                                    json!(false)
                                                 );
                                                 assert_eq!(
                                                     variables["input"]["runSummaryEmbeddings"],
-                                                    json!(true)
+                                                    json!(false)
                                                 );
                                                 assert_eq!(
                                                     variables["input"]["ingestBackfill"],
@@ -6188,14 +6188,10 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                                         run_sync: true,
                                                         run_ingest: true,
                                                         embeddings_selected: true,
-                                                        summaries_selected: true,
-                                                        summary_embeddings_selected: true,
+                                                        summaries_selected: false,
+                                                        summary_embeddings_selected: false,
                                                         top_lane_status: "COMPLETED",
                                                         embeddings_lane_status: "COMPLETED",
-                                                        summaries_lane_status: "COMPLETED",
-                                                        summary_embeddings_lane_status: Some(
-                                                            "COMPLETED",
-                                                        ),
                                                         ..RuntimeSessionSnapshotFixture::default()
                                                     },
                                                 ));
@@ -6260,7 +6256,7 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                             !rendered.contains("Starting initial DevQL sync...")
                                         );
                                         assert!(rendered.contains("Embeddings"));
-                                        assert_repo_embedding_policy(&repo, "local_code");
+                                        assert_repo_code_embedding_policy(&repo, "local_code");
                                     },
                                 )
                             },
