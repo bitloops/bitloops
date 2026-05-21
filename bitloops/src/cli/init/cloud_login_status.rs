@@ -10,6 +10,7 @@ thread_local! {
     static CLOUD_LOGIN_STATUS_HOOK: CloudLoginStatusHookCell = std::cell::RefCell::new(None);
 }
 
+#[allow(dead_code)]
 pub(super) async fn resolve_cloud_logged_in_for_optional_setup() -> Result<bool> {
     #[cfg(test)]
     if let Some(hook) = CLOUD_LOGIN_STATUS_HOOK.with(|cell| cell.borrow().clone()) {

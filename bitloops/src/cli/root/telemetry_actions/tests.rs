@@ -61,12 +61,12 @@ fn telemetry_action_for_init_with_repeated_agents_sets_has_agent() {
 }
 
 #[test]
-fn telemetry_action_for_init_with_summaries_mode_records_flag() {
+fn telemetry_action_for_init_with_summaries_runtime_records_flag() {
     let cli = crate::cli::Cli::try_parse_from([
         "bitloops",
         "init",
-        "--summaries-mode",
-        "on",
+        "--summaries-runtime",
+        "platform",
         "--sync=false",
         "--ingest=false",
     ])
@@ -86,8 +86,8 @@ fn telemetry_action_for_init_with_summaries_mode_records_flag() {
     assert!(
         flags
             .iter()
-            .any(|flag| flag.as_str() == Some("summaries_mode")),
-        "expected telemetry flags to include summaries_mode"
+            .any(|flag| flag.as_str() == Some("summaries_runtime")),
+        "expected telemetry flags to include summaries_runtime"
     );
 }
 

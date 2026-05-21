@@ -9,10 +9,9 @@ use crate::cli::inference::TextGenerationRuntime;
 pub(crate) const DEFAULT_INIT_INGEST_BACKFILL: usize = 50;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum SummariesMode {
-    Auto,
-    Off,
-    On,
+pub enum SummariesRuntime {
+    Local,
+    Platform,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -123,9 +122,13 @@ pub struct InitArgs {
     #[arg(long, default_value_t = false)]
     pub no_summaries: bool,
 
-    /// Control semantic summaries setup behavior during init.
+    /// Select which summaries runtime to configure during init.
     #[arg(long, value_enum, conflicts_with = "no_summaries")]
-    pub summaries_mode: Option<SummariesMode>,
+    pub summaries_runtime: Option<SummariesRuntime>,
+
+    /// Legacy flag kept only to emit a clear migration error.
+    #[arg(long = "summaries-mode", hide = true)]
+    pub summaries_mode_legacy: Option<String>,
 
     /// Select which text-generation runtime to configure for context guidance during init.
     #[arg(long, value_enum)]

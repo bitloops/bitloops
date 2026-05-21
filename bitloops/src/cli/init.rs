@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 mod agent_hooks;
 mod agent_selection;
 mod args;
+#[cfg(test)]
 mod cloud_login_status;
 mod context_guidance_setup;
 mod daemon_bootstrap;
@@ -22,7 +23,7 @@ mod workflow_output;
 mod tests;
 
 pub use agent_selection::{InitAgentSelection, detect_or_select_agent};
-pub use args::{InitArgs, InitCommand, InitStatusArgs, SummariesMode};
+pub use args::{InitArgs, InitCommand, InitStatusArgs, SummariesRuntime};
 
 pub(super) use args::{
     DEFAULT_INIT_INGEST_BACKFILL, normalize_cli_exclusions, normalize_exclude_from_paths,
