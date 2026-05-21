@@ -367,11 +367,19 @@ fn test_handle_lifecycle_session_start_stamps_workos_actor() {
                 handle_lifecycle_session_start(&adapter, &event)
                     .expect("session start should record interaction session");
 
-                let (name, email, source) =
-                    session_actor_for(dir.path(), "actor-stamp-session");
-                assert_eq!(name, "Actor Stamp", "actor_name should be the WorkOS display label");
-                assert_eq!(email, "actor@example.test", "actor_email should match seeded session");
-                assert_eq!(source, "workos", "actor_source should be tagged as 'workos'");
+                let (name, email, source) = session_actor_for(dir.path(), "actor-stamp-session");
+                assert_eq!(
+                    name, "Actor Stamp",
+                    "actor_name should be the WorkOS display label"
+                );
+                assert_eq!(
+                    email, "actor@example.test",
+                    "actor_email should match seeded session"
+                );
+                assert_eq!(
+                    source, "workos",
+                    "actor_source should be tagged as 'workos'"
+                );
             });
         },
     );
