@@ -192,11 +192,16 @@ pub(crate) fn format_init_schema_summary(summary: &InitSchemaSummary) -> String 
 
 pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
     format!(
-        "DevQL ingest complete: commits_processed={}, checkpoint_companions_processed={}, events_inserted={}, artefacts_upserted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
+        "DevQL ingest complete: commits_processed={}, checkpoint_companions_processed={}, events_inserted={}, artefacts_upserted={}, file_deltas_upserted={}, hunks_upserted={}, added_lines_ingested={}, deleted_lines_ingested={}, binary_deltas_upserted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
         summary.commits_processed,
         summary.checkpoint_companions_processed,
         summary.events_inserted,
         summary.artefacts_upserted,
+        summary.file_deltas_upserted,
+        summary.hunks_upserted,
+        summary.added_lines_ingested,
+        summary.deleted_lines_ingested,
+        summary.binary_deltas_upserted,
         summary.semantic_feature_rows_upserted,
         summary.semantic_feature_rows_skipped,
         summary.symbol_embedding_rows_upserted,
@@ -824,6 +829,9 @@ mod ingestion_baseline;
 // ingestion: commit-first historical ingest range and ledger helpers
 #[path = "devql/ingestion/history.rs"]
 mod ingestion_history;
+// ingestion: hunk-only commit delta parsing and persistence
+#[path = "devql/ingestion/hunks.rs"]
+mod ingestion_hunks;
 // ingestion: shared record types for artefact persistence
 #[path = "devql/ingestion/artefact_persistence_types.rs"]
 mod ingestion_artefact_persistence_types;
@@ -831,15 +839,19 @@ mod ingestion_artefact_persistence_types;
 #[path = "devql/ingestion/artefact_persistence_sql.rs"]
 mod ingestion_artefact_persistence_sql;
 // ingestion: file state row, file artefact upsert, revision management
+#[allow(dead_code)]
 #[path = "devql/ingestion/artefact_persistence_file.rs"]
 mod ingestion_artefact_persistence_file;
 // ingestion: symbol record building, content hashing, artefact DB upserts
+#[allow(dead_code)]
 #[path = "devql/ingestion/artefact_persistence_symbols.rs"]
 mod ingestion_artefact_persistence_symbols;
 // ingestion: edge records, current state queries/mutations, row deserialization
+#[allow(dead_code)]
 #[path = "devql/ingestion/artefact_persistence_edges.rs"]
 mod ingestion_artefact_persistence_edges;
 // ingestion: top-level orchestration (refresh/upsert/delete current state)
+#[allow(dead_code)]
 #[path = "devql/ingestion/artefact_persistence.rs"]
 mod ingestion_artefact_persistence;
 // Stages 1–2 semantic feature + embedding persistence: `capabilities::semantic_clones::{stage_semantic_features,stage_embeddings}`
@@ -890,6 +902,7 @@ use self::ingestion_artefact_persistence_types::*;
 use self::ingestion_baseline::*;
 use self::ingestion_checkpoint::*;
 use self::ingestion_history::*;
+use self::ingestion_hunks::*;
 use self::ingestion_language::*;
 pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
 use self::ingestion_schema::*;

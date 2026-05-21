@@ -5319,20 +5319,20 @@ fn current_file_state_effective_content_id(world: &QatWorld, path: &str) -> Resu
     .with_context(|| format!("loading current_file_state effective_content_id for `{path}`"))
 }
 
-fn file_state_count_for_commit(world: &QatWorld, commit_sha: &str) -> Result<usize> {
+fn file_delta_count_for_commit(world: &QatWorld, commit_sha: &str) -> Result<usize> {
     let conn = open_relational_connection(world)?;
     let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2",
+            "SELECT COUNT(*) FROM commit_file_deltas WHERE repo_id = ?1 AND commit_sha = ?2",
             rusqlite::params![repo_id, commit_sha],
             |row| row.get(0),
         )
-        .with_context(|| format!("counting file_state rows for commit `{commit_sha}`"))?;
-    usize::try_from(count).context("converting file_state count to usize")
+        .with_context(|| format!("counting commit_file_deltas rows for commit `{commit_sha}`"))?;
+    usize::try_from(count).context("converting commit_file_deltas count to usize")
 }
 
-fn file_state_count_for_commit_path(
+fn file_delta_count_for_commit_path(
     world: &QatWorld,
     commit_sha: &str,
     path: &str,
@@ -5341,14 +5341,18 @@ fn file_state_count_for_commit_path(
     let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2 AND path = ?3",
+            "SELECT COUNT(*) \
+             FROM commit_file_deltas \
+             WHERE repo_id = ?1 \
+               AND commit_sha = ?2 \
+               AND (path_before = ?3 OR path_after = ?3)",
             rusqlite::params![repo_id, commit_sha, path],
             |row| row.get(0),
         )
         .with_context(|| {
-            format!("counting file_state rows for commit `{commit_sha}` path `{path}`")
+            format!("counting commit_file_deltas rows for commit `{commit_sha}` path `{path}`")
         })?;
-    usize::try_from(count).context("converting file_state path count to usize")
+    usize::try_from(count).context("converting commit_file_deltas path count to usize")
 }
 
 fn commit_has_changed_files(world: &QatWorld, commit_sha: &str) -> Result<bool> {
@@ -6168,27 +6172,30 @@ pub fn assert_expected_shas_completed_in_ledger(world: &QatWorld, repo_name: &st
     Ok(())
 }
 
-pub fn assert_expected_shas_have_file_state_rows(world: &QatWorld, repo_name: &str) -> Result<()> {
+pub fn assert_expected_shas_have_hunk_delta_rows(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     ensure!(
         !world.expected_commit_shas.is_empty(),
-        "no expected commit SHAs captured for file_state assertion"
+        "no expected commit SHAs captured for hunk-delta assertion"
     );
     let mut missing = Vec::new();
     for sha in &world.expected_commit_shas {
-        if file_state_count_for_commit(world, sha)? == 0 && commit_has_changed_files(world, sha)? {
+        if file_delta_count_for_commit(world, sha)? == 0 && commit_has_changed_files(world, sha)? {
             missing.push(sha.clone());
         }
     }
     ensure!(
         missing.is_empty(),
-        "expected file_state rows for commit SHAs, but none found for: {}",
+        "expected hunk-delta rows for commit SHAs, but none found for: {}",
         missing.join(", ")
     );
     Ok(())
 }
 
-pub fn assert_expected_paths_have_file_state_rows_for_expected_shas(
+pub fn assert_expected_paths_have_hunk_delta_rows_for_expected_shas(
     world: &QatWorld,
     repo_name: &str,
 ) -> Result<()> {
@@ -6196,13 +6203,13 @@ pub fn assert_expected_paths_have_file_state_rows_for_expected_shas(
     let pairs = expected_commit_path_pairs(&world.expected_commit_shas, &world.expected_paths)?;
     let mut missing = Vec::new();
     for (sha, path) in pairs {
-        if file_state_count_for_commit_path(world, &sha, &path)? == 0 {
+        if file_delta_count_for_commit_path(world, &sha, &path)? == 0 {
             missing.push(format!("{path}@{sha}"));
         }
     }
     ensure!(
         missing.is_empty(),
-        "expected file_state rows for expected path/SHA pairs, but none found for: {}",
+        "expected hunk-delta rows for expected path/SHA pairs, but none found for: {}",
         missing.join(", ")
     );
     Ok(())

@@ -50,7 +50,7 @@ pub use codecity::{
     CodeCityFileDetailResult, CodeCitySnapshotStatusResult, CodeCityViolationConnectionResult,
     CodeCityViolationFilterInput, CodeCityWorldResult,
 };
-pub use commit::Commit;
+pub use commit::{Commit, CommitHunk, CommitHunkLine};
 pub use connection::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CheckpointConnection,
     CheckpointEdge, CloneConnection, CloneEdge, CommitConnection, CommitEdge, ConnectionPagination,

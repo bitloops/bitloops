@@ -172,6 +172,7 @@ pub(super) fn canonical_kind_filter_sql(column: &str, requested_kind: &str) -> S
     format!("{column} = '{}'", esc_pg(kind))
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum TemporalRevisionKind {
     Commit,

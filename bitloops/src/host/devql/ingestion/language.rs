@@ -20,10 +20,12 @@ impl DecodedFileContent {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn line_count(&self) -> i32 {
         line_count_from_bytes(&self.raw_bytes)
     }
 
+    #[allow(dead_code)]
     pub(super) fn byte_count(&self) -> i32 {
         i32::try_from(self.raw_bytes.len()).unwrap_or(i32::MAX)
     }

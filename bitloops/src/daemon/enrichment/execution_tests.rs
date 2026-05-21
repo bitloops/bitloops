@@ -1162,11 +1162,10 @@ async fn daemon_embedding_job_keeps_incremental_behavior_when_setup_is_unchanged
     let after_hashes = hash_by_symbol(&after_rows);
 
     assert!(second.error.is_none());
-    assert_eq!(second.follow_ups.len(), 1);
-    assert!(matches!(
-        second.follow_ups.first(),
-        Some(FollowUpJob::CloneEdgesRebuild { .. })
-    ));
+    assert!(
+        second.follow_ups.is_empty(),
+        "unchanged setup and fresh inputs should not schedule clone rebuild work"
+    );
     assert_eq!(
         load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
         vec![(
@@ -1448,21 +1447,44 @@ async fn repo_backfill_workplane_inputs_exclude_historical_only_artefacts() {
         )
         .await
         .expect("load current semantic inputs");
-    let historical_legacy_rows = relational
+    let historical_legacy_deltas = relational
         .query_rows(&format!(
-            "SELECT COUNT(*) AS count FROM file_state WHERE repo_id = '{}' AND path = 'src/legacy.ts'",
+            "SELECT COUNT(*) AS count \
+             FROM commit_file_deltas \
+             WHERE repo_id = '{}' \
+               AND (path_before = 'src/legacy.ts' OR path_after = 'src/legacy.ts')",
             crate::host::devql::esc_pg(&cfg.repo.repo_id),
         ))
         .await
-        .expect("count historical legacy file rows");
+        .expect("count historical legacy file deltas");
     assert!(
-        historical_legacy_rows
+        historical_legacy_deltas
             .first()
             .and_then(|row| row.get("count"))
             .and_then(serde_json::Value::as_i64)
             .unwrap_or_default()
             > 0,
-        "fixture must include a historical-only artefact"
+        "fixture must include hunk-only historical delta evidence"
+    );
+    let deleted_legacy_hunks = relational
+        .query_rows(&format!(
+            "SELECT COUNT(*) AS count \
+             FROM commit_hunks \
+             WHERE repo_id = '{}' \
+               AND path_before = 'src/legacy.ts' \
+               AND deleted_lines_json <> '[]'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("count deleted legacy hunks");
+    assert!(
+        deleted_legacy_hunks
+            .first()
+            .and_then(|row| row.get("count"))
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or_default()
+            > 0,
+        "fixture must include before-side deleted hunk evidence"
     );
     assert!(
         current_inputs
@@ -3425,9 +3447,9 @@ async fn direct_clone_rebuild_ingester_cleans_up_when_repo_policy_disables_embed
     );
     let historical_clone_edges_before =
         load_historical_clone_edge_count(&sqlite_path, &cfg.repo.repo_id);
-    assert!(
-        historical_clone_edges_before > 0,
-        "test setup should populate historical clone edges before direct ingester cleanup"
+    assert_eq!(
+        historical_clone_edges_before, 0,
+        "hunk-only ingest should not populate historical clone edges"
     );
     assert!(
         !load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id).is_empty(),

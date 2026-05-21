@@ -429,6 +429,60 @@ CREATE TABLE IF NOT EXISTS commit_ingest_ledger (
 CREATE INDEX IF NOT EXISTS commit_ingest_ledger_repo_idx
 ON commit_ingest_ledger (repo_id);
 
+CREATE TABLE IF NOT EXISTS commit_file_deltas (
+    repo_id TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    delta_id TEXT NOT NULL,
+    path_before TEXT,
+    path_after TEXT,
+    change_kind TEXT NOT NULL,
+    old_blob_sha TEXT,
+    new_blob_sha TEXT,
+    is_binary BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (repo_id, delta_id)
+);
+
+CREATE INDEX IF NOT EXISTS commit_file_deltas_commit_idx
+ON commit_file_deltas (repo_id, commit_sha);
+
+CREATE INDEX IF NOT EXISTS commit_file_deltas_path_after_idx
+ON commit_file_deltas (repo_id, path_after, commit_sha);
+
+CREATE INDEX IF NOT EXISTS commit_file_deltas_path_before_idx
+ON commit_file_deltas (repo_id, path_before, commit_sha);
+
+CREATE TABLE IF NOT EXISTS commit_hunks (
+    repo_id TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    hunk_id TEXT NOT NULL,
+    delta_id TEXT NOT NULL,
+    path_before TEXT,
+    path_after TEXT,
+    hunk_index INTEGER NOT NULL,
+    old_start INTEGER NOT NULL,
+    old_line_count INTEGER NOT NULL,
+    new_start INTEGER NOT NULL,
+    new_line_count INTEGER NOT NULL,
+    added_lines_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    deleted_lines_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    patch TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (repo_id, hunk_id)
+);
+
+CREATE INDEX IF NOT EXISTS commit_hunks_commit_idx
+ON commit_hunks (repo_id, commit_sha, hunk_index);
+
+CREATE INDEX IF NOT EXISTS commit_hunks_delta_idx
+ON commit_hunks (repo_id, delta_id);
+
+CREATE INDEX IF NOT EXISTS commit_hunks_path_after_idx
+ON commit_hunks (repo_id, path_after, commit_sha);
+
+CREATE INDEX IF NOT EXISTS commit_hunks_path_before_idx
+ON commit_hunks (repo_id, path_before, commit_sha);
+
 CREATE TABLE IF NOT EXISTS content_cache (
     content_id TEXT NOT NULL,
     language TEXT NOT NULL,
@@ -500,6 +554,8 @@ pub(crate) fn postgres_shared_schema_sql() -> &'static str {
                 "artefacts_historical",
                 "artefact_edges",
                 "commit_ingest_ledger",
+                "commit_file_deltas",
+                "commit_hunks",
             ],
         )
     })

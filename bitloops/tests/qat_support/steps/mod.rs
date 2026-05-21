@@ -1436,13 +1436,13 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
-            regex(r"^expected SHAs have file_state rows in (\S+)$"),
-            step_fn(then_expected_shas_have_file_state_rows),
+            regex(r"^expected SHAs have hunk-delta rows in (\S+)$"),
+            step_fn(then_expected_shas_have_hunk_delta_rows),
         )
         .then(
             None,
-            regex(r"^expected paths have file_state rows for expected SHAs in (\S+)$"),
-            step_fn(then_expected_paths_have_file_state_rows_for_expected_shas),
+            regex(r"^expected paths have hunk-delta rows for expected SHAs in (\S+)$"),
+            step_fn(then_expected_paths_have_hunk_delta_rows_for_expected_shas),
         )
         .then(
             None,

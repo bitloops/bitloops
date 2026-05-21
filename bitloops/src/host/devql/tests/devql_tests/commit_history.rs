@@ -299,14 +299,38 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
     let sqlite =
         rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
 
-    let file_state_count: i64 = sqlite
+    let file_delta_count: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2",
+            "SELECT COUNT(*) FROM commit_file_deltas WHERE repo_id = ?1 AND commit_sha = ?2",
             rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str()],
             |row| row.get(0),
         )
-        .expect("count file_state rows");
-    assert!(file_state_count > 0, "expected historical file_state rows");
+        .expect("count commit_file_deltas rows");
+    assert!(
+        file_delta_count > 0,
+        "expected historical commit_file_deltas rows"
+    );
+
+    let hunk_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM commit_hunks WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count commit_hunks rows");
+    assert!(hunk_count > 0, "expected historical commit_hunks rows");
+
+    let historical_file_state_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical file_state rows");
+    assert_eq!(
+        historical_file_state_count, 0,
+        "hunk-only ingest must not write historical file_state"
+    );
 
     let artefact_count: i64 = sqlite
         .query_row(
@@ -315,7 +339,10 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
             |row| row.get(0),
         )
         .expect("count historical artefacts");
-    assert!(artefact_count > 0, "expected historical artefact rows");
+    assert_eq!(
+        artefact_count, 0,
+        "hunk-only ingest must not write historical artefacts"
+    );
 
     let current_artefact_count: i64 = sqlite
         .query_row(
@@ -430,7 +457,205 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
 }
 
 #[tokio::test]
-async fn execute_ingest_materialises_decode_degraded_commit_as_file_only() {
+async fn execute_ingest_persists_hunks_without_historical_artefacts() {
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\npub fn two() -> i32 { 2 }\n",
+    )
+    .expect("write lib.rs");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add lib"]);
+    let added_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 10 }\npub fn two() -> i32 { 2 }\npub fn three() -> i32 { 3 }\n",
+    )
+    .expect("modify lib.rs");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "modify lib"]);
+    let modified_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    std::fs::remove_file(repo.path().join("src/lib.rs")).expect("delete lib.rs");
+    git_ok(repo.path(), &["add", "-A"]);
+    git_ok(repo.path(), &["commit", "-m", "delete lib"]);
+    let deleted_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_init_schema(&cfg, "commit-history hunk-only test")
+        .await
+        .expect("initialise local devql store for hunk-only ingest test");
+    let summary = execute_ingest_with_observer(&cfg, false, 500, None, None)
+        .await
+        .expect("execute hunk-only ingest");
+    assert!(
+        summary.success,
+        "ingest summary should report success for hunk-only commit history"
+    );
+    assert_eq!(
+        summary.artefacts_upserted, 0,
+        "hunk-only ingest must not count historical artefact writes"
+    );
+
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let file_delta_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM commit_file_deltas
+             WHERE repo_id = ?1 AND commit_sha IN (?2, ?3, ?4)",
+            rusqlite::params![
+                cfg.repo.repo_id.as_str(),
+                added_sha.as_str(),
+                modified_sha.as_str(),
+                deleted_sha.as_str()
+            ],
+            |row| row.get(0),
+        )
+        .expect("count commit file deltas");
+    assert!(
+        file_delta_count >= 3,
+        "expected at least the add/modify/delete file deltas for src/lib.rs"
+    );
+
+    let lib_delta_kinds: Vec<String> = {
+        let mut stmt = sqlite
+            .prepare(
+                "SELECT change_kind
+                 FROM commit_file_deltas
+                 WHERE repo_id = ?1
+                   AND commit_sha IN (?2, ?3, ?4)
+                   AND (path_before = 'src/lib.rs' OR path_after = 'src/lib.rs')
+                 ORDER BY commit_sha, change_kind",
+            )
+            .expect("prepare src/lib.rs delta query");
+        stmt.query_map(
+            rusqlite::params![
+                cfg.repo.repo_id.as_str(),
+                added_sha.as_str(),
+                modified_sha.as_str(),
+                deleted_sha.as_str()
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("query src/lib.rs delta kinds")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect src/lib.rs delta kinds")
+    };
+    assert!(
+        lib_delta_kinds.contains(&"added".to_string())
+            && lib_delta_kinds.contains(&"modified".to_string())
+            && lib_delta_kinds.contains(&"deleted".to_string()),
+        "expected add/modify/delete deltas for src/lib.rs, got {lib_delta_kinds:?}"
+    );
+
+    let added_hunks: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM commit_hunks WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), added_sha.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count added commit hunks");
+    let modified_hunks: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM commit_hunks WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), modified_sha.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count modified commit hunks");
+    let deleted_hunks: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM commit_hunks WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), deleted_sha.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count deleted commit hunks");
+    assert!(added_hunks >= 1, "added file should produce added hunks");
+    assert!(
+        modified_hunks >= 1,
+        "modified file should produce modified hunks"
+    );
+    assert!(
+        deleted_hunks >= 1,
+        "deleted file should produce deleted hunks"
+    );
+
+    let (modified_added_json, modified_deleted_json): (String, String) = sqlite
+        .query_row(
+            "SELECT added_lines_json, deleted_lines_json
+             FROM commit_hunks
+             WHERE repo_id = ?1 AND commit_sha = ?2
+             ORDER BY hunk_index
+             LIMIT 1",
+            rusqlite::params![cfg.repo.repo_id.as_str(), modified_sha.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read modified hunk JSON");
+    assert!(
+        json_lines_contain(&modified_added_json, "pub fn one() -> i32 { 10 }")
+            || json_lines_contain(&modified_added_json, "pub fn three() -> i32 { 3 }"),
+        "modified hunk should record added lines: {modified_added_json}"
+    );
+    assert!(
+        json_lines_contain(&modified_deleted_json, "pub fn one() -> i32 { 1 }"),
+        "modified hunk should record deleted lines: {modified_deleted_json}"
+    );
+
+    let deleted_lines_json: String = sqlite
+        .query_row(
+            "SELECT deleted_lines_json
+             FROM commit_hunks
+             WHERE repo_id = ?1 AND commit_sha = ?2
+             ORDER BY hunk_index
+             LIMIT 1",
+            rusqlite::params![cfg.repo.repo_id.as_str(), deleted_sha.as_str()],
+            |row| row.get(0),
+        )
+        .expect("read deleted hunk JSON");
+    assert!(
+        json_lines_contain(&deleted_lines_json, "pub fn one() -> i32 { 10 }"),
+        "deleted hunk should preserve before-side deleted lines: {deleted_lines_json}"
+    );
+
+    let historical_file_state_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count file_state rows");
+    let historical_artefact_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical artefacts");
+    let historical_snapshot_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_snapshots WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical artefact snapshots");
+    assert_eq!(historical_file_state_count, 0);
+    assert_eq!(historical_artefact_count, 0);
+    assert_eq!(historical_snapshot_count, 0);
+}
+
+fn json_lines_contain(raw: &str, expected_content: &str) -> bool {
+    let parsed: serde_json::Value =
+        serde_json::from_str(raw).expect("hunk line JSON should be valid");
+    parsed.as_array().into_iter().flatten().any(|entry| {
+        entry.get("content").and_then(serde_json::Value::as_str) == Some(expected_content)
+    })
+}
+
+#[tokio::test]
+async fn execute_ingest_materialises_invalid_utf8_commit_as_file_delta_only() {
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
@@ -461,17 +686,27 @@ async fn execute_ingest_materialises_decode_degraded_commit_as_file_only() {
     assert!(summary.success, "ingest summary should report success");
 
     let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
-    let bad_blob_sha = git_ok(repo.path(), &["rev-parse", "HEAD:src/bad.rs"]);
     let sqlite =
         rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
 
-    let file_state_rows: i64 = sqlite
+    let file_delta_rows: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2 AND path = ?3",
+            "SELECT COUNT(*) \
+             FROM commit_file_deltas \
+             WHERE repo_id = ?1 \
+               AND commit_sha = ?2 \
+               AND path_after = ?3",
             rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str(), "src/bad.rs"],
             |row| row.get(0),
         )
-        .expect("count file_state rows for src/bad.rs");
+        .expect("count commit_file_deltas rows for src/bad.rs");
+    let file_state_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical file_state rows");
     let file_artefact_rows: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM artefacts
@@ -491,38 +726,38 @@ async fn execute_ingest_materialises_decode_degraded_commit_as_file_only() {
     let snapshot_rows: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM artefact_snapshots
-             WHERE repo_id = ?1 AND blob_sha = ?2 AND path = ?3",
-            rusqlite::params![
-                cfg.repo.repo_id.as_str(),
-                bad_blob_sha.as_str(),
-                "src/bad.rs"
-            ],
+             WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
             |row| row.get(0),
         )
-        .expect("count artefact snapshots for src/bad.rs");
+        .expect("count artefact snapshots");
     let edge_rows: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM artefact_edges WHERE repo_id = ?1 AND blob_sha = ?2",
-            rusqlite::params![cfg.repo.repo_id.as_str(), bad_blob_sha.as_str()],
+            "SELECT COUNT(*) FROM artefact_edges WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
             |row| row.get(0),
         )
-        .expect("count historical edge rows for src/bad.rs");
+        .expect("count historical edge rows");
 
     assert_eq!(
-        file_state_rows, 1,
-        "ingest should persist file_state for src/bad.rs"
+        file_delta_rows, 1,
+        "hunk-only ingest should persist a file delta for src/bad.rs"
     );
     assert_eq!(
-        file_artefact_rows, 1,
-        "ingest should persist one file artefact for src/bad.rs"
+        file_state_rows, 0,
+        "hunk-only ingest must not persist file_state for src/bad.rs"
+    );
+    assert_eq!(
+        file_artefact_rows, 0,
+        "hunk-only ingest must not persist file artefacts for src/bad.rs"
     );
     assert_eq!(
         nested_artefact_rows, 0,
         "ingest should not persist nested artefacts for src/bad.rs"
     );
     assert_eq!(
-        snapshot_rows, 1,
-        "ingest should persist one snapshot row for src/bad.rs"
+        snapshot_rows, 0,
+        "hunk-only ingest must not persist snapshot rows for src/bad.rs"
     );
     assert_eq!(
         edge_rows, 0,
@@ -531,7 +766,7 @@ async fn execute_ingest_materialises_decode_degraded_commit_as_file_only() {
 }
 
 #[tokio::test]
-async fn execute_ingest_errors_when_historical_blob_content_cannot_be_loaded() {
+async fn execute_ingest_errors_when_hunk_diff_cannot_be_loaded() {
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
@@ -557,7 +792,7 @@ async fn execute_ingest_errors_when_historical_blob_content_cannot_be_loaded() {
         .expect("execute ingest with one missing blob object");
     assert!(
         !summary.success,
-        "historical ingest should report partial failure when git blob bytes cannot be loaded"
+        "hunk-only ingest should report partial failure when git cannot render the commit diff"
     );
 
     let sqlite =
@@ -575,7 +810,7 @@ async fn execute_ingest_errors_when_historical_blob_content_cannot_be_loaded() {
 
     assert_eq!(
         ledger_row.0, "failed",
-        "historical ingest should mark the commit as failed when blob bytes cannot be loaded"
+        "hunk-only ingest should mark the commit as failed when git cannot render the diff"
     );
     assert_eq!(
         ledger_row.1, "failed",
@@ -583,8 +818,8 @@ async fn execute_ingest_errors_when_historical_blob_content_cannot_be_loaded() {
     );
 
     assert!(
-        message.contains("failed to decode blob content for historical ingest path `src/lib.rs`"),
-        "unexpected historical ingest error: {message}"
+        message.contains("reading hunk diff for commit"),
+        "unexpected hunk-only ingest error: {message}"
     );
     assert!(
         message.contains(commit_sha.as_str()),
@@ -592,7 +827,7 @@ async fn execute_ingest_errors_when_historical_blob_content_cannot_be_loaded() {
     );
     assert!(
         message.contains(blob_sha.as_str()),
-        "historical ingest error should include blob context: {message}"
+        "hunk-only ingest error should include blob context: {message}"
     );
 }
 
@@ -632,16 +867,16 @@ async fn execute_ingest_skips_events_backend_for_unmapped_commits_when_events_st
 
     let sqlite =
         rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
-    let file_state_count: i64 = sqlite
+    let file_delta_count: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1",
+            "SELECT COUNT(*) FROM commit_file_deltas WHERE repo_id = ?1",
             rusqlite::params![cfg.repo.repo_id.as_str()],
             |row| row.get(0),
         )
-        .expect("count historical file_state rows");
+        .expect("count commit_file_deltas rows");
     assert!(
-        file_state_count > 0,
-        "historical ingest should still persist file_state rows when no checkpoint companions are present"
+        file_delta_count > 0,
+        "historical ingest should still persist hunk-delta rows when no checkpoint companions are present"
     );
 }
 
@@ -841,8 +1076,7 @@ async fn execute_ingest_continues_after_failed_checkpoint_companion_commit() {
 }
 
 #[tokio::test]
-async fn execute_ingest_reuses_stable_symbol_ids_across_blob_only_changes_without_breaking_commit_queries()
- {
+async fn execute_ingest_records_hunks_across_blob_only_changes_without_historical_artefacts() {
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
     std::fs::write(
@@ -858,7 +1092,6 @@ async fn execute_ingest_reuses_stable_symbol_ids_across_blob_only_changes_withou
     .expect("write first revision");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add stable"]);
-    let first_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
 
     std::fs::write(
         repo.path().join("src/lib.rs"),
@@ -867,7 +1100,7 @@ async fn execute_ingest_reuses_stable_symbol_ids_across_blob_only_changes_withou
     .expect("write second revision");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add comment"]);
-    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let comment_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
 
     let cfg = cfg_for_repo(repo.path());
     execute_init_schema(&cfg, "commit-history symbol content dedupe test")
@@ -881,60 +1114,53 @@ async fn execute_ingest_reuses_stable_symbol_ids_across_blob_only_changes_withou
 
     let sqlite =
         rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
-    let stable_row_count: i64 = sqlite
+    let file_delta_count: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM artefacts
-             WHERE repo_id = ?1 AND symbol_fqn = 'src/lib.rs::stable' AND canonical_kind = 'function'",
+            "SELECT COUNT(*) \
+             FROM commit_file_deltas \
+             WHERE repo_id = ?1 AND commit_sha = ?2 AND path_after = 'src/lib.rs'",
+            rusqlite::params![cfg.repo.repo_id.as_str(), comment_sha.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count hunk-only file deltas");
+    let hunk_added_json: String = sqlite
+        .query_row(
+            "SELECT added_lines_json
+             FROM commit_hunks
+             WHERE repo_id = ?1 AND commit_sha = ?2 AND path_after = 'src/lib.rs'
+             ORDER BY hunk_index
+             LIMIT 1",
+            rusqlite::params![cfg.repo.repo_id.as_str(), comment_sha.as_str()],
+            |row| row.get(0),
+        )
+        .expect("read comment commit hunk");
+    let artefact_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts WHERE repo_id = ?1",
             rusqlite::params![cfg.repo.repo_id.as_str()],
             |row| row.get(0),
         )
-        .expect("count stable historical artefacts");
-    let stable_symbol_id_count: i64 = sqlite
+        .expect("count historical artefacts");
+    let snapshot_count: i64 = sqlite
         .query_row(
-            "SELECT COUNT(DISTINCT symbol_id) FROM artefacts
-             WHERE repo_id = ?1 AND symbol_fqn = 'src/lib.rs::stable' AND canonical_kind = 'function'",
+            "SELECT COUNT(*) FROM artefact_snapshots WHERE repo_id = ?1",
             rusqlite::params![cfg.repo.repo_id.as_str()],
             |row| row.get(0),
         )
-        .expect("count stable historical symbol ids");
+        .expect("count historical snapshots");
     assert_eq!(
-        stable_row_count, 2,
-        "historical ingest should persist one symbol artefact row per blob-scoped revision"
+        file_delta_count, 1,
+        "hunk-only ingest should persist one file delta for the blob-only change"
     );
-    assert_eq!(
-        stable_symbol_id_count, 1,
-        "historical ingest should preserve the same structural symbol identity when only the blob changes"
+    assert!(
+        json_lines_contain(
+            &hunk_added_json,
+            "// comment that changes the file blob only"
+        ),
+        "hunk-only ingest should capture the added comment line: {hunk_added_json}"
     );
-
-    let first_rows = execute_query_json_for_repo_root(
-        repo.path(),
-        &format!(r#"asOf(commit:"{first_sha}")->file("src/lib.rs")->artefacts(kind:"function")->limit(10)"#),
-    )
-    .await
-    .expect("query first commit artefacts");
-    let head_rows = execute_query_json_for_repo_root(
-        repo.path(),
-        &format!(r#"asOf(commit:"{head_sha}")->file("src/lib.rs")->artefacts(kind:"function")->limit(10)"#),
-    )
-    .await
-    .expect("query head commit artefacts");
-
-    let first_rows = first_rows
-        .as_array()
-        .expect("first query should return rows");
-    let head_rows = head_rows.as_array().expect("head query should return rows");
-    assert_eq!(first_rows.len(), 1);
-    assert_eq!(head_rows.len(), 1);
-    assert_eq!(
-        first_rows[0]["symbol_fqn"],
-        Value::String("src/lib.rs::stable".to_string())
-    );
-    assert_eq!(
-        head_rows[0]["symbol_fqn"],
-        Value::String("src/lib.rs::stable".to_string())
-    );
-    assert_eq!(first_rows[0]["start_line"], Value::from(1));
-    assert_eq!(head_rows[0]["start_line"], Value::from(2));
+    assert_eq!(artefact_count, 0);
+    assert_eq!(snapshot_count, 0);
 }
 
 #[tokio::test]

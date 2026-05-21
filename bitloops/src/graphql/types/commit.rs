@@ -6,6 +6,29 @@ use super::{
     CheckpointConnection, CheckpointEdge, ConnectionPagination, DateTimeScalar, paginate_items,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitHunkLine {
+    pub line_number: i32,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct CommitHunk {
+    pub commit_sha: String,
+    pub path_before: Option<String>,
+    pub path_after: Option<String>,
+    pub change_kind: String,
+    pub hunk_index: i32,
+    pub old_start: i32,
+    pub old_line_count: i32,
+    pub new_start: i32,
+    pub new_line_count: i32,
+    pub added_lines: Vec<CommitHunkLine>,
+    pub deleted_lines: Vec<CommitHunkLine>,
+    pub patch: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 #[graphql(complex)]
 pub struct Commit {
@@ -43,6 +66,13 @@ impl Commit {
                     self.sha
                 ))
             })
+    }
+
+    async fn hunks(&self, ctx: &Context<'_>, path: Option<String>) -> Result<Vec<CommitHunk>> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_commit_hunks(&self.scope, &self.sha, path.as_deref())
+            .await
+            .map_err(|err| backend_error(format!("failed to read hunks for {}: {err:#}", self.sha)))
     }
 
     async fn checkpoints(

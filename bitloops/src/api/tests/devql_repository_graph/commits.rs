@@ -31,6 +31,25 @@ async fn devql_repository_queries_resolve_repo_commit_branch_user_agent_and_chec
                       commitMessage
                       branch
                       filesChanged
+                      hunks(path: "app.rs") {
+                        pathBefore
+                        pathAfter
+                        changeKind
+                        hunkIndex
+                        oldStart
+                        oldLineCount
+                        newStart
+                        newLineCount
+                        addedLines {
+                          lineNumber
+                          content
+                        }
+                        deletedLines {
+                          lineNumber
+                          content
+                        }
+                        patch
+                      }
                       checkpoints(first: 5) {
                         totalCount
                         pageInfo {
@@ -100,6 +119,28 @@ async fn devql_repository_queries_resolve_repo_commit_branch_user_agent_and_chec
     assert_eq!(
         json["repo"]["commits"]["edges"][0]["node"]["filesChanged"],
         json!(["app.rs"])
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["hunks"],
+        json!([{
+            "pathBefore": "app.rs",
+            "pathAfter": "app.rs",
+            "changeKind": "modified",
+            "hunkIndex": 1,
+            "oldStart": 1,
+            "oldLineCount": 1,
+            "newStart": 1,
+            "newLineCount": 1,
+            "addedLines": [{
+                "lineNumber": 1,
+                "content": "fn main() { println!(\"ok\"); }"
+            }],
+            "deletedLines": [{
+                "lineNumber": 1,
+                "content": "fn main() {}"
+            }],
+            "patch": "@@ -1 +1 @@\n-fn main() {}\n+fn main() { println!(\"ok\"); }"
+        }])
     );
     assert_eq!(
         json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["totalCount"],

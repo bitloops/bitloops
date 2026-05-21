@@ -668,6 +668,30 @@ fn seed_dashboard_commit_row(repo_root: &Path, commit_sha: &str) {
                  ) VALUES (?1, ?2, 'Alice', 'alice@example.com', 'Checkpoint commit', '2026-02-27T12:05:00Z')",
                 rusqlite::params![commit_sha, repo_id.as_str()],
             )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO commit_file_deltas (
+                    repo_id, commit_sha, delta_id, path_before, path_after, change_kind,
+                    old_blob_sha, new_blob_sha, is_binary
+                 ) VALUES (?1, ?2, 'delta-app-rs', 'app.rs', 'app.rs', 'modified', NULL, NULL, 0)",
+                rusqlite::params![repo_id.as_str(), commit_sha],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO commit_hunks (
+                    repo_id, commit_sha, hunk_id, delta_id, path_before, path_after, hunk_index,
+                    old_start, old_line_count, new_start, new_line_count, added_lines_json,
+                    deleted_lines_json, patch
+                 ) VALUES (
+                    ?1, ?2, 'hunk-app-rs-1', 'delta-app-rs', 'app.rs', 'app.rs', 1,
+                    1, 1, 1, 1, ?3, ?4, ?5
+                 )",
+                rusqlite::params![
+                    repo_id.as_str(),
+                    commit_sha,
+                    r#"[{"lineNumber":1,"content":"fn main() { println!(\"ok\"); }"}]"#,
+                    r#"[{"lineNumber":1,"content":"fn main() {}"}]"#,
+                    "@@ -1 +1 @@\n-fn main() {}\n+fn main() { println!(\"ok\"); }",
+                ],
+            )?;
             Ok(())
         })
         .expect("insert commit row");

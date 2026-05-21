@@ -1,8 +1,5 @@
 use super::progress::{emit_checkpoint_ingested, emit_progress};
-use super::shared::{
-    active_branch_name, promote_temporary_current_rows_for_head_commit,
-    resolve_pack_versions_for_ingest, tracked_paths_at_revision,
-};
+use super::shared::{active_branch_name, promote_temporary_current_rows_for_head_commit};
 use super::*;
 pub async fn run_ingest(cfg: &DevqlConfig) -> Result<()> {
     let summary = execute_ingest(cfg).await?;
@@ -117,8 +114,6 @@ async fn execute_ingest_inner(
     ensure_repository_row(cfg, &relational).await?;
     let exclusion_matcher = load_repo_exclusion_matcher(&cfg.repo_root)
         .context("loading repo policy exclusions for `devql ingest`")?;
-    let (parser_version, extractor_version) = resolve_pack_versions_for_ingest()
-        .context("resolving language pack versions for `devql ingest`")?;
 
     let head_sha = match run_git(&cfg.repo_root, &["rev-parse", "HEAD"]) {
         Ok(sha) => sha,
@@ -229,118 +224,31 @@ async fn execute_ingest_inner(
         let commit_result: Result<()> = async {
             if !history_completed {
                 upsert_commit_metadata_row(cfg, &relational, &commit_info).await?;
-                let tracked_paths = tracked_paths_at_revision(&cfg.repo_root, &commit_sha)
-                    .with_context(|| format!("listing tracked files for commit {commit_sha}"))?;
-                let classifier = ProjectAwareClassifier::discover_for_revision(
-                    &cfg.repo_root,
-                    &commit_sha,
-                    tracked_paths,
-                    &parser_version,
-                    &extractor_version,
-                )
-                .with_context(|| {
-                    format!("building project-aware classifier for commit {commit_sha}")
-                })?;
-                let mut changed_files = crate::host::checkpoints::strategy::manual_commit::files_changed_in_commit(
-                    &cfg.repo_root,
-                    &commit_sha,
-                )
-                .with_context(|| format!("listing changed files for commit {commit_sha}"))?
-                .into_iter()
-                .collect::<Vec<_>>();
-                changed_files.sort();
-
-                for path in changed_files {
-                    let normalized_path = normalize_repo_path(&path);
-                    if normalized_path.is_empty() {
-                        continue;
-                    }
-                    let excluded_by_policy =
-                        exclusion_matcher.excludes_repo_relative_path(&normalized_path);
-                    let classification = classifier
-                        .classify_repo_relative_path(&normalized_path, excluded_by_policy)
+                let raw_diff = git_show_hunk_diff(&cfg.repo_root, &commit_sha)?;
+                let mut parsed_hunks =
+                    parse_commit_hunks_from_git_show(&cfg.repo.repo_id, &commit_sha, &raw_diff)
                         .with_context(|| {
-                            format!(
-                                "classifying historical ingest path `{normalized_path}` at commit {commit_sha}"
-                            )
+                            format!("parsing hunk diff for commit {commit_sha}")
                         })?;
-                    if classification.analysis_mode == AnalysisMode::Excluded {
-                        continue;
-                    }
-
-                    let blob_sha = git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, &normalized_path)
-                        .or_else(|| git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, &path));
-                    let Some(blob_sha) = blob_sha else {
-                        continue;
-                    };
-                    let blob_content =
-                        git_blob_decoded_content(&cfg.repo_root, &blob_sha).ok_or_else(|| {
-                            anyhow!(
-                                "failed to decode blob content for historical ingest path `{}` at commit {} (blob {})",
-                                normalized_path,
-                                commit_sha,
-                                blob_sha
-                            )
-                        })?;
-
-                    upsert_file_state_row(
-                        &cfg.repo.repo_id,
-                        &relational,
-                        &commit_sha,
-                        &normalized_path,
-                        &blob_sha,
-                    )
-                    .await?;
-                    if !classification.should_extract() {
-                        continue;
-                    }
-                    if classification.analysis_mode == AnalysisMode::Text {
-                        let Some(content) = blob_content.text.as_deref() else {
-                            continue;
-                        };
-                        if !plain_text_content_is_allowed(content) {
-                            continue;
-                        }
-                    }
-                    let file_artefact = upsert_file_artefact_row(
-                        &cfg.repo.repo_id,
-                        &relational,
-                        &normalized_path,
-                        &blob_sha,
-                        &classification.language,
-                        &classification.extraction_fingerprint,
-                        &blob_content,
-                    )
-                    .await?;
-                    if classification.analysis_mode == AnalysisMode::Text {
-                        counters.artefacts_upserted += 1;
-                        continue;
-                    }
-                    if blob_content.decode_degraded {
-                        counters.artefacts_upserted += 1;
-                        continue;
-                    }
-                    let source_content = blob_content.text.as_deref().unwrap_or_default();
-                    upsert_language_artefacts(
-                        cfg,
-                        &relational,
-                        &FileRevision {
-                            commit_sha: &commit_sha,
-                            revision: TemporalRevisionRef {
-                                kind: TemporalRevisionKind::Commit,
-                                id: &commit_sha,
-                                temp_checkpoint_id: None,
-                            },
-                            commit_unix: commit_info.commit_unix,
-                            path: &normalized_path,
-                            blob_sha: &blob_sha,
-                        },
-                        &file_artefact,
-                        source_content,
-                    )
-                    .await?;
-                    counters.artefacts_upserted += 1;
-                }
+                filter_commit_hunks_by_exclusions(&mut parsed_hunks, &exclusion_matcher);
+                persist_commit_hunks(&relational, &cfg.repo.repo_id, &parsed_hunks).await?;
+                counters.file_deltas_upserted += parsed_hunks.file_deltas.len();
+                counters.hunks_upserted += parsed_hunks.hunks.len();
+                counters.added_lines_ingested += parsed_hunks
+                    .hunks
+                    .iter()
+                    .map(|hunk| hunk.added_lines.len())
+                    .sum::<usize>();
+                counters.deleted_lines_ingested += parsed_hunks
+                    .hunks
+                    .iter()
+                    .map(|hunk| hunk.deleted_lines.len())
+                    .sum::<usize>();
+                counters.binary_deltas_upserted += parsed_hunks
+                    .file_deltas
+                    .iter()
+                    .filter(|delta| delta.is_binary)
+                    .count();
 
                 mark_commit_history_completed(
                     &relational,

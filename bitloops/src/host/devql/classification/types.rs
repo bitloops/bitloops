@@ -177,6 +177,7 @@ impl ResolvedFileClassification {
         self.analysis_mode != AnalysisMode::Excluded
     }
 
+    #[allow(dead_code)]
     pub(crate) fn should_extract(&self) -> bool {
         matches!(self.analysis_mode, AnalysisMode::Code)
             || (self.analysis_mode == AnalysisMode::Text

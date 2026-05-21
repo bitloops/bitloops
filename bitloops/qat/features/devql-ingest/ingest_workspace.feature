@@ -1,7 +1,7 @@
 Feature: DevQL ingest workspace history coverage
   The ingest command replays commit history into relational history tables.
   These scenarios validate ingest behavior using DB-first checks on
-  commit_ingest_ledger and file_state, including rewritten-history SHA
+  commit_ingest_ledger and hunk-delta rows, including rewritten-history SHA
   guarantees and bounded backfill behavior without relying on current-state
   sync side effects.
 
@@ -48,7 +48,7 @@ Feature: DevQL ingest workspace history coverage
     And I enqueue DevQL ingest task with status in bitloops
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
-    And expected SHAs have file_state rows in bitloops
+    And expected SHAs have hunk-delta rows in bitloops
 
   @devql @ingest
   Scenario: Commits made while daemon is down are batched on next ingest
@@ -66,7 +66,7 @@ Feature: DevQL ingest workspace history coverage
     And I enqueue DevQL ingest task with status in bitloops
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
-    And expected SHAs have file_state rows in bitloops
+    And expected SHAs have hunk-delta rows in bitloops
 
   @devql @ingest
   Scenario: Non-FF merge ingests feature commits and merge commit
@@ -82,8 +82,8 @@ Feature: DevQL ingest workspace history coverage
     And I enqueue DevQL ingest task with status in bitloops
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
-    And expected SHAs have file_state rows in bitloops
-    And expected paths have file_state rows for expected SHAs in bitloops
+    And expected SHAs have hunk-delta rows in bitloops
+    And expected paths have hunk-delta rows for expected SHAs in bitloops
     And all reachable SHAs are completed in commit_ingest_ledger in bitloops
 
   @devql @ingest
@@ -100,8 +100,8 @@ Feature: DevQL ingest workspace history coverage
     And I enqueue DevQL ingest task with status in bitloops
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
-    And expected SHAs have file_state rows in bitloops
-    And expected paths have file_state rows for expected SHAs in bitloops
+    And expected SHAs have hunk-delta rows in bitloops
+    And expected paths have hunk-delta rows for expected SHAs in bitloops
     And all reachable SHAs are completed in commit_ingest_ledger in bitloops
 
   @devql @ingest
@@ -118,8 +118,8 @@ Feature: DevQL ingest workspace history coverage
     And I enqueue DevQL ingest task with status in bitloops
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
-    And expected SHAs have file_state rows in bitloops
-    And expected paths have file_state rows for expected SHAs in bitloops
+    And expected SHAs have hunk-delta rows in bitloops
+    And expected paths have hunk-delta rows for expected SHAs in bitloops
     And all reachable SHAs are completed in commit_ingest_ledger in bitloops
 
   @devql @ingest
@@ -141,7 +141,7 @@ Feature: DevQL ingest workspace history coverage
     And old rewritten SHAs are absent from post-rewrite reachable segment in bitloops
     And rewritten new SHAs are completed in commit_ingest_ledger in bitloops
     And exact expected SHAs were newly completed since snapshot in bitloops
-    And expected SHAs have file_state rows in bitloops
+    And expected SHAs have hunk-delta rows in bitloops
     And all reachable SHAs are completed in commit_ingest_ledger in bitloops
 
   @devql @ingest
@@ -163,7 +163,7 @@ Feature: DevQL ingest workspace history coverage
     And old rewritten SHAs are absent from post-rewrite reachable segment in bitloops
     And rewritten new SHAs are completed in commit_ingest_ledger in bitloops
     And exact expected SHAs were newly completed since snapshot in bitloops
-    And expected SHAs have file_state rows in bitloops
+    And expected SHAs have hunk-delta rows in bitloops
     And all reachable SHAs are completed in commit_ingest_ledger in bitloops
 
   @devql @ingest @backfill

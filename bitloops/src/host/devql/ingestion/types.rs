@@ -13,6 +13,11 @@ pub struct IngestionCounters {
     pub(crate) checkpoint_companions_processed: usize,
     pub(crate) events_inserted: usize,
     pub(crate) artefacts_upserted: usize,
+    pub(crate) file_deltas_upserted: usize,
+    pub(crate) hunks_upserted: usize,
+    pub(crate) added_lines_ingested: usize,
+    pub(crate) deleted_lines_ingested: usize,
+    pub(crate) binary_deltas_upserted: usize,
     #[serde(skip_serializing)]
     pub(crate) checkpoints_without_commit: usize,
     #[serde(skip_serializing)]
@@ -67,6 +72,7 @@ pub(super) struct CheckpointCommitInfo {
     pub(super) subject: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(super) struct FileArtefactRow {
     pub(super) artefact_id: String,

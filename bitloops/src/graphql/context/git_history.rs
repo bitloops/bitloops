@@ -5,12 +5,14 @@ use super::{
     DevqlGraphqlContext, GIT_FIELD_SEPARATOR, GIT_RECORD_SEPARATOR, GRAPHQL_GIT_SCAN_LIMIT,
 };
 use crate::adapters::agents::canonical_agent_key;
-use crate::graphql::types::{Branch, Commit, DateTimeScalar};
+use crate::graphql::types::{Branch, Commit, CommitHunk, CommitHunkLine, DateTimeScalar};
 use crate::host::checkpoints::strategy::manual_commit::{
     list_committed, resolve_default_branch_name, run_git,
 };
+use crate::host::devql::{RelationalStorageRole, esc_pg, sql_like_with_escape};
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use tokio::task;
@@ -267,6 +269,35 @@ impl DevqlGraphqlContext {
         .context("joining commit files query task")?
     }
 
+    pub(crate) async fn list_commit_hunks(
+        &self,
+        scope: &crate::graphql::ResolverScope,
+        commit_sha: &str,
+        path: Option<&str>,
+    ) -> Result<Vec<CommitHunk>> {
+        let repo_id = self.repo_id_for_scope(scope)?;
+        let scoped_path = path
+            .map(|path| self.resolve_scope_path(scope, path, false))
+            .transpose()
+            .map_err(|err| anyhow::anyhow!(err))?;
+        let sql = build_commit_hunks_sql(
+            &repo_id,
+            commit_sha,
+            scoped_path.as_deref(),
+            scope.project_path(),
+        );
+        let relational = self.open_relational_storage("GraphQL commit hunks").await?;
+        let rows = match relational
+            .query_rows_for_role(RelationalStorageRole::SharedRelational, &sql)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(err) if is_missing_hunk_table_error(&err) => return Ok(Vec::new()),
+            Err(err) => return Err(err),
+        };
+        rows.into_iter().map(commit_hunk_from_row).collect()
+    }
+
     pub(crate) async fn load_commits_by_shas(
         &self,
         commit_shas: &[String],
@@ -302,6 +333,112 @@ impl DevqlGraphqlContext {
     pub(crate) fn is_unknown_revision_error(&self, err: &anyhow::Error) -> bool {
         is_unknown_revision_error(err)
     }
+}
+
+fn build_commit_hunks_sql(
+    repo_id: &str,
+    commit_sha: &str,
+    path: Option<&str>,
+    project_path: Option<&str>,
+) -> String {
+    let mut predicates = vec![
+        format!("h.repo_id = '{}'", esc_pg(repo_id)),
+        format!("h.commit_sha = '{}'", esc_pg(commit_sha)),
+    ];
+    if let Some(path) = path {
+        predicates.push(format!(
+            "(h.path_after = '{path}' OR h.path_before = '{path}')",
+            path = esc_pg(path)
+        ));
+    } else if let Some(project_path) = project_path {
+        let prefix = format!("{}/%", project_path.trim_end_matches('/'));
+        predicates.push(format!(
+            "(h.path_after = '{project}' OR h.path_before = '{project}' OR {after_like} OR {before_like})",
+            project = esc_pg(project_path),
+            after_like = sql_like_with_escape("h.path_after", &prefix),
+            before_like = sql_like_with_escape("h.path_before", &prefix),
+        ));
+    }
+    format!(
+        "SELECT h.commit_sha,
+                h.path_before,
+                h.path_after,
+                d.change_kind,
+                h.hunk_index,
+                h.old_start,
+                h.old_line_count,
+                h.new_start,
+                h.new_line_count,
+                h.added_lines_json,
+                h.deleted_lines_json,
+                h.patch
+           FROM commit_hunks h
+           JOIN commit_file_deltas d
+             ON d.repo_id = h.repo_id
+            AND d.delta_id = h.delta_id
+          WHERE {}
+          ORDER BY COALESCE(h.path_after, h.path_before), h.hunk_index",
+        predicates.join(" AND ")
+    )
+}
+
+fn commit_hunk_from_row(row: Value) -> Result<CommitHunk> {
+    Ok(CommitHunk {
+        commit_sha: required_string_column(&row, "commit_sha")?,
+        path_before: optional_string_column(&row, "path_before"),
+        path_after: optional_string_column(&row, "path_after"),
+        change_kind: required_string_column(&row, "change_kind")?,
+        hunk_index: required_i32_column(&row, "hunk_index")?,
+        old_start: required_i32_column(&row, "old_start")?,
+        old_line_count: required_i32_column(&row, "old_line_count")?,
+        new_start: required_i32_column(&row, "new_start")?,
+        new_line_count: required_i32_column(&row, "new_line_count")?,
+        added_lines: hunk_lines_column(&row, "added_lines_json")?,
+        deleted_lines: hunk_lines_column(&row, "deleted_lines_json")?,
+        patch: required_string_column(&row, "patch")?,
+    })
+}
+
+fn required_string_column(row: &Value, key: &str) -> Result<String> {
+    row.get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("commit hunk row is missing string column `{key}`"))
+}
+
+fn optional_string_column(row: &Value, key: &str) -> Option<String> {
+    row.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn required_i32_column(row: &Value, key: &str) -> Result<i32> {
+    let value = row
+        .get(key)
+        .and_then(Value::as_i64)
+        .ok_or_else(|| anyhow::anyhow!("commit hunk row is missing integer column `{key}`"))?;
+    i32::try_from(value).with_context(|| format!("commit hunk column `{key}` is out of range"))
+}
+
+fn hunk_lines_column(row: &Value, key: &str) -> Result<Vec<CommitHunkLine>> {
+    let Some(value) = row.get(key) else {
+        return Ok(Vec::new());
+    };
+    let parsed = match value {
+        Value::String(raw) => serde_json::from_str(raw)
+            .with_context(|| format!("parsing commit hunk JSON column `{key}`"))?,
+        Value::Array(_) => value.clone(),
+        Value::Null => Value::Array(Vec::new()),
+        other => other.clone(),
+    };
+    serde_json::from_value(parsed)
+        .with_context(|| format!("deserializing commit hunk JSON column `{key}`"))
+}
+
+fn is_missing_hunk_table_error(err: &anyhow::Error) -> bool {
+    let message = format!("{err:#}");
+    message.contains("no such table: commit_hunks")
+        || message.contains("no such table: commit_file_deltas")
+        || message.contains("relation \"commit_hunks\" does not exist")
+        || message.contains("relation \"commit_file_deltas\" does not exist")
 }
 
 pub(super) fn git_default_branch_name(repo_root: &Path) -> String {
