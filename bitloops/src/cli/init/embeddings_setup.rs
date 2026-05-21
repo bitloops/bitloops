@@ -29,7 +29,7 @@ pub(crate) fn should_install_embeddings_during_init(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<InitEmbeddingsSetupSelection> {
-    if args.no_embeddings || !repo_selected_embedding_lanes {
+    if args.no_embeddings {
         return Ok(InitEmbeddingsSetupSelection::Skip);
     }
 
@@ -38,6 +38,10 @@ pub(crate) fn should_install_embeddings_during_init(
             EmbeddingsRuntime::Local => InitEmbeddingsSetupSelection::Local,
             EmbeddingsRuntime::Platform => InitEmbeddingsSetupSelection::Cloud,
         });
+    }
+
+    if !repo_selected_embedding_lanes {
+        return Ok(InitEmbeddingsSetupSelection::Skip);
     }
 
     if !matches!(

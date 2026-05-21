@@ -256,7 +256,7 @@ pub(crate) async fn run_for_project_root(
         },
     )?;
     let repo_selected_embedding_lanes =
-        final_setup_selection.code_embeddings || final_setup_selection.summary_embeddings;
+        init_repo_selected_embedding_lanes(final_setup_selection, args.no_summaries);
     let mut embeddings_bootstrap = None;
     let mut embeddings_bootstrap_rollback_plan = None;
     let mut prepared_summary_setup = None;
@@ -578,6 +578,47 @@ pub(crate) async fn run_for_project_root(
         }
     }
     Ok(())
+}
+
+fn init_repo_selected_embedding_lanes(
+    selection: super::final_setup::InitFinalSetupSelection,
+    no_summaries: bool,
+) -> bool {
+    let summary_embedding_lane =
+        selection.summaries && selection.summary_embeddings && !no_summaries;
+    selection.code_embeddings || summary_embedding_lane
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn final_setup_selection(
+        code_embeddings: bool,
+        summaries: bool,
+        summary_embeddings: bool,
+    ) -> super::super::final_setup::InitFinalSetupSelection {
+        super::super::final_setup::InitFinalSetupSelection {
+            sync: false,
+            ingest: false,
+            code_embeddings,
+            summaries,
+            summary_embeddings,
+            telemetry: false,
+            auto_start_daemon: false,
+        }
+    }
+
+    #[test]
+    fn repo_selected_embedding_lanes_ignores_summary_embeddings_when_summaries_disabled() {
+        let summary_only = final_setup_selection(false, true, true);
+
+        assert!(!init_repo_selected_embedding_lanes(summary_only, true));
+
+        let code_embeddings = final_setup_selection(true, false, false);
+
+        assert!(init_repo_selected_embedding_lanes(code_embeddings, true));
+    }
 }
 
 fn persist_init_embeddings_policy(

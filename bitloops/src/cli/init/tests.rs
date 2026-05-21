@@ -1481,6 +1481,25 @@ fn embeddings_setup_skips_when_repo_did_not_select_embedding_lanes() {
 }
 
 #[test]
+fn embeddings_setup_honors_explicit_runtime_even_without_repo_embedding_lanes() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--embeddings-runtime", "local"])
+        .expect("parse init");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    let mut out = Vec::new();
+    let mut input = Cursor::new("1\n");
+
+    let selection =
+        should_install_embeddings_during_init(repo.path(), &args, false, &mut out, &mut input)
+            .expect("choose embeddings setup");
+
+    assert_eq!(selection, InitEmbeddingsSetupSelection::Local);
+    assert!(String::from_utf8(out).expect("utf8 output").is_empty());
+}
+
+#[test]
 fn init_args_reject_zero_backfill() {
     let err = Cli::try_parse_from(["bitloops", "init", "--backfill=0"])
         .err()
