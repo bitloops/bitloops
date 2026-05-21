@@ -1470,7 +1470,8 @@ supported = ["claude-code"]
                                 assert!(local_policy.contains("[semantic_clones.inference]"));
                                 assert!(local_policy.contains("code_embeddings = \"local_code\""));
                                 assert!(
-                                    local_policy.contains("summary_embeddings = \"local_code\"")
+                                    !local_policy.contains("summary_embeddings = "),
+                                    "embedding setup should not enable summary embeddings unless the repo selected them"
                                 );
                                 let daemon_config = fs::read_to_string(
                                     default_daemon_config_path().expect("daemon config path"),
@@ -1604,9 +1605,6 @@ supported = ["claude-code"]
 [runtime]
 local_dev = false
 
-[semantic_clones.inference]
-code_embeddings = "openai"
-
 [inference.profiles.openai]
 task = "embeddings"
 driver = "openai"
@@ -1617,7 +1615,15 @@ model = "text-embedding-3-large"
             setup_local_settings(
                 &repo,
                 &format!(
-                    "[daemon]\nconfig_path = {:?}\n",
+                    r#"[daemon]
+config_path = {:?}
+
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "openai"
+"#,
                     daemon_config_path.display().to_string()
                 ),
             );

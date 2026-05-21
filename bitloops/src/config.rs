@@ -27,10 +27,10 @@ pub(crate) use daemon_config::{
 };
 pub(crate) use repo_policy::validate_repo_policy_text;
 pub use repo_policy::{
-    ImportedKnowledgeConfig, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,
-    RepoPolicyExclusionFileReference, RepoPolicyScopeExclusions, RepoPolicySnapshot,
-    discover_repo_policy, discover_repo_policy_optional, parse_exclusion_patterns,
-    resolve_repo_policy_scope_exclusions,
+    FileRepoPolicySource, ImportedKnowledgeConfig, REPO_POLICY_FILE_NAME,
+    REPO_POLICY_LOCAL_FILE_NAME, RepoPolicyExclusionFileReference, RepoPolicyScopeExclusions,
+    RepoPolicySnapshot, RepoPolicySource, discover_repo_policy, discover_repo_policy_optional,
+    parse_exclusion_patterns, resolve_repo_policy_scope_exclusions,
 };
 pub use resolve::{
     resolve_blob_local_path, resolve_blob_local_path_for_repo,
