@@ -3418,6 +3418,84 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
 }
 
 #[test]
+fn run_init_prompts_for_semantic_setup_before_final_setup() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_generation_configured(&app_dirs, true, true, false, false, || {
+        let mut out = Vec::new();
+        let mut input = Cursor::new("skip\nskip\nskip\nskip\n");
+        let select = |_items: &[String], enable_devql_guidance: bool| {
+            Ok(InitAgentSelection {
+                agents: vec!["claude-code".to_string()],
+                enable_devql_guidance,
+            })
+        };
+        let runtime = test_runtime();
+        runtime
+            .block_on(run_with_io_async_for_project_root(
+                InitArgs {
+                    command: None,
+                    install_default_daemon: false,
+                    force: false,
+                    disable_devql_guidance: false,
+                    agent: Vec::new(),
+                    telemetry: None,
+                    no_telemetry: false,
+                    skip_baseline: false,
+                    sync: None,
+                    ingest: None,
+                    backfill: None,
+                    exclude: Vec::new(),
+                    exclude_from: Vec::new(),
+                    embeddings_runtime: None,
+                    no_embeddings: false,
+                    no_summaries: false,
+                    context_guidance_runtime: None,
+                    no_context_guidance: false,
+                    context_guidance_gateway_url: None,
+                    context_guidance_api_key_env: None,
+                    embeddings_gateway_url: None,
+                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                },
+                repo.path(),
+                &mut out,
+                &mut input,
+                Some(&select),
+            ))
+            .expect("run init");
+
+        let rendered = String::from_utf8(out).expect("utf8 output");
+        let embeddings = rendered
+            .find("Configure embeddings")
+            .expect("embeddings prompt");
+        let summaries = rendered
+            .find("Configure semantic summaries")
+            .expect("summary prompt");
+        let context_guidance = rendered
+            .find("Configure context guidance")
+            .expect("context guidance prompt");
+        let final_setup = rendered
+            .find("And we made it to the last setup options")
+            .expect("final setup prompt");
+
+        assert!(
+            embeddings < final_setup,
+            "expected embeddings setup before final setup:\n{rendered}"
+        );
+        assert!(
+            summaries < final_setup,
+            "expected summary setup before final setup:\n{rendered}"
+        );
+        assert!(
+            context_guidance < final_setup,
+            "expected context guidance setup before final setup:\n{rendered}"
+        );
+    });
+}
+
+#[test]
 fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
