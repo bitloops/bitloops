@@ -371,11 +371,16 @@ fn handle_lifecycle_tool_event(
                 InteractionEventType::ToolResultObserved => output_summary.clone(),
                 _ => String::new(),
             };
+            let (actor_id, actor_name, actor_email, actor_source) = interaction_actor_identity();
             if let Err(err) = spool.record_event(&InteractionEvent {
                 event_id: generate_interaction_event_id(),
                 session_id: event.session_id.clone(),
                 turn_id,
                 repo_id: spool.repo_id().to_string(),
+                actor_id,
+                actor_name,
+                actor_email,
+                actor_source,
                 event_type,
                 event_time: now.clone(),
                 source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
