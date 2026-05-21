@@ -12,9 +12,10 @@ use super::{
     AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitAgentSelection, InitArgs,
     InitEmbeddingsSetupSelection, InitFinalSetupPromptOptions,
     choose_context_guidance_setup_during_init, choose_final_setup_options,
-    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_init_files_excluded,
-    maybe_enable_default_daemon_service, maybe_install_default_daemon, normalize_cli_exclusions,
-    normalize_exclude_from_paths, should_install_embeddings_during_init,
+    choose_summary_embeddings_setup_during_init, choose_summary_setup_during_init,
+    detect_or_select_agent, ensure_repo_init_files_excluded, maybe_enable_default_daemon_service,
+    maybe_install_default_daemon, normalize_cli_exclusions, normalize_exclude_from_paths,
+    should_install_embeddings_during_init,
 };
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::capability_packs::semantic_clones::workplane::{
@@ -251,6 +252,7 @@ pub(crate) async fn run_for_project_root(
     let mut prepared_summary_setup = None;
     let mut selected_code_embedding_profile_name: Option<String> = None;
     let mut selected_summary_embedding_profile_name: Option<String> = None;
+    let mut summary_embedding_profile_candidate: Option<String> = None;
     let mut selected_summary_generation_profile_name: Option<String> = None;
     let mut login_required = false;
     let embeddings_selection = should_install_embeddings_during_init(
@@ -266,6 +268,7 @@ pub(crate) async fn run_for_project_root(
             let profile_names = existing_init_embedding_profile_names(project_root)?;
             selected_code_embedding_profile_name = profile_names.code_embeddings;
             selected_summary_embedding_profile_name = profile_names.summary_embeddings;
+            summary_embedding_profile_candidate = selected_code_embedding_profile_name.clone();
         }
         InitEmbeddingsSetupSelection::Cloud => {
             login_required = true;
@@ -280,7 +283,7 @@ pub(crate) async fn run_for_project_root(
                 )?;
                 selected_code_embedding_profile_name =
                     Some(prepared_bootstrap.request.profile_name.clone());
-                selected_summary_embedding_profile_name =
+                summary_embedding_profile_candidate =
                     Some(prepared_bootstrap.request.profile_name.clone());
                 embeddings_bootstrap_rollback_plan = prepared_bootstrap.rollback_plan;
                 embeddings_bootstrap = Some(prepared_bootstrap.request);
@@ -295,6 +298,7 @@ pub(crate) async fn run_for_project_root(
                 let profile_names = existing_init_embedding_profile_names(project_root)?;
                 selected_code_embedding_profile_name = profile_names.code_embeddings;
                 selected_summary_embedding_profile_name = profile_names.summary_embeddings;
+                summary_embedding_profile_candidate = selected_code_embedding_profile_name.clone();
             }
         }
         InitEmbeddingsSetupSelection::Local => {
@@ -307,7 +311,7 @@ pub(crate) async fn run_for_project_root(
                 )?;
                 selected_code_embedding_profile_name =
                     Some(prepared_bootstrap.request.profile_name.clone());
-                selected_summary_embedding_profile_name =
+                summary_embedding_profile_candidate =
                     Some(prepared_bootstrap.request.profile_name.clone());
                 embeddings_bootstrap_rollback_plan = prepared_bootstrap.rollback_plan;
                 embeddings_bootstrap = Some(prepared_bootstrap.request);
@@ -316,6 +320,7 @@ pub(crate) async fn run_for_project_root(
                 let profile_names = existing_init_embedding_profile_names(project_root)?;
                 selected_code_embedding_profile_name = profile_names.code_embeddings;
                 selected_summary_embedding_profile_name = profile_names.summary_embeddings;
+                summary_embedding_profile_candidate = selected_code_embedding_profile_name.clone();
             }
         }
         InitEmbeddingsSetupSelection::Skip => {}
@@ -335,6 +340,24 @@ pub(crate) async fn run_for_project_root(
     if !args.no_summaries {
         selected_summary_generation_profile_name =
             existing_repo_init_summary_generation_profile_name(project_root);
+    }
+    let summaries_requested = !args.no_summaries
+        && (selected_summary_generation_profile_name.is_some()
+            || matches!(
+                summary_selection,
+                SummarySetupSelection::Cloud | SummarySetupSelection::Local
+            ));
+    if choose_summary_embeddings_setup_during_init(
+        args.no_embeddings,
+        args.no_summaries,
+        summaries_requested,
+        selected_summary_embedding_profile_name.is_some(),
+        summary_embedding_profile_candidate.as_deref(),
+        out,
+        input,
+    )? && selected_summary_embedding_profile_name.is_none()
+    {
+        selected_summary_embedding_profile_name = summary_embedding_profile_candidate.clone();
     }
     let context_guidance_selection =
         choose_context_guidance_setup_during_init(project_root, &args, out, input).await?;

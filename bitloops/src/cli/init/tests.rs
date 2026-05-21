@@ -10,8 +10,9 @@ use crate::cli::embeddings::{
     with_managed_platform_embeddings_install_hook,
 };
 use crate::cli::inference::{
-    OllamaAvailability, with_context_guidance_generation_configured_hook, with_ollama_probe_hook,
-    with_summary_generation_configured_hook,
+    ManagedInferenceBinaryInstallOutcome, OllamaAvailability,
+    with_context_guidance_generation_configured_hook, with_managed_inference_install_hook,
+    with_ollama_probe_hook, with_summary_generation_configured_hook,
 };
 use crate::cli::login::with_ensure_logged_in_hook;
 use crate::cli::telemetry_consent::{
@@ -4103,7 +4104,10 @@ fn second_repo_can_skip_summaries_even_when_daemon_provider_exists() {
     setup_git_repo(&repo);
 
     with_temp_app_dirs(&app_dirs, true, true, || {
-        let config_path = ensure_daemon_config_exists().expect("create default daemon config");
+        let config_path = repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent).expect("create daemon config parent");
+        }
         write_daemon_config_with_embeddings_and_summary(&config_path);
         crate::config::settings::write_repo_daemon_binding(
             &repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
@@ -5760,7 +5764,7 @@ model = "daemon-summary-model"
 
     with_temp_app_dirs_and_summary_configured(&app_dirs, true, true, true, || {
         let mut out = Vec::new();
-        let mut input = Cursor::new("3,4,5\n");
+        let mut input = Cursor::new("2\n");
         let runtime = test_runtime();
         runtime
             .block_on(run_with_io_async_for_project_root(
@@ -5802,6 +5806,270 @@ model = "daemon-summary-model"
         assert!(policy.contains("code_embeddings = \"repo_code_profile\""));
         assert!(!policy.contains("summary_embeddings = "));
     });
+}
+
+#[test]
+fn run_init_prompts_for_missing_repo_summary_embeddings_choice() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, true, true, true, || {
+        let config_path = ensure_daemon_config_exists().expect("create default daemon config");
+        write_daemon_config_with_embeddings_and_summary(&config_path);
+        write_repo_policy(
+            &repo,
+            REPO_POLICY_LOCAL_FILE_NAME,
+            &format!(
+                r#"
+[daemon]
+config_path = {:?}
+
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+summary_mode = "auto"
+
+[semantic_clones.inference]
+code_embeddings = "local_code"
+summary_generation = "summary_local"
+"#,
+                config_path.to_string_lossy()
+            ),
+        );
+
+        let mut out = Vec::new();
+        with_global_graphql_executor_hook(
+            |_runtime_root, _query, variables| {
+                assert_eq!(variables["telemetry"], serde_json::json!(false));
+                Ok(serde_json::json!({
+                    "updateCliTelemetryConsent": {
+                        "telemetry": false,
+                        "needsPrompt": false
+                    }
+                }))
+            },
+            || {
+                let mut input = Cursor::new("1\n");
+                let runtime = test_runtime();
+                runtime
+                    .block_on(run_with_io_async_for_project_root(
+                        InitArgs {
+                            command: None,
+                            install_default_daemon: false,
+                            force: false,
+                            disable_devql_guidance: false,
+                            agent: vec![DEFAULT_AGENT.to_string()],
+                            telemetry: Some(false),
+                            no_telemetry: false,
+                            skip_baseline: false,
+                            sync: Some(false),
+                            ingest: Some(false),
+                            backfill: None,
+                            exclude: Vec::new(),
+                            exclude_from: Vec::new(),
+                            embeddings_runtime: None,
+                            no_embeddings: false,
+                            no_summaries: false,
+                            context_guidance_runtime: None,
+                            no_context_guidance: true,
+                            context_guidance_gateway_url: None,
+                            context_guidance_api_key_env: None,
+                            embeddings_gateway_url: None,
+                            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                        },
+                        repo.path(),
+                        &mut out,
+                        &mut input,
+                        None,
+                    ))
+                    .expect("run init");
+            },
+        );
+
+        let rendered = strip_ansi_escape_sequences(&String::from_utf8(out).expect("utf8 output"));
+        assert!(
+            rendered.contains("Configure summary embeddings"),
+            "expected summary embeddings prompt:\n{rendered}"
+        );
+        let policy = std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+            .expect("read local policy");
+        assert!(policy.contains("summary_mode = \"auto\""));
+        assert!(policy.contains("summary_generation = \"summary_local\""));
+        assert!(policy.contains("code_embeddings = \"local_code\""));
+        assert!(
+            policy.contains("summary_embeddings = \"local_code\""),
+            "expected repo-local summary embedding profile:\n{policy}"
+        );
+    });
+}
+
+#[test]
+fn run_init_can_enable_summary_embeddings_with_new_cloud_summary_choice() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    let login_calls = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, true, true, false, || {
+        with_ensure_logged_in_hook(
+            {
+                let login_calls = std::rc::Rc::clone(&login_calls);
+                move || {
+                    *login_calls.borrow_mut() += 1;
+                    Ok(fake_logged_in_session())
+                }
+            },
+            || {
+                with_env_vars(
+                    &[(
+                        "BITLOOPS_PLATFORM_GATEWAY_URL",
+                        Some("https://platform.example"),
+                    )],
+                    || {
+                        with_global_graphql_executor_hook(
+                            |_runtime_root, _query, variables| {
+                                assert_eq!(variables["telemetry"], serde_json::json!(false));
+                                Ok(serde_json::json!({
+                                    "updateCliTelemetryConsent": {
+                                        "telemetry": false,
+                                        "needsPrompt": false
+                                    }
+                                }))
+                            },
+                            || {
+                                with_managed_platform_embeddings_install_hook(
+                                    {
+                                        let repo_root = repo.path().to_path_buf();
+                                        move || {
+                                            Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
+                                                version: "v0.2.0".to_string(),
+                                                binary_path: repo_root.join(
+                                                    ".bitloops/test-bin/bitloops-platform-embeddings",
+                                                ),
+                                                freshly_installed: true,
+                                            })
+                                        }
+                                    },
+                                    || {
+                                        with_managed_inference_install_hook(
+                                            {
+                                                let repo_root = repo.path().to_path_buf();
+                                                move |_repo_root| {
+                                                    Ok(ManagedInferenceBinaryInstallOutcome {
+                                                        version: "v1.2.3".to_string(),
+                                                        binary_path: repo_root.join(
+                                                            ".bitloops/test-bin/bitloops-inference",
+                                                        ),
+                                                        freshly_installed: true,
+                                                    })
+                                                }
+                                            },
+                                            || {
+                                                let mut out = Vec::new();
+                                                let mut input = Cursor::new("1\n2\n1\n");
+                                                let runtime = test_runtime();
+                                                runtime
+                                                    .block_on(run_with_io_async_for_project_root(
+                                                        InitArgs {
+                                                            command: None,
+                                                            install_default_daemon: false,
+                                                            force: false,
+                                                            disable_devql_guidance: false,
+                                                            agent: vec![DEFAULT_AGENT.to_string()],
+                                                            telemetry: Some(false),
+                                                            no_telemetry: false,
+                                                            skip_baseline: false,
+                                                            sync: Some(false),
+                                                            ingest: Some(false),
+                                                            backfill: None,
+                                                            exclude: Vec::new(),
+                                                            exclude_from: Vec::new(),
+                                                            embeddings_runtime: None,
+                                                            no_embeddings: false,
+                                                            no_summaries: false,
+                                                            context_guidance_runtime: None,
+                                                            no_context_guidance: true,
+                                                            context_guidance_gateway_url: None,
+                                                            context_guidance_api_key_env: None,
+                                                            embeddings_gateway_url: None,
+                                                            embeddings_api_key_env:
+                                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                                                    .to_string(),
+                                                        },
+                                                        repo.path(),
+                                                        &mut out,
+                                                        &mut input,
+                                                        None,
+                                                    ))
+                                                    .expect("run init with cloud summaries");
+                                                std::mem::forget(runtime);
+
+                                                let rendered = strip_ansi_escape_sequences(
+                                                    &String::from_utf8(out).expect("utf8 output"),
+                                                );
+                                                assert!(
+                                                    rendered.contains("Configure embeddings"),
+                                                    "expected embeddings prompt:\n{rendered}"
+                                                );
+                                                assert!(
+                                                    rendered
+                                                        .contains("Configure semantic summaries"),
+                                                    "expected summary prompt:\n{rendered}"
+                                                );
+                                                assert!(
+                                                    rendered
+                                                        .contains("Configure summary embeddings"),
+                                                    "expected summary embeddings prompt:\n{rendered}"
+                                                );
+
+                                                let policy = std::fs::read_to_string(
+                                                    repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+                                                )
+                                                .expect("read local policy");
+                                                assert!(
+                                                    policy.contains(
+                                                        "code_embeddings = \"platform_code\""
+                                                    ),
+                                                    "expected repo-local code embeddings:\n{policy}"
+                                                );
+                                                assert!(
+                                                    policy.contains(
+                                                        "summary_generation = \"summary_llm\""
+                                                    ),
+                                                    "expected repo-local summaries:\n{policy}"
+                                                );
+                                                assert!(
+                                                    policy.contains(
+                                                        "summary_embeddings = \"platform_code\""
+                                                    ),
+                                                    "expected repo-local summary embeddings:\n{policy}"
+                                                );
+
+                                                let daemon_config_path =
+                                                    default_daemon_config_path().expect(
+                                                        "resolve default daemon config path",
+                                                    );
+                                                let daemon_config =
+                                                    std::fs::read_to_string(daemon_config_path)
+                                                        .expect("read daemon config");
+                                                assert!(
+                                                    !daemon_config
+                                                        .contains("summary_embeddings = "),
+                                                    "daemon config should not own summary embedding enablement:\n{daemon_config}"
+                                                );
+                                            },
+                                        );
+                                    },
+                                );
+                            },
+                        );
+                    },
+                );
+            },
+        );
+    });
+
+    assert_eq!(*login_calls.borrow(), 1);
 }
 
 #[test]
