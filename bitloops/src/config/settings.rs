@@ -114,6 +114,23 @@ impl RepoSemanticEmbeddingPolicy {
             },
         }
     }
+
+    pub fn enabled_with_profile_preserving_summaries(
+        profile_name: impl Into<String>,
+        existing: &Self,
+    ) -> Self {
+        let profile_name = profile_name.into();
+        Self {
+            present: true,
+            summary_mode: existing.summary_mode,
+            embedding_mode: Some(SemanticCloneEmbeddingMode::SemanticAwareOnce),
+            inference: SemanticClonesInferenceBindings {
+                summary_generation: existing.inference.summary_generation.clone(),
+                code_embeddings: Some(profile_name.clone()),
+                summary_embeddings: Some(profile_name),
+            },
+        }
+    }
 }
 
 pub fn settings_path(repo_root: &Path) -> PathBuf {

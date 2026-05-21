@@ -286,15 +286,7 @@ pub(crate) async fn run_for_project_root(
     match embeddings_selection {
         InitEmbeddingsSetupSelection::Unchanged => {}
         InitEmbeddingsSetupSelection::Existing => {
-            let profile_names = {
-                let previous_profile_names =
-                    embedding_profile_names_from_policy(&previous_embeddings_policy);
-                if previous_profile_names.has_any() {
-                    previous_profile_names
-                } else {
-                    existing_init_embedding_profile_names(project_root)?
-                }
-            };
+            let profile_names = existing_init_embedding_profile_names(project_root)?;
             selected_code_embedding_profile_name = profile_names.code_embeddings;
             selected_summary_embedding_profile_name = profile_names.summary_embeddings;
         }
@@ -717,6 +709,60 @@ model = "local-model"
             Some("summary_llm_1".to_string())
         );
     }
+
+    #[test]
+    fn existing_init_embedding_profile_names_fills_missing_slots_from_daemon_config() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        write_bound_daemon_config(
+            repo.path(),
+            r#"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "daemon_code"
+summary_embeddings = "daemon_summary"
+
+[inference.profiles.daemon_code]
+task = "embeddings"
+driver = "openai"
+model = "text-embedding-3-large"
+
+[inference.profiles.daemon_summary]
+task = "embeddings"
+driver = "openai"
+model = "text-embedding-3-small"
+"#,
+        );
+        let local_policy_path = repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME);
+        let mut local_policy = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&local_policy_path)
+            .expect("open local policy");
+        write!(
+            local_policy,
+            r#"
+
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "repo_code"
+"#
+        )
+        .expect("write local semantic policy");
+
+        let names =
+            existing_init_embedding_profile_names(repo.path()).expect("resolve profile names");
+
+        assert_eq!(
+            names,
+            InitEmbeddingProfileNames {
+                code_embeddings: Some("repo_code".to_string()),
+                summary_embeddings: Some("daemon_summary".to_string()),
+            }
+        );
+    }
 }
 
 fn persist_init_semantic_policy(
@@ -782,11 +828,26 @@ impl InitEmbeddingProfileNames {
 
 fn existing_init_embedding_profile_names(repo_root: &Path) -> Result<InitEmbeddingProfileNames> {
     let existing_policy = repo_semantic_embedding_policy(repo_root)?;
-    let policy_profile_names = embedding_profile_names_from_policy(&existing_policy);
-    if policy_profile_names.has_any() {
-        return Ok(policy_profile_names);
+    let mut profile_names = embedding_profile_names_from_policy(&existing_policy);
+    if profile_names.code_embeddings.is_some() && profile_names.summary_embeddings.is_some() {
+        return Ok(profile_names);
     }
 
+    let daemon_profile_names = match daemon_init_embedding_profile_names(repo_root) {
+        Ok(profile_names) => profile_names,
+        Err(_) if profile_names.has_any() => return Ok(profile_names),
+        Err(err) => return Err(err),
+    };
+    if profile_names.code_embeddings.is_none() {
+        profile_names.code_embeddings = daemon_profile_names.code_embeddings;
+    }
+    if profile_names.summary_embeddings.is_none() {
+        profile_names.summary_embeddings = daemon_profile_names.summary_embeddings;
+    }
+    Ok(profile_names)
+}
+
+fn daemon_init_embedding_profile_names(repo_root: &Path) -> Result<InitEmbeddingProfileNames> {
     let config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)
         .or_else(|_| crate::config::resolve_daemon_config_path_for_repo(repo_root))?;
     let capability = crate::cli::embeddings::embedding_capability_for_config_path(&config_path)?;

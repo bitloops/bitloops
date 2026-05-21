@@ -898,6 +898,58 @@ fn install_or_bootstrap_embeddings_writes_local_profile_and_warms_runtime() {
 }
 
 #[test]
+fn install_or_bootstrap_embeddings_preserves_existing_summary_policy() {
+    let repo = TempDir::new().expect("tempdir");
+    let data = TempDir::new().expect("data tempdir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Alice",
+        "alice@example.com",
+    );
+    write_runtime_only_config(repo.path(), "bitloops-local-embeddings", &[]);
+    fs::write(
+        repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+        r#"
+[semantic_clones]
+summary_mode = "off"
+embedding_mode = "off"
+
+[semantic_clones.inference]
+summary_generation = "summary_local"
+"#,
+    )
+    .expect("write local summary policy");
+    let data_root = data.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[("BITLOOPS_TEST_DATA_DIR_OVERRIDE", Some(data_root.as_str()))],
+    );
+
+    with_managed_embeddings_install_hook(
+        move |repo_root| {
+            Ok(ManagedEmbeddingsBinaryInstallOutcome {
+                version: TEST_MANAGED_EMBEDDINGS_VERSION.to_string(),
+                binary_path: fake_managed_runtime_path(repo_root),
+                freshly_installed: true,
+            })
+        },
+        || {
+            install_or_bootstrap_embeddings(repo.path())
+                .expect("install embeddings via managed runtime");
+            let repo_policy = fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+                .expect("read local repo policy");
+
+            assert!(repo_policy.contains("summary_mode = \"off\""));
+            assert!(repo_policy.contains("summary_generation = \"summary_local\""));
+            assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
+            assert!(repo_policy.contains("code_embeddings = \"local_code\""));
+            assert!(repo_policy.contains("summary_embeddings = \"local_code\""));
+        },
+    );
+}
+
+#[test]
 fn install_or_bootstrap_embeddings_uses_repo_bound_daemon_config() {
     let repo = TempDir::new().expect("tempdir");
     let app_dirs = TempDir::new().expect("app tempdir");
@@ -1054,6 +1106,60 @@ fn install_or_configure_platform_embeddings_persists_repo_policy() {
                 .expect("read local repo policy");
 
             assert!(!config.contains("code_embeddings = \"platform_code\""));
+            assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
+            assert!(repo_policy.contains("code_embeddings = \"platform_code\""));
+            assert!(repo_policy.contains("summary_embeddings = \"platform_code\""));
+        },
+    );
+}
+
+#[test]
+fn install_or_configure_platform_embeddings_preserves_existing_summary_policy() {
+    let repo = TempDir::new().expect("tempdir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Alice",
+        "alice@example.com",
+    );
+    write_runtime_only_config(repo.path(), "bitloops-platform-embeddings", &[]);
+    fs::write(
+        repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+        r#"
+[semantic_clones]
+summary_mode = "auto"
+embedding_mode = "off"
+
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+"#,
+    )
+    .expect("write local summary policy");
+
+    with_managed_platform_embeddings_install_hook(
+        {
+            let repo_root = repo.path().to_path_buf();
+            move || {
+                Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
+                    version: TEST_MANAGED_EMBEDDINGS_VERSION.to_string(),
+                    binary_path: repo_root.join(".bitloops/test-bin/bitloops-platform-embeddings"),
+                    freshly_installed: true,
+                })
+            }
+        },
+        || {
+            install_or_configure_platform_embeddings(
+                repo.path(),
+                Some("https://gateway.example/v1/embeddings"),
+                "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+            )
+            .expect("install platform embeddings");
+
+            let repo_policy = fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+                .expect("read local repo policy");
+
+            assert!(repo_policy.contains("summary_mode = \"auto\""));
+            assert!(repo_policy.contains("summary_generation = \"summary_llm\""));
             assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
             assert!(repo_policy.contains("code_embeddings = \"platform_code\""));
             assert!(repo_policy.contains("summary_embeddings = \"platform_code\""));

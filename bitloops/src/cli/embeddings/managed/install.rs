@@ -14,8 +14,8 @@ use std::rc::Rc;
 use crate::config::settings::settings_local_path;
 use crate::config::{
     DaemonEmbeddingsInstallMode, RepoSemanticEmbeddingPolicy, prepare_daemon_embeddings_install,
-    resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
-    set_repo_semantic_embedding_policy,
+    repo_semantic_embedding_policy, resolve_bound_daemon_config_path_for_repo,
+    resolve_daemon_config_path_for_repo, set_repo_semantic_embedding_policy,
 };
 
 use super::super::profiles::{embedding_capability_for_config_path, pull_profile_with_config_path};
@@ -180,10 +180,7 @@ pub(crate) fn install_or_bootstrap_embeddings(repo_root: &Path) -> Result<Vec<St
                 .as_deref()
                 .map(|driver| format!(" (driver `{driver}`)"))
                 .unwrap_or_default();
-            set_repo_semantic_embedding_policy(
-                &settings_local_path(repo_root),
-                &RepoSemanticEmbeddingPolicy::enabled_with_profile(&plan.profile_name),
-            )?;
+            enable_repo_embedding_profile_preserving_summaries(repo_root, &plan.profile_name)?;
             return Ok(vec![format!(
                 "Embeddings are already configured via profile `{}`{}; skipped local runtime bootstrap.",
                 plan.profile_name, profile_driver
@@ -198,10 +195,7 @@ pub(crate) fn install_or_bootstrap_embeddings(repo_root: &Path) -> Result<Vec<St
             pull_profile_with_config_path(repo_root, &config_path, &capability, &plan.profile_name);
         return match result {
             Ok(mut lines) => {
-                set_repo_semantic_embedding_policy(
-                    &settings_local_path(repo_root),
-                    &RepoSemanticEmbeddingPolicy::enabled_with_profile(&plan.profile_name),
-                )?;
+                enable_repo_embedding_profile_preserving_summaries(repo_root, &plan.profile_name)?;
                 lines.insert(
                     0,
                     format!(
@@ -227,10 +221,7 @@ pub(crate) fn install_or_bootstrap_embeddings(repo_root: &Path) -> Result<Vec<St
         pull_profile_with_config_path(repo_root, &config_path, &capability, &plan.profile_name);
     match result {
         Ok(mut lines) => {
-            set_repo_semantic_embedding_policy(
-                &settings_local_path(repo_root),
-                &RepoSemanticEmbeddingPolicy::enabled_with_profile(&plan.profile_name),
-            )?;
+            enable_repo_embedding_profile_preserving_summaries(repo_root, &plan.profile_name)?;
             lines.splice(
                 0..0,
                 format_managed_embeddings_runtime_lines(&ensure, Some(&config_path)),
@@ -248,6 +239,18 @@ pub(crate) fn install_or_bootstrap_embeddings(repo_root: &Path) -> Result<Vec<St
             Err(err)
         }
     }
+}
+
+fn enable_repo_embedding_profile_preserving_summaries(
+    repo_root: &Path,
+    profile_name: &str,
+) -> Result<()> {
+    let existing_policy = repo_semantic_embedding_policy(repo_root)?;
+    let policy = RepoSemanticEmbeddingPolicy::enabled_with_profile_preserving_summaries(
+        profile_name,
+        &existing_policy,
+    );
+    set_repo_semantic_embedding_policy(&settings_local_path(repo_root), &policy)
 }
 
 #[allow(dead_code)]

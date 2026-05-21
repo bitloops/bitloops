@@ -909,31 +909,39 @@ fn choose_context_guidance_setup_during_init_skips_noninteractive_without_explic
 }
 
 #[test]
-fn choose_summary_setup_during_init_skips_when_summary_mode_is_off() {
+fn choose_summary_setup_during_init_can_reenable_existing_summary_mode_off() {
     let repo = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+    write_repo_policy(
+        &repo,
+        REPO_POLICY_LOCAL_FILE_NAME,
         "[semantic_clones]\nsummary_mode = \"off\"\n",
-    )
-    .expect("write config");
+    );
     let mut out = Vec::new();
-    let mut input = Cursor::new("");
+    let mut input = Cursor::new("3\n");
 
-    let selection = test_runtime()
-        .block_on(choose_summary_setup_during_init(
-            repo.path(),
-            true,
-            false,
-            true,
-            &mut out,
-            &mut input,
-        ))
-        .expect("choose summary setup");
+    let selection = with_test_tty_override(true, || {
+        with_summary_generation_configured_hook(
+            |_| false,
+            || {
+                test_runtime().block_on(choose_summary_setup_during_init(
+                    repo.path(),
+                    true,
+                    false,
+                    true,
+                    &mut out,
+                    &mut input,
+                ))
+            },
+        )
+    })
+    .expect("choose summary setup");
 
     assert_eq!(
         selection,
-        crate::cli::inference::SummarySetupSelection::Skip
+        crate::cli::inference::SummarySetupSelection::Local
     );
+    let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(rendered.contains("Configure semantic summaries"));
 }
 
 #[test]
@@ -5582,6 +5590,117 @@ model = "text-embedding-3-small"
                 );
             },
         );
+    });
+}
+
+#[test]
+fn run_init_existing_selection_fills_partial_repo_embedding_policy_from_daemon() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+    let config_path = repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    write_repo_policy(
+        &repo,
+        REPO_POLICY_LOCAL_FILE_NAME,
+        &format!(
+            r#"
+[daemon]
+config_path = {:?}
+
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "repo_code_profile"
+"#,
+            config_path.to_string_lossy()
+        ),
+    );
+    std::fs::write(
+        &config_path,
+        r#"
+[runtime]
+local_dev = false
+
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+summary_mode = "auto"
+
+[semantic_clones.inference]
+code_embeddings = "daemon_code_profile"
+summary_embeddings = "daemon_summary_profile"
+summary_generation = "daemon_summary_generation"
+
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+
+[inference.profiles.repo_code_profile]
+task = "embeddings"
+driver = "openai"
+model = "text-embedding-3-large"
+
+[inference.profiles.daemon_code_profile]
+task = "embeddings"
+driver = "openai"
+model = "text-embedding-3-large"
+
+[inference.profiles.daemon_summary_profile]
+task = "embeddings"
+driver = "openai"
+model = "text-embedding-3-small"
+
+[inference.profiles.daemon_summary_generation]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "daemon-summary-model"
+"#,
+    )
+    .expect("write daemon config");
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, true, true, true, || {
+        let mut out = Vec::new();
+        let mut input = Cursor::new("3,4,5\n");
+        let runtime = test_runtime();
+        runtime
+            .block_on(run_with_io_async_for_project_root(
+                InitArgs {
+                    command: None,
+                    install_default_daemon: false,
+                    force: false,
+                    disable_devql_guidance: false,
+                    agent: vec![DEFAULT_AGENT.to_string()],
+                    telemetry: Some(false),
+                    no_telemetry: false,
+                    skip_baseline: false,
+                    sync: Some(false),
+                    ingest: Some(false),
+                    backfill: None,
+                    exclude: Vec::new(),
+                    exclude_from: Vec::new(),
+                    embeddings_runtime: None,
+                    no_embeddings: false,
+                    no_summaries: false,
+                    context_guidance_runtime: None,
+                    no_context_guidance: true,
+                    context_guidance_gateway_url: None,
+                    context_guidance_api_key_env: None,
+                    embeddings_gateway_url: None,
+                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                },
+                repo.path(),
+                &mut out,
+                &mut input,
+                None,
+            ))
+            .expect("run init");
+
+        let policy = std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+            .expect("read local policy");
+        assert!(policy.contains("summary_mode = \"auto\""));
+        assert!(policy.contains("summary_generation = \"daemon_summary_generation\""));
+        assert!(policy.contains("code_embeddings = \"repo_code_profile\""));
+        assert!(policy.contains("summary_embeddings = \"daemon_summary_profile\""));
     });
 }
 

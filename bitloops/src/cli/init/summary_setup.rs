@@ -7,7 +7,6 @@ use crate::cli::inference::{
     SummarySetupSelection, prompt_summary_setup_selection, summary_generation_configured,
 };
 use crate::cli::telemetry_consent;
-use crate::config::{SemanticSummaryMode, resolve_semantic_clones_config_for_repo};
 
 use super::cloud_login_status::resolve_cloud_logged_in_for_optional_setup;
 
@@ -20,10 +19,6 @@ pub(crate) async fn choose_summary_setup_during_init(
     input: &mut dyn BufRead,
 ) -> Result<SummarySetupSelection> {
     if no_summaries || !repo_selected_summaries {
-        return Ok(SummarySetupSelection::Skip);
-    }
-
-    if resolve_semantic_clones_config_for_repo(repo_root).summary_mode == SemanticSummaryMode::Off {
         return Ok(SummarySetupSelection::Skip);
     }
 
