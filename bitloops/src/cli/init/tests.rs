@@ -4011,7 +4011,7 @@ fn run_init_without_install_default_daemon_explicit_platform_persists_repo_polic
 }
 
 #[test]
-fn second_repo_can_disable_summaries_when_default_daemon_has_summary_provider() {
+fn second_repo_uses_existing_daemon_providers_without_expanding_final_setup_prompt() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     let repo_id = test_repo_id(repo.path());
@@ -4051,15 +4051,12 @@ fn second_repo_can_disable_summaries_when_default_daemon_has_summary_provider() 
                                         assert_eq!(variables["input"]["runIngest"], json!(true));
                                         assert_eq!(
                                             variables["input"]["runCodeEmbeddings"],
-                                            json!(false)
+                                            json!(true)
                                         );
-                                        assert_eq!(
-                                            variables["input"]["runSummaries"],
-                                            json!(false)
-                                        );
+                                        assert_eq!(variables["input"]["runSummaries"], json!(true));
                                         assert_eq!(
                                             variables["input"]["runSummaryEmbeddings"],
-                                            json!(false)
+                                            json!(true)
                                         );
                                         return Ok(runtime_start_init_result_json(session_id));
                                     }
@@ -4072,7 +4069,13 @@ fn second_repo_can_disable_summaries_when_default_daemon_has_summary_provider() 
                                                 status: "COMPLETED",
                                                 run_sync: true,
                                                 run_ingest: true,
+                                                embeddings_selected: true,
+                                                summaries_selected: true,
+                                                summary_embeddings_selected: true,
                                                 top_lane_status: "COMPLETED",
+                                                embeddings_lane_status: "COMPLETED",
+                                                summaries_lane_status: "COMPLETED",
+                                                summary_embeddings_lane_status: Some("COMPLETED"),
                                                 ..RuntimeSessionSnapshotFixture::default()
                                             },
                                         ));
@@ -4121,17 +4124,17 @@ fn second_repo_can_disable_summaries_when_default_daemon_has_summary_provider() 
 
                                 let rendered =
                                     strip_ansi_escape_sequences(&String::from_utf8(out).unwrap());
-                                assert!(rendered.contains("3. Code embeddings"));
-                                assert!(rendered.contains("4. Summaries"));
-                                assert!(rendered.contains("5. Summary embeddings"));
+                                assert!(!rendered.contains("3. Code embeddings"));
+                                assert!(!rendered.contains("4. Summaries"));
+                                assert!(!rendered.contains("5. Summary embeddings"));
 
                                 let policy = std::fs::read_to_string(
                                     repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
                                 )
                                 .expect("read local policy");
-                                assert!(policy.contains("summary_mode = \"off\""));
-                                assert!(!policy.contains("summary_generation = "));
-                                assert!(!policy.contains("summary_embeddings = "));
+                                assert!(policy.contains("summary_mode = \"auto\""));
+                                assert!(policy.contains("summary_generation = \"summary_local\""));
+                                assert!(policy.contains("summary_embeddings = \"local_code\""));
                             },
                         )
                     },
@@ -5512,10 +5515,12 @@ local_dev = false
 
 [semantic_clones]
 embedding_mode = "refresh_on_upgrade"
+summary_mode = "auto"
 
 [semantic_clones.inference]
 code_embeddings = "daemon_code_profile"
 summary_embeddings = "daemon_summary_profile"
+summary_generation = "daemon_summary_generation"
 
 [inference.profiles.daemon_code_profile]
 task = "embeddings"
@@ -5526,6 +5531,12 @@ model = "text-embedding-3-large"
 task = "embeddings"
 driver = "openai"
 model = "text-embedding-3-small"
+
+[inference.profiles.daemon_summary_generation]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "daemon-summary-model"
 "#,
                 )
                 .expect("write daemon config");
@@ -5584,8 +5595,12 @@ model = "text-embedding-3-small"
                             std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
                                 .expect("read local policy");
                         assert!(policy.contains("embedding_mode = \"semantic_aware_once\""));
+                        assert!(policy.contains("summary_mode = \"auto\""));
                         assert!(policy.contains("code_embeddings = \"daemon_code_profile\""));
                         assert!(policy.contains("summary_embeddings = \"daemon_summary_profile\""));
+                        assert!(
+                            policy.contains("summary_generation = \"daemon_summary_generation\"")
+                        );
                     },
                 );
             },
@@ -7058,32 +7073,27 @@ fn choose_final_setup_options_renders_final_setup_prompt() {
         )
         .expect("render prompt");
 
-        assert_eq!(
-            selection,
-            InitFinalSetupSelection {
-                sync: true,
-                ingest: true,
-                code_embeddings: true,
-                summaries: false,
-                summary_embeddings: false,
-                telemetry: false,
-                auto_start_daemon: false,
-            }
-        );
+        assert!(selection.sync);
+        assert!(selection.ingest);
+        assert!(!selection.telemetry);
+        assert!(!selection.auto_start_daemon);
         let rendered = String::from_utf8(out).expect("utf8 output");
         assert!(rendered.contains("\nFinal setup\n"));
         assert!(rendered.contains("And we made it to the last setup options 🎉"));
         assert!(rendered.contains("Use space to select, enter to confirm."));
         assert!(rendered.contains("1. Sync codebase (selected)"));
         assert!(rendered.contains("2. Import commit history (selected)"));
+        assert!(!rendered.contains("Code embeddings"));
+        assert!(!rendered.contains("Summaries"));
+        assert!(!rendered.contains("Summary embeddings"));
     });
 }
 
 #[test]
-fn choose_final_setup_options_prompts_for_all_repo_local_choices() {
+fn choose_final_setup_options_does_not_render_semantic_repo_choices() {
     with_test_tty_override(true, || {
         let mut out = Vec::new();
-        let mut input = Cursor::new("1,2,3,4,5\n");
+        let mut input = Cursor::new("1,2\n");
 
         let selection = choose_final_setup_options(
             None,
@@ -7097,24 +7107,16 @@ fn choose_final_setup_options_prompts_for_all_repo_local_choices() {
         )
         .expect("choose setup options");
 
-        assert_eq!(
-            selection,
-            InitFinalSetupSelection {
-                sync: true,
-                ingest: true,
-                code_embeddings: true,
-                summaries: true,
-                summary_embeddings: true,
-                telemetry: false,
-                auto_start_daemon: false,
-            }
-        );
+        assert!(selection.sync);
+        assert!(selection.ingest);
+        assert!(!selection.telemetry);
+        assert!(!selection.auto_start_daemon);
         let rendered = String::from_utf8(out).expect("utf8 output");
         assert!(rendered.contains("1. Sync codebase"));
         assert!(rendered.contains("2. Import commit history"));
-        assert!(rendered.contains("3. Code embeddings"));
-        assert!(rendered.contains("4. Summaries"));
-        assert!(rendered.contains("5. Summary embeddings"));
+        assert!(!rendered.contains("Code embeddings"));
+        assert!(!rendered.contains("Summaries"));
+        assert!(!rendered.contains("Summary embeddings"));
     });
 }
 
@@ -7274,52 +7276,50 @@ fn choose_final_setup_options_does_not_preselect_code_embeddings_when_sync_disab
 
         assert!(!selection.sync);
         assert!(selection.ingest);
-        assert!(!selection.code_embeddings);
-        assert!(!selection.summaries);
-        assert!(!selection.summary_embeddings);
 
         let rendered = String::from_utf8(out).expect("utf8 output");
-        assert!(!rendered.contains("3. Code embeddings (selected)"));
+        assert!(!rendered.contains("Code embeddings"));
+        assert!(!rendered.contains("Summaries"));
+        assert!(!rendered.contains("Summary embeddings"));
     });
 }
 
 #[test]
-fn choose_final_setup_options_enables_summaries_when_summary_embeddings_selected() {
+fn choose_final_setup_options_rejects_removed_semantic_option_numbers() {
     with_test_tty_override(true, || {
         let mut out = Vec::new();
-        let mut input = Cursor::new("5\n");
+        let mut input = Cursor::new("5\n\n");
 
         let selection = choose_final_setup_options(
-            Some(false),
+            None,
             &mut out,
             &mut input,
-            Some(false),
+            None,
             InitFinalSetupPromptOptions {
                 show_telemetry: false,
                 show_auto_start_daemon: false,
             },
         )
-        .expect("choose summary embeddings");
+        .expect("choose setup options");
 
-        assert!(!selection.sync);
-        assert!(!selection.ingest);
-        assert!(!selection.code_embeddings);
-        assert!(selection.summaries);
-        assert!(selection.summary_embeddings);
+        assert!(selection.sync);
+        assert!(selection.ingest);
+        let rendered = String::from_utf8(out).expect("utf8 output");
+        assert!(rendered.contains("Please choose option numbers"));
     });
 }
 
 #[test]
-fn choose_final_setup_options_all_selects_all_repo_local_choices() {
+fn choose_final_setup_options_all_selects_visible_choices_only() {
     with_test_tty_override(true, || {
         let mut out = Vec::new();
         let mut input = Cursor::new("all\n");
 
         let selection = choose_final_setup_options(
-            Some(false),
+            None,
             &mut out,
             &mut input,
-            Some(false),
+            None,
             InitFinalSetupPromptOptions {
                 show_telemetry: false,
                 show_auto_start_daemon: false,
@@ -7329,9 +7329,10 @@ fn choose_final_setup_options_all_selects_all_repo_local_choices() {
 
         assert!(selection.sync);
         assert!(selection.ingest);
-        assert!(selection.code_embeddings);
-        assert!(selection.summaries);
-        assert!(selection.summary_embeddings);
+        let rendered = String::from_utf8(out).expect("utf8 output");
+        assert!(!rendered.contains("Code embeddings"));
+        assert!(!rendered.contains("Summaries"));
+        assert!(!rendered.contains("Summary embeddings"));
     });
 }
 
@@ -7353,18 +7354,10 @@ fn choose_final_setup_options_preselects_telemetry_when_shown() {
         )
         .expect("render telemetry prompt");
 
-        assert_eq!(
-            selection,
-            InitFinalSetupSelection {
-                sync: false,
-                ingest: false,
-                code_embeddings: false,
-                summaries: false,
-                summary_embeddings: false,
-                telemetry: true,
-                auto_start_daemon: false,
-            }
-        );
+        assert!(!selection.sync);
+        assert!(!selection.ingest);
+        assert!(selection.telemetry);
+        assert!(!selection.auto_start_daemon);
         let rendered = String::from_utf8(out).expect("utf8 output");
         assert!(rendered.contains("Enable anonymous telemetry (selected)"));
     });
@@ -7388,18 +7381,10 @@ fn choose_final_setup_options_defaults_auto_start_to_disabled_when_not_interacti
         )
         .expect("default auto-start selection");
 
-        assert_eq!(
-            selection,
-            InitFinalSetupSelection {
-                sync: false,
-                ingest: false,
-                code_embeddings: false,
-                summaries: false,
-                summary_embeddings: false,
-                telemetry: false,
-                auto_start_daemon: false,
-            }
-        );
+        assert!(!selection.sync);
+        assert!(!selection.ingest);
+        assert!(!selection.telemetry);
+        assert!(!selection.auto_start_daemon);
         assert!(
             out.is_empty(),
             "non-interactive auto-start should not prompt"

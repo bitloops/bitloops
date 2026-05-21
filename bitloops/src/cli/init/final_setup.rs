@@ -13,9 +13,6 @@ use anyhow::{Context, Result, bail};
 pub(crate) struct InitFinalSetupSelection {
     pub sync: bool,
     pub ingest: bool,
-    pub code_embeddings: bool,
-    pub summaries: bool,
-    pub summary_embeddings: bool,
     pub telemetry: bool,
     pub auto_start_daemon: bool,
 }
@@ -26,13 +23,10 @@ pub(crate) struct InitFinalSetupPromptOptions {
     pub show_auto_start_daemon: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 enum InitFinalSetupOptionKind {
     Sync,
     Ingest,
-    CodeEmbeddings,
-    Summaries,
-    SummaryEmbeddings,
     Telemetry,
     AutoStartDaemon,
 }
@@ -52,19 +46,14 @@ pub(crate) fn choose_final_setup_options(
     prompt_options: InitFinalSetupPromptOptions,
 ) -> Result<InitFinalSetupSelection> {
     let can_prompt = telemetry_consent::can_prompt_interactively();
-    let code_embeddings_default = sync.unwrap_or(true);
     let defaults = InitFinalSetupSelection {
         sync: sync.unwrap_or(true),
         ingest: ingest.unwrap_or(true),
-        code_embeddings: code_embeddings_default,
-        summaries: false,
-        summary_embeddings: false,
         telemetry: prompt_options.show_telemetry,
         auto_start_daemon: prompt_options.show_auto_start_daemon && can_prompt,
     };
     let requires_prompt = sync.is_none()
         || ingest.is_none()
-        || can_prompt
         || prompt_options.show_telemetry
         || (prompt_options.show_auto_start_daemon && can_prompt);
 
@@ -132,11 +121,6 @@ fn prompt_final_setup_selection_with_picker(
             }
             FollowUpKey::Toggle => {
                 selected[cursor] = !selected[cursor];
-                apply_final_setup_toggle_dependencies(
-                    &options,
-                    &mut selected,
-                    options[cursor].kind,
-                );
             }
             FollowUpKey::Cancel => bail!("cancelled by user"),
             FollowUpKey::Submit => break,
@@ -153,16 +137,12 @@ fn prompt_final_setup_selection_with_picker(
     let mut selection = InitFinalSetupSelection {
         sync: false,
         ingest: false,
-        code_embeddings: false,
-        summaries: false,
-        summary_embeddings: false,
         telemetry: false,
         auto_start_daemon: false,
     };
     for (option, is_selected) in options.iter().zip(selected) {
         set_final_setup_selection_value(&mut selection, option.kind, is_selected);
     }
-    normalize_final_setup_dependencies(&mut selection);
     Ok(selection)
 }
 
@@ -218,18 +198,13 @@ fn prompt_final_setup_selection_with_text_input(
             .context("reading final setup selection for `bitloops init`")?;
         let response = response.trim().to_ascii_lowercase();
         if response.is_empty() {
-            let mut selection = defaults;
-            normalize_final_setup_dependencies(&mut selection);
-            return Ok(selection);
+            return Ok(defaults);
         }
 
         if matches!(response.as_str(), "none" | "skip") {
             return Ok(InitFinalSetupSelection {
                 sync: false,
                 ingest: false,
-                code_embeddings: false,
-                summaries: false,
-                summary_embeddings: false,
                 telemetry: false,
                 auto_start_daemon: false,
             });
@@ -238,9 +213,6 @@ fn prompt_final_setup_selection_with_text_input(
         let mut selection = InitFinalSetupSelection {
             sync: false,
             ingest: false,
-            code_embeddings: false,
-            summaries: false,
-            summary_embeddings: false,
             telemetry: false,
             auto_start_daemon: false,
         };
@@ -271,7 +243,6 @@ fn prompt_final_setup_selection_with_text_input(
         }
 
         if !invalid {
-            normalize_final_setup_dependencies(&mut selection);
             return Ok(selection);
         }
 
@@ -294,21 +265,6 @@ fn final_setup_option_specs(
         InitFinalSetupOptionSpec {
             kind: InitFinalSetupOptionKind::Ingest,
             label: "Import commit history",
-            insert_spacing_before: false,
-        },
-        InitFinalSetupOptionSpec {
-            kind: InitFinalSetupOptionKind::CodeEmbeddings,
-            label: "Code embeddings",
-            insert_spacing_before: false,
-        },
-        InitFinalSetupOptionSpec {
-            kind: InitFinalSetupOptionKind::Summaries,
-            label: "Summaries",
-            insert_spacing_before: false,
-        },
-        InitFinalSetupOptionSpec {
-            kind: InitFinalSetupOptionKind::SummaryEmbeddings,
-            label: "Summary embeddings",
             insert_spacing_before: false,
         },
     ];
@@ -340,9 +296,6 @@ fn final_setup_selection_value(
     match kind {
         InitFinalSetupOptionKind::Sync => selection.sync,
         InitFinalSetupOptionKind::Ingest => selection.ingest,
-        InitFinalSetupOptionKind::CodeEmbeddings => selection.code_embeddings,
-        InitFinalSetupOptionKind::Summaries => selection.summaries,
-        InitFinalSetupOptionKind::SummaryEmbeddings => selection.summary_embeddings,
         InitFinalSetupOptionKind::Telemetry => selection.telemetry,
         InitFinalSetupOptionKind::AutoStartDaemon => selection.auto_start_daemon,
     }
@@ -356,54 +309,8 @@ fn set_final_setup_selection_value(
     match kind {
         InitFinalSetupOptionKind::Sync => selection.sync = value,
         InitFinalSetupOptionKind::Ingest => selection.ingest = value,
-        InitFinalSetupOptionKind::CodeEmbeddings => selection.code_embeddings = value,
-        InitFinalSetupOptionKind::Summaries => selection.summaries = value,
-        InitFinalSetupOptionKind::SummaryEmbeddings => selection.summary_embeddings = value,
         InitFinalSetupOptionKind::Telemetry => selection.telemetry = value,
         InitFinalSetupOptionKind::AutoStartDaemon => selection.auto_start_daemon = value,
-    }
-}
-
-fn normalize_final_setup_dependencies(selection: &mut InitFinalSetupSelection) {
-    if selection.summary_embeddings {
-        selection.summaries = true;
-    }
-    if !selection.summaries {
-        selection.summary_embeddings = false;
-    }
-}
-
-fn apply_final_setup_toggle_dependencies(
-    options: &[InitFinalSetupOptionSpec],
-    selected: &mut [bool],
-    toggled_kind: InitFinalSetupOptionKind,
-) {
-    let find_index = |kind| options.iter().position(|option| option.kind == kind);
-    match toggled_kind {
-        InitFinalSetupOptionKind::SummaryEmbeddings => {
-            let summary_embeddings_selected =
-                find_index(InitFinalSetupOptionKind::SummaryEmbeddings)
-                    .and_then(|index| selected.get(index))
-                    .copied()
-                    .unwrap_or(false);
-            if summary_embeddings_selected {
-                if let Some(index) = find_index(InitFinalSetupOptionKind::Summaries) {
-                    selected[index] = true;
-                }
-            }
-        }
-        InitFinalSetupOptionKind::Summaries => {
-            let summaries_selected = find_index(InitFinalSetupOptionKind::Summaries)
-                .and_then(|index| selected.get(index))
-                .copied()
-                .unwrap_or(false);
-            if !summaries_selected {
-                if let Some(index) = find_index(InitFinalSetupOptionKind::SummaryEmbeddings) {
-                    selected[index] = false;
-                }
-            }
-        }
-        _ => {}
     }
 }
 
@@ -419,19 +326,6 @@ fn option_for_final_setup_token<'a>(
         InitFinalSetupOptionKind::Sync => matches!(token, "sync" | "codebase"),
         InitFinalSetupOptionKind::Ingest => {
             matches!(token, "ingest" | "history" | "commit-history")
-        }
-        InitFinalSetupOptionKind::CodeEmbeddings => {
-            matches!(
-                token,
-                "embeddings" | "code-embeddings" | "code_embeddings" | "code"
-            )
-        }
-        InitFinalSetupOptionKind::Summaries => matches!(token, "summaries" | "summary"),
-        InitFinalSetupOptionKind::SummaryEmbeddings => {
-            matches!(
-                token,
-                "summary-embeddings" | "summary_embeddings" | "summary-embedding"
-            )
         }
         InitFinalSetupOptionKind::Telemetry => matches!(token, "telemetry"),
         InitFinalSetupOptionKind::AutoStartDaemon => matches!(
@@ -618,41 +512,4 @@ fn selected_follow_up_checkbox() -> String {
 fn selected_follow_up_label(label: &str) -> String {
     const SELECTION_WHITE_HEX: &str = "#ffffff";
     color_hex_if_enabled(label, SELECTION_WHITE_HEX)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn picker_toggle_dependencies_keep_summary_choices_consistent() {
-        let options = final_setup_option_specs(InitFinalSetupPromptOptions {
-            show_telemetry: false,
-            show_auto_start_daemon: false,
-        });
-        let mut selected = vec![false; options.len()];
-        let summary_embeddings_index = options
-            .iter()
-            .position(|option| option.kind == InitFinalSetupOptionKind::SummaryEmbeddings)
-            .expect("summary embeddings option");
-        selected[summary_embeddings_index] = true;
-        apply_final_setup_toggle_dependencies(
-            &options,
-            &mut selected,
-            InitFinalSetupOptionKind::SummaryEmbeddings,
-        );
-        let summaries_index = options
-            .iter()
-            .position(|option| option.kind == InitFinalSetupOptionKind::Summaries)
-            .expect("summaries option");
-        assert!(selected[summaries_index]);
-
-        selected[summaries_index] = false;
-        apply_final_setup_toggle_dependencies(
-            &options,
-            &mut selected,
-            InitFinalSetupOptionKind::Summaries,
-        );
-        assert!(!selected[summary_embeddings_index]);
-    }
 }

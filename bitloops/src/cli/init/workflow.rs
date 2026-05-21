@@ -246,7 +246,7 @@ pub(crate) async fn run_for_project_root(
         out.write_all(&surface_updates)?;
         out.flush()?;
     }
-    let mut final_setup_selection = choose_final_setup_options(
+    let final_setup_selection = choose_final_setup_options(
         args.sync,
         out,
         input,
@@ -256,19 +256,6 @@ pub(crate) async fn run_for_project_root(
             show_auto_start_daemon: args.install_default_daemon && !daemon_already_always_on,
         },
     )?;
-    if args.no_embeddings {
-        final_setup_selection.code_embeddings = false;
-        final_setup_selection.summary_embeddings = false;
-    }
-    if args.no_summaries {
-        final_setup_selection.summaries = false;
-        final_setup_selection.summary_embeddings = false;
-    }
-    if args.embeddings_runtime.is_some() && !args.no_embeddings {
-        final_setup_selection.code_embeddings = true;
-    }
-    let repo_selected_embedding_lanes =
-        init_repo_selected_embedding_lanes(final_setup_selection, args.no_summaries);
     let mut embeddings_bootstrap = None;
     let mut embeddings_bootstrap_rollback_plan = None;
     let mut prepared_summary_setup = None;
@@ -279,7 +266,7 @@ pub(crate) async fn run_for_project_root(
     let embeddings_selection = should_install_embeddings_during_init(
         project_root,
         &args,
-        repo_selected_embedding_lanes,
+        !args.no_embeddings,
         out,
         input,
     )?;
@@ -347,7 +334,7 @@ pub(crate) async fn run_for_project_root(
         project_root,
         args.install_default_daemon,
         args.no_summaries,
-        final_setup_selection.summaries,
+        !args.no_summaries,
         out,
         input,
     )
@@ -355,7 +342,7 @@ pub(crate) async fn run_for_project_root(
     if matches!(summary_selection, SummarySetupSelection::Cloud) {
         login_required = true;
     }
-    if final_setup_selection.summaries {
+    if !args.no_summaries {
         selected_summary_generation_profile_name =
             existing_init_summary_generation_profile_name(project_root);
     }
@@ -462,15 +449,22 @@ pub(crate) async fn run_for_project_root(
         }
         ContextGuidanceSetupSelection::Skip => {}
     }
+    let semantic_selection = InitRepoSemanticSelection {
+        code_embeddings: !args.no_embeddings && selected_code_embedding_profile_name.is_some(),
+        summaries: !args.no_summaries && selected_summary_generation_profile_name.is_some(),
+        summary_embeddings: !args.no_embeddings
+            && !args.no_summaries
+            && selected_summary_generation_profile_name.is_some()
+            && selected_summary_embedding_profile_name.is_some(),
+    };
     persist_init_semantic_policy(
         &local_policy_path,
-        &final_setup_selection,
+        semantic_selection,
         selected_code_embedding_profile_name.as_deref(),
         selected_summary_embedding_profile_name.as_deref(),
         selected_summary_generation_profile_name.as_deref(),
     )?;
-    let summaries_selected =
-        final_setup_selection.summaries && selected_summary_generation_profile_name.is_some();
+    let summaries_selected = semantic_selection.summaries;
     if args.install_default_daemon {
         maybe_enable_default_daemon_service(
             final_setup_selection.auto_start_daemon,
@@ -497,15 +491,14 @@ pub(crate) async fn run_for_project_root(
     let should_ingest = final_setup_selection.ingest;
     set_devql_producer_settings(&local_policy_path, should_sync, should_ingest)?;
     let semantic_policy = resolve_semantic_clones_config_for_repo(project_root);
-    let code_embeddings_selected = final_setup_selection.code_embeddings
+    let code_embeddings_selected = semantic_selection.code_embeddings
         && semantic_policy.embedding_mode != SemanticCloneEmbeddingMode::Off
         && semantic_policy
             .inference
             .code_embeddings
             .as_deref()
             .is_some_and(|profile| !profile.trim().is_empty());
-    let summary_embeddings_selected = final_setup_selection.summary_embeddings
-        && final_setup_selection.summaries
+    let summary_embeddings_selected = semantic_selection.summary_embeddings
         && semantic_policy.embedding_mode != SemanticCloneEmbeddingMode::Off
         && semantic_policy
             .inference
@@ -605,13 +598,15 @@ pub(crate) async fn run_for_project_root(
     Ok(())
 }
 
-fn init_repo_selected_embedding_lanes(
-    selection: super::final_setup::InitFinalSetupSelection,
-    no_summaries: bool,
-) -> bool {
-    let summary_embedding_lane =
-        selection.summaries && selection.summary_embeddings && !no_summaries;
-    selection.code_embeddings || summary_embedding_lane
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct InitRepoSemanticSelection {
+    code_embeddings: bool,
+    summaries: bool,
+    summary_embeddings: bool,
+}
+
+fn init_repo_selected_embedding_lanes(selection: InitRepoSemanticSelection) -> bool {
+    selection.code_embeddings || selection.summary_embeddings
 }
 
 #[cfg(test)]
@@ -632,31 +627,27 @@ mod tests {
         .expect("write daemon binding");
     }
 
-    fn final_setup_selection(
+    fn semantic_selection(
         code_embeddings: bool,
         summaries: bool,
         summary_embeddings: bool,
-    ) -> super::super::final_setup::InitFinalSetupSelection {
-        super::super::final_setup::InitFinalSetupSelection {
-            sync: false,
-            ingest: false,
+    ) -> InitRepoSemanticSelection {
+        InitRepoSemanticSelection {
             code_embeddings,
             summaries,
             summary_embeddings,
-            telemetry: false,
-            auto_start_daemon: false,
         }
     }
 
     #[test]
-    fn repo_selected_embedding_lanes_ignores_summary_embeddings_when_summaries_disabled() {
-        let summary_only = final_setup_selection(false, true, true);
+    fn repo_selected_embedding_lanes_tracks_semantic_embedding_choices() {
+        let summary_only = semantic_selection(false, true, true);
 
-        assert!(!init_repo_selected_embedding_lanes(summary_only, true));
+        assert!(init_repo_selected_embedding_lanes(summary_only));
 
-        let code_embeddings = final_setup_selection(true, false, false);
+        let code_embeddings = semantic_selection(true, false, false);
 
-        assert!(init_repo_selected_embedding_lanes(code_embeddings, true));
+        assert!(init_repo_selected_embedding_lanes(code_embeddings));
     }
 
     #[test]
@@ -767,7 +758,7 @@ code_embeddings = "repo_code"
 
 fn persist_init_semantic_policy(
     local_policy_path: &Path,
-    selection: &super::final_setup::InitFinalSetupSelection,
+    selection: InitRepoSemanticSelection,
     code_embedding_profile_name: Option<&str>,
     summary_embedding_profile_name: Option<&str>,
     summary_generation_profile_name: Option<&str>,

@@ -42,8 +42,6 @@ pub(super) use embeddings_setup::prompt_install_embeddings_setup_selection;
 pub(super) use embeddings_setup::{
     InitEmbeddingsSetupSelection, should_install_embeddings_during_init,
 };
-#[cfg(test)]
-pub(super) use final_setup::InitFinalSetupSelection;
 pub(super) use final_setup::{InitFinalSetupPromptOptions, choose_final_setup_options};
 pub(super) use repo_excludes::ensure_repo_init_files_excluded;
 pub(crate) use repo_excludes::{
