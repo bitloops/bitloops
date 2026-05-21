@@ -99,9 +99,21 @@ task = "embeddings"
 driver = "openai"
 model = "text-embedding-3-large"
 api_key = "secret"
-"#,
+	"#,
     )
     .expect("write config");
+    fs::write(
+        repo_root.join(REPO_POLICY_LOCAL_FILE_NAME),
+        r#"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "local"
+summary_embeddings = "local"
+"#,
+    )
+    .expect("write repo semantic policy");
 }
 
 fn seed_repo() -> TempDir {
@@ -855,7 +867,7 @@ fn install_or_bootstrap_embeddings_writes_local_profile_and_warms_runtime() {
             assert!(!config.contains("code_embeddings = \"local_code\""));
             assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
             assert!(repo_policy.contains("code_embeddings = \"local_code\""));
-            assert!(repo_policy.contains("summary_embeddings = \"local_code\""));
+            assert!(!repo_policy.contains("summary_embeddings = "));
             assert!(config.contains("[inference.profiles.local_code]"));
             assert!(config.contains("driver = \"bitloops_embeddings_ipc\""));
             assert!(
@@ -944,7 +956,7 @@ summary_generation = "summary_local"
             assert!(repo_policy.contains("summary_generation = \"summary_local\""));
             assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
             assert!(repo_policy.contains("code_embeddings = \"local_code\""));
-            assert!(repo_policy.contains("summary_embeddings = \"local_code\""));
+            assert!(!repo_policy.contains("summary_embeddings = "));
         },
     );
 }
@@ -1108,7 +1120,7 @@ fn install_or_configure_platform_embeddings_persists_repo_policy() {
             assert!(!config.contains("code_embeddings = \"platform_code\""));
             assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
             assert!(repo_policy.contains("code_embeddings = \"platform_code\""));
-            assert!(repo_policy.contains("summary_embeddings = \"platform_code\""));
+            assert!(!repo_policy.contains("summary_embeddings = "));
         },
     );
 }
@@ -1162,7 +1174,7 @@ summary_generation = "summary_llm"
             assert!(repo_policy.contains("summary_generation = \"summary_llm\""));
             assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
             assert!(repo_policy.contains("code_embeddings = \"platform_code\""));
-            assert!(repo_policy.contains("summary_embeddings = \"platform_code\""));
+            assert!(!repo_policy.contains("summary_embeddings = "));
         },
     );
 }
@@ -1366,7 +1378,7 @@ model = "bge-m3"
                                 .expect("read local repo policy");
                         assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
                         assert!(repo_policy.contains("code_embeddings = \"local_code\""));
-                        assert!(repo_policy.contains("summary_embeddings = \"local_code\""));
+                        assert!(!repo_policy.contains("summary_embeddings = "));
 
                         let daemon_config =
                             fs::read_to_string(repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH))
@@ -1532,8 +1544,9 @@ fn install_or_bootstrap_embeddings_rolls_back_when_runtime_bootstrap_fails() {
 }
 
 #[test]
-fn install_or_bootstrap_embeddings_preserves_existing_hosted_profile() {
+fn install_or_bootstrap_embeddings_preserves_hosted_profile_but_ignores_daemon_binding() {
     let repo = TempDir::new().expect("tempdir");
+    let data = TempDir::new().expect("data tempdir");
     crate::test_support::git_fixtures::init_test_repo(
         repo.path(),
         "main",
@@ -1557,18 +1570,48 @@ model = "text-embedding-3-large"
 "#,
     )
     .expect("write hosted config");
-    let original = fs::read_to_string(&config_path).expect("read original config");
+    let data_root = data.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[("BITLOOPS_TEST_DATA_DIR_OVERRIDE", Some(data_root.as_str()))],
+    );
 
-    let lines =
-        install_or_bootstrap_embeddings(repo.path()).expect("existing hosted profile result");
-    let after = fs::read_to_string(&config_path).expect("read final config");
+    with_managed_embeddings_install_hook(
+        move |repo_root| {
+            Ok(ManagedEmbeddingsBinaryInstallOutcome {
+                version: TEST_MANAGED_EMBEDDINGS_VERSION.to_string(),
+                binary_path: fake_managed_runtime_path(repo_root),
+                freshly_installed: true,
+            })
+        },
+        || {
+            let lines =
+                install_or_bootstrap_embeddings(repo.path()).expect("managed bootstrap result");
+            let after = fs::read_to_string(&config_path).expect("read final config");
+            let repo_policy = fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+                .expect("read local repo policy");
 
-    assert_eq!(after, original);
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("skipped local runtime bootstrap")),
-        "expected hosted skip line, got: {lines:?}"
+            assert!(
+                after.contains("[inference.profiles.openai]"),
+                "expected hosted profile to remain registered:\n{after}"
+            );
+            assert!(
+                after.contains("[inference.profiles.local_code]"),
+                "expected local profile to be registered:\n{after}"
+            );
+            assert!(
+                !after.contains("[semantic_clones"),
+                "expected daemon semantic bindings to be stripped:\n{after}"
+            );
+            assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
+            assert!(repo_policy.contains("code_embeddings = \"local_code\""));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Configured embeddings")),
+                "expected configured embeddings line, got: {lines:?}"
+            );
+        },
     );
 }
 

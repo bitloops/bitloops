@@ -343,6 +343,7 @@ fn preferred_daemon_settings_with_repo_semantic_policy(
     repo_root: &Path,
 ) -> Result<(PathBuf, UnifiedSettings, RepoSemanticEnvPolicy)> {
     let (config_root, mut settings) = preferred_daemon_settings_for_repo(repo_root)?;
+    strip_repo_local_semantic_choices_from_daemon(&mut settings.semantic_clones);
     let repo_policy = discover_repo_policy_optional(repo_root)?;
     let semantic_policy = match repo_semantic_embedding_policy_from_policy(&repo_policy) {
         Ok(policy) => policy,
@@ -359,6 +360,30 @@ fn preferred_daemon_settings_with_repo_semantic_policy(
     }
 
     Ok((config_root, settings, repo_env_policy))
+}
+
+fn strip_repo_local_semantic_choices_from_daemon(semantic_clones: &mut Option<Value>) {
+    let Some(root) = semantic_clones.as_mut().and_then(Value::as_object_mut) else {
+        return;
+    };
+
+    root.remove("summary_mode");
+    root.remove("embedding_mode");
+    if let Some(inference) = root.get_mut("inference").and_then(Value::as_object_mut) {
+        inference.remove("summary_generation");
+        inference.remove("code_embeddings");
+        inference.remove("summary_embeddings");
+    }
+    if root
+        .get("inference")
+        .and_then(Value::as_object)
+        .is_some_and(serde_json::Map::is_empty)
+    {
+        root.remove("inference");
+    }
+    if root.is_empty() {
+        *semantic_clones = None;
+    }
 }
 
 fn apply_repo_semantic_embedding_policy(
@@ -405,6 +430,10 @@ fn apply_repo_semantic_embedding_policy(
                 repo_supplied_embedding_bindings
                     .then_some(daemon_embedding_mode)
                     .flatten()
+            })
+            .or_else(|| {
+                repo_supplied_embedding_bindings
+                    .then_some(SemanticCloneEmbeddingMode::SemanticAwareOnce)
             })
             .unwrap_or(SemanticCloneEmbeddingMode::Off);
 

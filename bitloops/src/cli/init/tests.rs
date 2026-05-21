@@ -43,10 +43,6 @@ fn write_repo_policy(dir: &TempDir, file_name: &str, content: &str) {
     std::fs::write(dir.path().join(file_name), content).expect("write repo policy");
 }
 
-fn assert_repo_embedding_policy(repo: &TempDir, profile_name: &str) {
-    assert_repo_embedding_policy_bindings(repo, profile_name, profile_name);
-}
-
 fn assert_repo_code_embedding_policy(repo: &TempDir, profile_name: &str) {
     let policy = std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
         .expect("read local policy");
@@ -65,27 +61,6 @@ fn assert_repo_code_embedding_policy(repo: &TempDir, profile_name: &str) {
     assert!(
         policy.contains("summary_mode = \"off\""),
         "expected summaries off:\n{policy}"
-    );
-}
-
-fn assert_repo_embedding_policy_bindings(
-    repo: &TempDir,
-    code_profile_name: &str,
-    summary_profile_name: &str,
-) {
-    let policy = std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
-        .expect("read local policy");
-    assert!(
-        policy.contains("embedding_mode = \"semantic_aware_once\""),
-        "expected semantic-aware embedding mode:\n{policy}"
-    );
-    assert!(
-        policy.contains(&format!("code_embeddings = \"{code_profile_name}\"")),
-        "expected code embedding profile {code_profile_name}:\n{policy}"
-    );
-    assert!(
-        policy.contains(&format!("summary_embeddings = \"{summary_profile_name}\"")),
-        "expected summary embedding profile {summary_profile_name}:\n{policy}"
     );
 }
 
@@ -316,7 +291,7 @@ fn render_install_default_daemon_handoff_with_mkcert(
                                         exclude_from: Vec::new(),
                                         embeddings_runtime: None,
                                         no_embeddings: true,
-                                        no_summaries: false,
+                                        no_summaries: true,
                                         context_guidance_runtime: None,
                                         no_context_guidance: false,
                                         context_guidance_gateway_url: None,
@@ -494,11 +469,6 @@ fn write_daemon_config_with_embeddings_and_summary(config_path: &Path) {
         r#"
 [runtime]
 local_dev = false
-
-[semantic_clones.inference]
-summary_generation = "summary_local"
-code_embeddings = "local_code"
-summary_embeddings = "local_code"
 
 [inference.runtimes.bitloops_local_embeddings]
 command = "bitloops-local-embeddings"
@@ -3428,8 +3398,8 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
                             embeddings_runtime: None,
-                            no_embeddings: false,
-                            no_summaries: false,
+                            no_embeddings: true,
+                            no_summaries: true,
                             context_guidance_runtime: None,
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
@@ -3717,7 +3687,7 @@ fn run_init_with_install_default_daemon_shows_shell_escaped_config_path() {
                                                                 exclude_from: Vec::new(),
                                                                 embeddings_runtime: None,
                                                                 no_embeddings: true,
-                                                                no_summaries: false,
+                                                                no_summaries: true,
                                                                 context_guidance_runtime: None,
                                                                 no_context_guidance: false,
                                                                 context_guidance_gateway_url: None,
@@ -3835,7 +3805,7 @@ fn run_init_without_install_default_daemon_prompts_for_skippable_embeddings_setu
             },
             || {
                 let mut out = Vec::new();
-                let mut input = Cursor::new("3\n3\n");
+                let mut input = Cursor::new("3\n1\n");
                 let runtime = test_runtime();
                 runtime
                     .block_on(run_with_io_async_for_project_root(
@@ -4165,7 +4135,7 @@ fn second_repo_can_skip_summaries_even_when_daemon_provider_exists() {
                                         assert_eq!(variables["input"]["runIngest"], json!(true));
                                         assert_eq!(
                                             variables["input"]["runCodeEmbeddings"],
-                                            json!(true)
+                                            json!(false)
                                         );
                                         assert_eq!(
                                             variables["input"]["runSummaries"],
@@ -4186,11 +4156,10 @@ fn second_repo_can_skip_summaries_even_when_daemon_provider_exists() {
                                                 status: "COMPLETED",
                                                 run_sync: true,
                                                 run_ingest: true,
-                                                embeddings_selected: true,
+                                                embeddings_selected: false,
                                                 summaries_selected: false,
                                                 summary_embeddings_selected: false,
                                                 top_lane_status: "COMPLETED",
-                                                embeddings_lane_status: "COMPLETED",
                                                 ..RuntimeSessionSnapshotFixture::default()
                                             },
                                         ));
@@ -4201,7 +4170,7 @@ fn second_repo_can_skip_summaries_even_when_daemon_provider_exists() {
                             },
                             || {
                                 let mut out = Vec::new();
-                                let mut input = Cursor::new("\n1,2\n");
+                                let mut input = Cursor::new("3\n\n1,2\n");
                                 let runtime = test_runtime();
                                 runtime
                                     .block_on(run_with_io_async_for_project_root(
@@ -4836,7 +4805,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                                 crate::cli::embeddings::EmbeddingsRuntime::Local,
                                             ),
                                             no_embeddings: false,
-                                            no_summaries: false,
+                                            no_summaries: true,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
@@ -4944,7 +4913,7 @@ fn run_init_with_install_default_daemon_leaves_embeddings_unchanged_when_noninte
                                     exclude_from: Vec::new(),
                                     embeddings_runtime: None,
                                     no_embeddings: false,
-                                    no_summaries: false,
+                                    no_summaries: true,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -5022,7 +4991,7 @@ fn run_init_with_install_default_daemon_can_skip_embeddings_via_flag() {
                                 exclude_from: Vec::new(),
                                 embeddings_runtime: None,
                                 no_embeddings: true,
-                                no_summaries: false,
+                                no_summaries: true,
                                 context_guidance_runtime: None,
                                 no_context_guidance: false,
                                 context_guidance_gateway_url: None,
@@ -5316,7 +5285,7 @@ fn run_init_no_embeddings_persists_repo_embedding_policy_off() {
                                     exclude_from: Vec::new(),
                                     embeddings_runtime: None,
                                     no_embeddings: true,
-                                    no_summaries: false,
+                                    no_summaries: true,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -5447,7 +5416,7 @@ model = "bge-m3"
                                                 crate::cli::embeddings::EmbeddingsRuntime::Local,
                                             ),
                                             no_embeddings: false,
-                                            no_summaries: false,
+                                            no_summaries: true,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
@@ -5530,7 +5499,7 @@ request_timeout_secs = 5
 [inference.profiles.code_profile]
 task = "embeddings"
 driver = "bitloops_embeddings_ipc"
-runtime = "bitloops_local_embeddings"
+runtime = "missing_embeddings_runtime"
 model = "text-embedding-3-large"
 
 [inference.profiles.summary_profile]
@@ -5576,7 +5545,7 @@ model = "text-embedding-3-small"
                                     exclude_from: Vec::new(),
                                     embeddings_runtime: None,
                                     no_embeddings: false,
-                                    no_summaries: false,
+                                    no_summaries: true,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -5612,7 +5581,7 @@ model = "text-embedding-3-small"
 }
 
 #[test]
-fn run_init_existing_selection_uses_daemon_code_embeddings_without_enabling_summaries() {
+fn run_init_ignores_daemon_semantic_bindings_without_repo_selection() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
@@ -5671,7 +5640,7 @@ model = "daemon-summary-model"
                     },
                     || {
                         let mut out = Vec::new();
-                        let mut input = Cursor::new("\n");
+                        let mut input = Cursor::new("3\n");
                         let runtime = test_runtime();
                         runtime
                             .block_on(run_with_io_async_for_project_root(
@@ -5691,7 +5660,7 @@ model = "daemon-summary-model"
                                     exclude_from: Vec::new(),
                                     embeddings_runtime: None,
                                     no_embeddings: false,
-                                    no_summaries: false,
+                                    no_summaries: true,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -5710,9 +5679,9 @@ model = "daemon-summary-model"
                         let policy =
                             std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
                                 .expect("read local policy");
-                        assert!(policy.contains("embedding_mode = \"semantic_aware_once\""));
+                        assert!(policy.contains("embedding_mode = \"off\""));
                         assert!(policy.contains("summary_mode = \"off\""));
-                        assert!(policy.contains("code_embeddings = \"daemon_code_profile\""));
+                        assert!(!policy.contains("code_embeddings = "));
                         assert!(!policy.contains("summary_embeddings = "));
                         assert!(!policy.contains("summary_generation = "));
                     },
@@ -5988,7 +5957,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                     },
                                                     || {
                                                         let mut out = Vec::new();
-                                                        let mut input = Cursor::new("3\n1\n");
+                                                        let mut input = Cursor::new("1\n1\n");
                                                         let runtime = test_runtime();
                                                         runtime
                                                             .block_on(run_with_io_async_for_project_root(
@@ -6043,7 +6012,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                         assert!(!rendered.contains(
                                                             "Installed managed standalone `bitloops-platform-embeddings` runtime"
                                                         ));
-                                                        assert_repo_embedding_policy(
+                                                        assert_repo_code_embedding_policy(
                                                             &repo,
                                                             "platform_code",
                                                         );
@@ -6190,7 +6159,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                 },
                                                 || {
                                                     let mut out = Vec::new();
-                                                    let mut input = Cursor::new("3\n1\n");
+                                                    let mut input = Cursor::new("1\n1\n");
                                                     let runtime = test_runtime();
                                                     runtime
                                                         .block_on(run_with_io_async_for_project_root(
@@ -6731,7 +6700,7 @@ fn run_init_with_install_default_daemon_renders_follow_up_sync_waiting_state() {
                                                     embeddings_runtime:
                                                         Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                     no_embeddings: false,
-                                                    no_summaries: false,
+                                                    no_summaries: true,
                                                     context_guidance_runtime: None,
                                                     no_context_guidance: false,
                                                     context_guidance_gateway_url: None,
@@ -6775,6 +6744,17 @@ fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_w
     let repo_id = test_repo_id(repo.path());
     let session_id = "init-session-summary-follow-up-wait";
     setup_git_repo(&repo);
+    write_repo_policy(
+        &repo,
+        REPO_POLICY_LOCAL_FILE_NAME,
+        r#"
+[semantic_clones]
+summary_mode = "auto"
+
+[semantic_clones.inference]
+summary_generation = "summary_local"
+"#,
+    );
 
     with_temp_app_dirs(&app_dirs, false, true, || {
         with_install_default_daemon_hook(
@@ -7253,6 +7233,20 @@ fn init_runtime_lanes_follow_repo_setup_selection() {
             &config_path,
         )
         .expect("write repo daemon binding");
+        crate::config::set_repo_semantic_embedding_policy(
+            &repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+            &crate::config::RepoSemanticEmbeddingPolicy {
+                present: true,
+                summary_mode: Some(crate::config::SemanticSummaryMode::Auto),
+                embedding_mode: Some(crate::config::SemanticCloneEmbeddingMode::SemanticAwareOnce),
+                inference: crate::config::SemanticClonesInferenceBindings {
+                    summary_generation: Some("summary_local".to_string()),
+                    code_embeddings: Some("local_code".to_string()),
+                    summary_embeddings: Some("local_code".to_string()),
+                },
+            },
+        )
+        .expect("write repo semantic policy");
 
         with_global_graphql_executor_hook(
             |_runtime_root, _query, variables| {
@@ -7645,7 +7639,7 @@ fn run_init_with_install_default_daemon_can_skip_auto_start() {
                             },
                             || {
                                 let mut out = Vec::new();
-                                let mut input = Cursor::new("none\n");
+                                let mut input = Cursor::new("\nnone\n");
                                 let select = |_items: &[String], enable_devql_guidance: bool| {
                                     Ok(InitAgentSelection {
                                         agents: vec!["claude-code".to_string()],

@@ -507,7 +507,7 @@ summary_generation = "repo_summary"
 }
 
 #[test]
-fn summary_only_repo_semantic_policy_preserves_daemon_embedding_bindings() {
+fn summary_only_repo_semantic_policy_ignores_daemon_embedding_bindings() {
     let (repo, _daemon) = create_repo_with_daemon_config(
         r#"
 [semantic_clones]
@@ -565,23 +565,12 @@ summary_mode = "off"
     );
     assert_eq!(
         capability.semantic_clones.embedding_mode,
-        SemanticCloneEmbeddingMode::RefreshOnUpgrade
+        SemanticCloneEmbeddingMode::SemanticAwareOnce
     );
+    assert_eq!(capability.semantic_clones.inference.code_embeddings, None);
     assert_eq!(
-        capability
-            .semantic_clones
-            .inference
-            .code_embeddings
-            .as_deref(),
-        Some("daemon_code")
-    );
-    assert_eq!(
-        capability
-            .semantic_clones
-            .inference
-            .summary_embeddings
-            .as_deref(),
-        Some("daemon_summary_embedding")
+        capability.semantic_clones.inference.summary_embeddings,
+        None
     );
     assert!(capability.inference.profiles.contains_key("daemon_code"));
     assert!(
@@ -636,7 +625,7 @@ embedding_mode = "off"
 }
 
 #[test]
-fn invalid_repo_summary_mode_preserves_daemon_semantic_config() {
+fn invalid_repo_summary_mode_ignores_daemon_semantic_config() {
     let (repo, _daemon) = create_repo_with_daemon_config(
         r#"
 [semantic_clones]
@@ -683,24 +672,13 @@ summary_mode = "eventually"
     );
     assert_eq!(
         capability.semantic_clones.embedding_mode,
-        SemanticCloneEmbeddingMode::RefreshOnUpgrade
+        SemanticCloneEmbeddingMode::SemanticAwareOnce
     );
     assert_eq!(
-        capability
-            .semantic_clones
-            .inference
-            .summary_generation
-            .as_deref(),
-        Some("daemon_generation")
+        capability.semantic_clones.inference.summary_generation,
+        None
     );
-    assert_eq!(
-        capability
-            .semantic_clones
-            .inference
-            .code_embeddings
-            .as_deref(),
-        Some("daemon_code")
-    );
+    assert_eq!(capability.semantic_clones.inference.code_embeddings, None);
     assert!(
         capability
             .inference
@@ -711,7 +689,7 @@ summary_mode = "eventually"
 }
 
 #[test]
-fn repo_semantic_policy_without_mode_inherits_daemon_mode_with_profile_bindings() {
+fn repo_semantic_policy_without_mode_uses_default_mode_with_profile_bindings() {
     let (repo, _daemon) = create_repo_with_daemon_config(
         r#"
 [semantic_clones]
@@ -768,7 +746,7 @@ code_embeddings = "repo_code"
 }
 
 #[test]
-fn daemon_global_semantic_bindings_remain_legacy_when_repo_policy_absent() {
+fn daemon_global_semantic_bindings_are_ignored_when_repo_policy_absent() {
     let (repo, _daemon) = create_repo_with_daemon_config(
         r#"
 [semantic_clones]
@@ -799,23 +777,12 @@ model = "daemon-summary-model"
 
     assert_eq!(
         capability.semantic_clones.embedding_mode,
-        SemanticCloneEmbeddingMode::RefreshOnUpgrade
+        SemanticCloneEmbeddingMode::SemanticAwareOnce
     );
+    assert_eq!(capability.semantic_clones.inference.code_embeddings, None);
     assert_eq!(
-        capability
-            .semantic_clones
-            .inference
-            .code_embeddings
-            .as_deref(),
-        Some("daemon_code")
-    );
-    assert_eq!(
-        capability
-            .semantic_clones
-            .inference
-            .summary_embeddings
-            .as_deref(),
-        Some("daemon_summary")
+        capability.semantic_clones.inference.summary_embeddings,
+        None
     );
     assert!(capability.inference.profiles.contains_key("daemon_code"));
 }

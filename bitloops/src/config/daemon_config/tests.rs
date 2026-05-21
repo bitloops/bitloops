@@ -258,7 +258,6 @@ request_timeout_secs = 300
 
     let plan =
         prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
-    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::Bootstrap);
     plan.apply().expect("apply staged embeddings config");
 
     let rendered = fs::read_to_string(config.path()).expect("read updated config");
@@ -312,7 +311,6 @@ request_timeout_secs = 300
 
     let plan =
         prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
-    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::Bootstrap);
 
     fs::write(
         config.path(),
@@ -346,8 +344,8 @@ max_output_tokens = 200
 
     let rendered = fs::read_to_string(config.path()).expect("read updated config");
     assert!(
-        rendered.contains("summary_generation = \"summary_local\""),
-        "expected embeddings apply to preserve summary binding:\n{rendered}"
+        !rendered.contains("summary_generation = \"summary_local\""),
+        "expected embeddings apply to remove daemon semantic binding:\n{rendered}"
     );
     assert!(
         rendered.contains("[inference.profiles.summary_local]"),
@@ -382,7 +380,6 @@ local_dev = false
         "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
     )
     .expect("prepare platform embeddings install");
-    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::Bootstrap);
     plan.apply()
         .expect("apply staged platform embeddings config");
 
@@ -427,7 +424,7 @@ local_dev = false
 }
 
 #[test]
-fn prepare_daemon_embeddings_install_skips_existing_platform_ipc_profile() {
+fn prepare_daemon_embeddings_install_ignores_daemon_platform_semantic_binding() {
     let config = NamedTempFile::new().expect("create temp config");
     fs::write(
         config.path(),
@@ -457,13 +454,12 @@ model = "bge-m3"
     let plan =
         prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
 
-    assert_eq!(plan.profile_name, "platform_code");
-    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::SkipHosted);
-    assert!(!plan.config_modified);
+    assert_eq!(plan.profile_name, "local_code");
+    assert!(plan.config_modified);
 }
 
 #[test]
-fn prepare_daemon_embeddings_install_warms_legacy_daemon_bound_profile() {
+fn prepare_daemon_embeddings_install_ignores_daemon_local_semantic_binding() {
     let config = NamedTempFile::new().expect("create temp config");
     fs::write(
         config.path(),
@@ -494,8 +490,7 @@ model = "bge-m3"
         prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
 
     assert_eq!(plan.profile_name, "local_code");
-    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::WarmExisting);
-    assert!(!plan.config_modified);
+    assert!(plan.config_modified);
 }
 
 #[test]

@@ -812,59 +812,9 @@ struct InitEmbeddingProfileNames {
     summary_embeddings: Option<String>,
 }
 
-impl InitEmbeddingProfileNames {
-    fn has_any(&self) -> bool {
-        self.code_embeddings.is_some() || self.summary_embeddings.is_some()
-    }
-}
-
 fn existing_init_embedding_profile_names(repo_root: &Path) -> Result<InitEmbeddingProfileNames> {
-    let existing_policy = repo_semantic_embedding_policy(repo_root)?;
-    let mut profile_names = embedding_profile_names_from_policy(&existing_policy);
-    if profile_names.code_embeddings.is_some() {
-        return Ok(profile_names);
-    }
-
-    let daemon_profile_names = match daemon_init_embedding_profile_names(repo_root) {
-        Ok(profile_names) => profile_names,
-        Err(_) if profile_names.has_any() => return Ok(profile_names),
-        Err(err) => return Err(err),
-    };
-    if profile_names.code_embeddings.is_none() {
-        profile_names.code_embeddings = daemon_profile_names.code_embeddings;
-    }
-    Ok(profile_names)
-}
-
-fn daemon_init_embedding_profile_names(repo_root: &Path) -> Result<InitEmbeddingProfileNames> {
-    let config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)
-        .or_else(|_| crate::config::resolve_daemon_config_path_for_repo(repo_root))?;
-    let capability = crate::cli::embeddings::embedding_capability_for_config_path(&config_path)?;
-    let mut profile_names = InitEmbeddingProfileNames {
-        code_embeddings: trimmed_profile_name(
-            capability
-                .semantic_clones
-                .inference
-                .code_embeddings
-                .as_deref(),
-        ),
-        summary_embeddings: trimmed_profile_name(
-            capability
-                .semantic_clones
-                .inference
-                .summary_embeddings
-                .as_deref(),
-        ),
-    };
-    if !profile_names.has_any()
-        && let Some(profile_name) =
-            crate::cli::embeddings::selected_inference_profile_name(&capability)
-    {
-        let profile_name = profile_name.to_string();
-        profile_names.code_embeddings = Some(profile_name.clone());
-        profile_names.summary_embeddings = Some(profile_name);
-    }
-    Ok(profile_names)
+    repo_semantic_embedding_policy(repo_root)
+        .map(|policy| embedding_profile_names_from_policy(&policy))
 }
 
 fn embedding_profile_names_from_policy(
@@ -884,15 +834,7 @@ fn trimmed_profile_name(profile_name: Option<&str>) -> Option<String> {
 }
 
 fn existing_effective_init_summary_generation_profile_name(repo_root: &Path) -> Option<String> {
-    let capability = crate::config::resolve_inference_capability_config_for_repo(repo_root);
-    capability
-        .semantic_clones
-        .inference
-        .summary_generation
-        .as_deref()
-        .map(str::trim)
-        .filter(|profile| !profile.is_empty())
-        .map(str::to_string)
+    existing_repo_init_summary_generation_profile_name(repo_root)
 }
 
 fn existing_repo_init_summary_generation_profile_name(repo_root: &Path) -> Option<String> {

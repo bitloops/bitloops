@@ -13,9 +13,9 @@ use std::rc::Rc;
 
 use crate::config::settings::settings_local_path;
 use crate::config::{
-    DaemonEmbeddingsInstallMode, RepoSemanticEmbeddingPolicy, prepare_daemon_embeddings_install,
-    repo_semantic_embedding_policy, resolve_bound_daemon_config_path_for_repo,
-    resolve_daemon_config_path_for_repo, set_repo_semantic_embedding_policy,
+    RepoSemanticEmbeddingPolicy, prepare_daemon_embeddings_install, repo_semantic_embedding_policy,
+    resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
+    set_repo_semantic_embedding_policy,
 };
 
 use super::super::profiles::{embedding_capability_for_config_path, pull_profile_with_config_path};
@@ -172,48 +172,6 @@ pub(crate) fn install_or_bootstrap_embeddings(repo_root: &Path) -> Result<Vec<St
     let config_path = resolve_bound_daemon_config_path_for_repo(repo_root)
         .or_else(|_| resolve_daemon_config_path_for_repo(repo_root))?;
     let plan = prepare_daemon_embeddings_install(&config_path)?;
-
-    match plan.mode {
-        DaemonEmbeddingsInstallMode::SkipHosted => {
-            let profile_driver = plan
-                .profile_driver
-                .as_deref()
-                .map(|driver| format!(" (driver `{driver}`)"))
-                .unwrap_or_default();
-            enable_repo_embedding_profile_preserving_summaries(repo_root, &plan.profile_name)?;
-            return Ok(vec![format!(
-                "Embeddings are already configured via profile `{}`{}; skipped local runtime bootstrap.",
-                plan.profile_name, profile_driver
-            )]);
-        }
-        DaemonEmbeddingsInstallMode::WarmExisting | DaemonEmbeddingsInstallMode::Bootstrap => {}
-    }
-
-    if matches!(plan.mode, DaemonEmbeddingsInstallMode::WarmExisting) {
-        let capability = embedding_capability_for_config_path(&config_path)?;
-        let result =
-            pull_profile_with_config_path(repo_root, &config_path, &capability, &plan.profile_name);
-        return match result {
-            Ok(mut lines) => {
-                enable_repo_embedding_profile_preserving_summaries(repo_root, &plan.profile_name)?;
-                lines.insert(
-                    0,
-                    format!(
-                        "Embeddings already configured via profile `{}`; warming local cache.",
-                        plan.profile_name
-                    ),
-                );
-                Ok(lines)
-            }
-            Err(err) => {
-                if plan.config_modified {
-                    plan.rollback()?;
-                }
-                Err(err)
-            }
-        };
-    }
-
     let ensure = ensure_managed_embeddings_runtime_with_progress(repo_root, None, |_| Ok(()))?;
     plan.apply_with_managed_runtime_path(&ensure.install.binary_path)?;
     let capability = embedding_capability_for_config_path(&config_path)?;

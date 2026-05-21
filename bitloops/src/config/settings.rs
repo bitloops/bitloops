@@ -120,6 +120,11 @@ impl RepoSemanticEmbeddingPolicy {
         existing: &Self,
     ) -> Self {
         let profile_name = profile_name.into();
+        let summary_embeddings = existing
+            .inference
+            .summary_embeddings
+            .as_ref()
+            .map(|_| profile_name.clone());
         Self {
             present: true,
             summary_mode: existing.summary_mode,
@@ -127,7 +132,7 @@ impl RepoSemanticEmbeddingPolicy {
             inference: SemanticClonesInferenceBindings {
                 summary_generation: existing.inference.summary_generation.clone(),
                 code_embeddings: Some(profile_name.clone()),
-                summary_embeddings: Some(profile_name),
+                summary_embeddings,
             },
         }
     }
@@ -551,11 +556,12 @@ pub fn set_repo_semantic_embedding_policy(
         } else if let Some(table) = doc["semantic_clones"].as_table_mut() {
             table.remove("summary_mode");
         }
-        let mode = policy
-            .embedding_mode
-            .unwrap_or(SemanticCloneEmbeddingMode::Off)
-            .to_string();
-        doc["semantic_clones"]["embedding_mode"] = Item::Value(TomlValue::from(mode.as_str()));
+        if let Some(embedding_mode) = policy.embedding_mode {
+            let mode = embedding_mode.to_string();
+            doc["semantic_clones"]["embedding_mode"] = Item::Value(TomlValue::from(mode.as_str()));
+        } else if let Some(table) = doc["semantic_clones"].as_table_mut() {
+            table.remove("embedding_mode");
+        }
         ensure_semantic_clones_inference_table(doc);
         set_optional_string(
             &mut doc["semantic_clones"]["inference"],
@@ -883,6 +889,46 @@ code_embeddings = "code_local"
         assert!(content.contains("[semantic_clones.inference]"));
         assert!(content.contains("code_embeddings = \"local_code\""));
         assert!(content.contains("summary_embeddings = \"local_code\""));
+    }
+
+    #[test]
+    fn enabled_embedding_profile_preserves_only_existing_summary_embedding_choice() {
+        let existing_without_summary_embeddings = RepoSemanticEmbeddingPolicy {
+            present: true,
+            summary_mode: Some(SemanticSummaryMode::Auto),
+            embedding_mode: Some(SemanticCloneEmbeddingMode::Off),
+            inference: SemanticClonesInferenceBindings {
+                summary_generation: Some("summary_local".to_string()),
+                code_embeddings: None,
+                summary_embeddings: None,
+            },
+        };
+        let policy = RepoSemanticEmbeddingPolicy::enabled_with_profile_preserving_summaries(
+            "local_code",
+            &existing_without_summary_embeddings,
+        );
+        assert_eq!(
+            policy.inference.code_embeddings.as_deref(),
+            Some("local_code")
+        );
+        assert_eq!(
+            policy.inference.summary_generation.as_deref(),
+            Some("summary_local")
+        );
+        assert_eq!(policy.inference.summary_embeddings, None);
+
+        let mut existing_with_summary_embeddings = existing_without_summary_embeddings.clone();
+        existing_with_summary_embeddings
+            .inference
+            .summary_embeddings = Some("old_summary".to_string());
+        let policy = RepoSemanticEmbeddingPolicy::enabled_with_profile_preserving_summaries(
+            "platform_code",
+            &existing_with_summary_embeddings,
+        );
+        assert_eq!(
+            policy.inference.summary_embeddings.as_deref(),
+            Some("platform_code")
+        );
     }
 
     #[test]
