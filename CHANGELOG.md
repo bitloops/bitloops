@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.30] - 2026-05-21
+
 ### Fixed
 
 - **Large-repo DevQL search no longer exceeds SQLite expression depth while hydrating artefacts**: `selectArtefacts(by: { search: ..., searchMode: LEXICAL })` and other search-backed selections now hydrate semantic summaries and embedding-representation metadata with row-value lookup predicates instead of per-artefact `OR` trees, avoiding SQLite's maximum expression-depth limit on whole-repo searches such as `.gitignore`.
