@@ -42,8 +42,8 @@ use crate::config::settings::{
 use crate::config::{
     DaemonEmbeddingsInstallPlan, InferenceProfileConfig, InferenceTask,
     REPO_POLICY_LOCAL_FILE_NAME, RepoSemanticEmbeddingPolicy, SemanticCloneEmbeddingMode,
-    default_daemon_config_exists, prepare_daemon_local_embeddings_profile_install,
-    resolve_semantic_clones_config_for_repo,
+    SemanticSummaryMode, default_daemon_config_exists,
+    prepare_daemon_local_embeddings_profile_install, resolve_semantic_clones_config_for_repo,
 };
 
 struct PreparedEmbeddingsBootstrapRequest {
@@ -334,7 +334,7 @@ pub(crate) async fn run_for_project_root(
     }
     if !args.no_summaries {
         selected_summary_generation_profile_name =
-            existing_init_summary_generation_profile_name(project_root);
+            existing_repo_init_summary_generation_profile_name(project_root);
     }
     let context_guidance_selection =
         choose_context_guidance_setup_during_init(project_root, &args, out, input).await?;
@@ -367,7 +367,7 @@ pub(crate) async fn run_for_project_root(
                 })?;
                 writeln!(out, "{message}")?;
                 selected_summary_generation_profile_name =
-                    existing_init_summary_generation_profile_name(project_root);
+                    existing_effective_init_summary_generation_profile_name(project_root);
             }
         }
         SummarySetupSelection::Local => {
@@ -398,7 +398,7 @@ pub(crate) async fn run_for_project_root(
                     )
                 })?;
                 selected_summary_generation_profile_name =
-                    existing_init_summary_generation_profile_name(project_root);
+                    existing_effective_init_summary_generation_profile_name(project_root);
             }
         }
         SummarySetupSelection::Skip => {}
@@ -605,6 +605,7 @@ struct InitRepoSemanticSelection {
     summary_embeddings: bool,
 }
 
+#[cfg(test)]
 fn init_repo_selected_embedding_lanes(selection: InitRepoSemanticSelection) -> bool {
     selection.code_embeddings || selection.summary_embeddings
 }
@@ -885,7 +886,7 @@ fn trimmed_profile_name(profile_name: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-fn existing_init_summary_generation_profile_name(repo_root: &Path) -> Option<String> {
+fn existing_effective_init_summary_generation_profile_name(repo_root: &Path) -> Option<String> {
     let capability = crate::config::resolve_inference_capability_config_for_repo(repo_root);
     capability
         .semantic_clones
@@ -895,6 +896,14 @@ fn existing_init_summary_generation_profile_name(repo_root: &Path) -> Option<Str
         .map(str::trim)
         .filter(|profile| !profile.is_empty())
         .map(str::to_string)
+}
+
+fn existing_repo_init_summary_generation_profile_name(repo_root: &Path) -> Option<String> {
+    let policy = repo_semantic_embedding_policy(repo_root).ok()?;
+    if policy.summary_mode == Some(SemanticSummaryMode::Off) {
+        return None;
+    }
+    trimmed_profile_name(policy.inference.summary_generation.as_deref())
 }
 
 #[derive(Clone, Copy)]

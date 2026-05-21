@@ -945,6 +945,42 @@ fn choose_summary_setup_during_init_can_reenable_existing_summary_mode_off() {
 }
 
 #[test]
+fn choose_summary_setup_during_init_prompts_when_only_daemon_summary_provider_exists() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let config_path = repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    write_daemon_config_with_embeddings_and_summary(&config_path);
+    crate::config::settings::write_repo_daemon_binding(
+        &repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write daemon binding");
+    let mut out = Vec::new();
+    let mut input = Cursor::new("\n");
+
+    let selection = with_test_tty_override(true, || {
+        test_runtime().block_on(choose_summary_setup_during_init(
+            repo.path(),
+            true,
+            false,
+            true,
+            &mut out,
+            &mut input,
+        ))
+    })
+    .expect("choose summary setup");
+
+    assert_eq!(
+        selection,
+        crate::cli::inference::SummarySetupSelection::Skip
+    );
+    let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(
+        rendered.contains("Configure semantic summaries"),
+        "summary setup should remain repo-local even when daemon has providers:\n{rendered}"
+    );
+}
+
+#[test]
 fn summary_setup_skips_when_repo_did_not_select_summaries() {
     let repo = tempfile::tempdir().expect("tempdir");
     let mut out = Vec::new();
@@ -4089,7 +4125,7 @@ fn run_init_without_install_default_daemon_explicit_platform_persists_repo_polic
 }
 
 #[test]
-fn second_repo_uses_existing_daemon_providers_without_expanding_final_setup_prompt() {
+fn second_repo_can_skip_summaries_even_when_daemon_provider_exists() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     let repo_id = test_repo_id(repo.path());
@@ -4131,10 +4167,13 @@ fn second_repo_uses_existing_daemon_providers_without_expanding_final_setup_prom
                                             variables["input"]["runCodeEmbeddings"],
                                             json!(true)
                                         );
-                                        assert_eq!(variables["input"]["runSummaries"], json!(true));
+                                        assert_eq!(
+                                            variables["input"]["runSummaries"],
+                                            json!(false)
+                                        );
                                         assert_eq!(
                                             variables["input"]["runSummaryEmbeddings"],
-                                            json!(true)
+                                            json!(false)
                                         );
                                         return Ok(runtime_start_init_result_json(session_id));
                                     }
@@ -4148,12 +4187,10 @@ fn second_repo_uses_existing_daemon_providers_without_expanding_final_setup_prom
                                                 run_sync: true,
                                                 run_ingest: true,
                                                 embeddings_selected: true,
-                                                summaries_selected: true,
-                                                summary_embeddings_selected: true,
+                                                summaries_selected: false,
+                                                summary_embeddings_selected: false,
                                                 top_lane_status: "COMPLETED",
                                                 embeddings_lane_status: "COMPLETED",
-                                                summaries_lane_status: "COMPLETED",
-                                                summary_embeddings_lane_status: Some("COMPLETED"),
                                                 ..RuntimeSessionSnapshotFixture::default()
                                             },
                                         ));
@@ -4164,7 +4201,7 @@ fn second_repo_uses_existing_daemon_providers_without_expanding_final_setup_prom
                             },
                             || {
                                 let mut out = Vec::new();
-                                let mut input = Cursor::new("1,2\n");
+                                let mut input = Cursor::new("\n1,2\n");
                                 let runtime = test_runtime();
                                 runtime
                                     .block_on(run_with_io_async_for_project_root(
@@ -4202,6 +4239,7 @@ fn second_repo_uses_existing_daemon_providers_without_expanding_final_setup_prom
 
                                 let rendered =
                                     strip_ansi_escape_sequences(&String::from_utf8(out).unwrap());
+                                assert!(rendered.contains("Configure semantic summaries"));
                                 assert!(!rendered.contains("3. Code embeddings"));
                                 assert!(!rendered.contains("4. Summaries"));
                                 assert!(!rendered.contains("5. Summary embeddings"));
@@ -4210,9 +4248,9 @@ fn second_repo_uses_existing_daemon_providers_without_expanding_final_setup_prom
                                     repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
                                 )
                                 .expect("read local policy");
-                                assert!(policy.contains("summary_mode = \"auto\""));
-                                assert!(policy.contains("summary_generation = \"summary_local\""));
-                                assert!(policy.contains("summary_embeddings = \"local_code\""));
+                                assert!(policy.contains("summary_mode = \"off\""));
+                                assert!(!policy.contains("summary_generation = "));
+                                assert!(!policy.contains("summary_embeddings = "));
                             },
                         )
                     },
@@ -5574,7 +5612,7 @@ model = "text-embedding-3-small"
 }
 
 #[test]
-fn run_init_existing_selection_preserves_distinct_legacy_daemon_embedding_bindings() {
+fn run_init_existing_selection_uses_daemon_code_embeddings_without_enabling_summaries() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
@@ -5633,7 +5671,7 @@ model = "daemon-summary-model"
                     },
                     || {
                         let mut out = Vec::new();
-                        let mut input = Cursor::new("3,4,5\n");
+                        let mut input = Cursor::new("\n");
                         let runtime = test_runtime();
                         runtime
                             .block_on(run_with_io_async_for_project_root(
@@ -5673,12 +5711,10 @@ model = "daemon-summary-model"
                             std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
                                 .expect("read local policy");
                         assert!(policy.contains("embedding_mode = \"semantic_aware_once\""));
-                        assert!(policy.contains("summary_mode = \"auto\""));
+                        assert!(policy.contains("summary_mode = \"off\""));
                         assert!(policy.contains("code_embeddings = \"daemon_code_profile\""));
-                        assert!(policy.contains("summary_embeddings = \"daemon_summary_profile\""));
-                        assert!(
-                            policy.contains("summary_generation = \"daemon_summary_generation\"")
-                        );
+                        assert!(!policy.contains("summary_embeddings = "));
+                        assert!(!policy.contains("summary_generation = "));
                     },
                 );
             },
@@ -5702,9 +5738,11 @@ config_path = {:?}
 
 [semantic_clones]
 embedding_mode = "semantic_aware_once"
+summary_mode = "auto"
 
 [semantic_clones.inference]
 code_embeddings = "repo_code_profile"
+summary_generation = "daemon_summary_generation"
 "#,
             config_path.to_string_lossy()
         ),

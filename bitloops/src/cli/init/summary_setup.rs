@@ -7,6 +7,8 @@ use crate::cli::inference::{
     SummarySetupSelection, prompt_summary_setup_selection, summary_generation_configured,
 };
 use crate::cli::telemetry_consent;
+use crate::config::SemanticSummaryMode;
+use crate::config::settings::repo_semantic_embedding_policy;
 
 use super::cloud_login_status::resolve_cloud_logged_in_for_optional_setup;
 
@@ -22,7 +24,7 @@ pub(crate) async fn choose_summary_setup_during_init(
         return Ok(SummarySetupSelection::Skip);
     }
 
-    if summary_generation_configured(repo_root) {
+    if repo_summary_generation_configured(repo_root) {
         return Ok(SummarySetupSelection::Skip);
     }
 
@@ -42,4 +44,20 @@ pub(crate) async fn choose_summary_setup_during_init(
         install_default_daemon,
         cloud_logged_in,
     )
+}
+
+fn repo_summary_generation_configured(repo_root: &Path) -> bool {
+    let Ok(policy) = repo_semantic_embedding_policy(repo_root) else {
+        return false;
+    };
+    if policy.summary_mode == Some(SemanticSummaryMode::Off) {
+        return false;
+    }
+    let repo_selected_summary_profile = policy
+        .inference
+        .summary_generation
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|profile| !profile.is_empty());
+    repo_selected_summary_profile && summary_generation_configured(repo_root)
 }
