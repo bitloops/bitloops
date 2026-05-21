@@ -23,6 +23,7 @@ use crate::host::hooks::runtime::agent_runtime::helpers::{
     extract_last_completed_todo_from_tool_input, next_incremental_sequence,
     parse_subagent_type_and_description, resolve_subagent_transcript_path,
 };
+use crate::host::hooks::runtime::agent_runtime::interactions::interaction_actor_identity;
 use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::tool_events::{
@@ -184,10 +185,15 @@ pub fn handle_lifecycle_session_end(
         .unwrap_or(event.session_ref.as_str());
     let model = resolve_interaction_model(&event.model, transcript_path);
     if let Some(spool) = resolve_interaction_spool(&repo_root) {
+        let (actor_id, actor_name, actor_email, actor_source) = interaction_actor_identity();
         let session = maybe_state
             .map(|state| InteractionSession {
                 session_id: session_id.clone(),
                 repo_id: spool.repo_id().to_string(),
+                actor_id: actor_id.clone(),
+                actor_name: actor_name.clone(),
+                actor_email: actor_email.clone(),
+                actor_source: actor_source.clone(),
                 agent_type: state.agent_type.clone(),
                 model: model.clone(),
                 first_prompt: state.first_prompt.clone(),
@@ -204,6 +210,10 @@ pub fn handle_lifecycle_session_end(
             .unwrap_or(InteractionSession {
                 session_id: session_id.clone(),
                 repo_id: spool.repo_id().to_string(),
+                actor_id: actor_id.clone(),
+                actor_name: actor_name.clone(),
+                actor_email: actor_email.clone(),
+                actor_source: actor_source.clone(),
                 model: model.clone(),
                 ended_at: Some(ended_at.clone()),
                 last_event_at: ended_at.clone(),
@@ -219,6 +229,10 @@ pub fn handle_lifecycle_session_end(
             session_id: session_id.clone(),
             turn_id: None,
             repo_id: spool.repo_id().to_string(),
+            actor_id,
+            actor_name,
+            actor_email,
+            actor_source,
             event_type: InteractionEventType::SessionEnd,
             event_time: ended_at.clone(),
             agent_type: session.agent_type.clone(),
