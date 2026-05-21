@@ -16,7 +16,7 @@ use crate::cli::embeddings::{
     pull_profile_with_config_path_and_progress, selected_inference_profile_name,
 };
 use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, DaemonEmbeddingsInstallMode, prepare_daemon_embeddings_install,
+    BITLOOPS_CONFIG_RELATIVE_PATH, prepare_daemon_embeddings_install,
     prepare_daemon_platform_embeddings_install,
 };
 use crate::daemon::DevqlTaskStatus;
@@ -377,78 +377,49 @@ where
             &capability,
             requested_profile_name,
             report,
-            None,
+            false,
         );
     }
 
     let install_plan = prepare_daemon_embeddings_install(config_path)?;
     let target_profile_name = install_plan.profile_name.clone();
     let result = (|| -> Result<EmbeddingsBootstrapResult> {
-        match install_plan.mode {
-            DaemonEmbeddingsInstallMode::SkipHosted => Ok(EmbeddingsBootstrapResult {
-                version: None,
-                binary_path: None,
-                cache_dir: None,
-                runtime_name: install_plan.profile_driver.clone(),
-                model_name: Some(target_profile_name.clone()),
-                freshly_installed: false,
-                message: format!(
-                    "Embeddings already use profile `{}`; no local bootstrap was required.",
-                    target_profile_name
-                ),
-            }),
-            DaemonEmbeddingsInstallMode::WarmExisting => {
-                let capability = embedding_capability_for_config_path(config_path)?;
-                warm_existing_profile(
-                    repo_root,
-                    config_path,
-                    &capability,
-                    &target_profile_name,
-                    report,
-                    Some(install_plan.mode),
+        let ensure =
+            ensure_managed_embeddings_runtime_with_progress(repo_root, None, &mut *report)?;
+        report(EmbeddingsBootstrapProgress {
+            phase: EmbeddingsBootstrapPhase::RewritingRuntime,
+            version: Some(ensure.install.version.clone()),
+            message: Some(format!(
+                "Applying embeddings config in {}",
+                config_path.display()
+            )),
+            ..Default::default()
+        })?;
+        install_plan
+            .apply_with_managed_runtime_path(&ensure.install.binary_path)
+            .with_context(|| {
+                format!(
+                    "applying staged embeddings config in {}",
+                    config_path.display()
                 )
-            }
-            DaemonEmbeddingsInstallMode::Bootstrap => {
-                let ensure =
-                    ensure_managed_embeddings_runtime_with_progress(repo_root, None, &mut *report)?;
-                report(EmbeddingsBootstrapProgress {
-                    phase: EmbeddingsBootstrapPhase::RewritingRuntime,
-                    version: Some(ensure.install.version.clone()),
-                    message: Some(format!(
-                        "Applying embeddings config in {}",
-                        config_path.display()
-                    )),
-                    ..Default::default()
-                })?;
-                install_plan
-                    .apply_with_managed_runtime_path(&ensure.install.binary_path)
-                    .with_context(|| {
-                        format!(
-                            "applying staged embeddings config in {}",
-                            config_path.display()
-                        )
-                    })?;
-                let capability = embedding_capability_for_config_path(config_path)?;
-                let pulled = pull_profile_with_config_path_and_progress(
-                    repo_root,
-                    config_path,
-                    &capability,
-                    &target_profile_name,
-                    &mut *report,
-                )?;
-                Ok(EmbeddingsBootstrapResult {
-                    version: Some(ensure.install.version.clone()),
-                    binary_path: Some(ensure.install.binary_path.clone()),
-                    cache_dir: Some(pulled.cache_dir),
-                    runtime_name: Some(pulled.runtime_name),
-                    model_name: Some(pulled.model_name),
-                    freshly_installed: ensure.install.freshly_installed,
-                    message: format!(
-                        "Configured embeddings and warmed profile `{target_profile_name}`."
-                    ),
-                })
-            }
-        }
+            })?;
+        let capability = embedding_capability_for_config_path(config_path)?;
+        let pulled = pull_profile_with_config_path_and_progress(
+            repo_root,
+            config_path,
+            &capability,
+            &target_profile_name,
+            &mut *report,
+        )?;
+        Ok(EmbeddingsBootstrapResult {
+            version: Some(ensure.install.version.clone()),
+            binary_path: Some(ensure.install.binary_path.clone()),
+            cache_dir: Some(pulled.cache_dir),
+            runtime_name: Some(pulled.runtime_name),
+            model_name: Some(pulled.model_name),
+            freshly_installed: ensure.install.freshly_installed,
+            message: format!("Configured embeddings and warmed profile `{target_profile_name}`."),
+        })
     })();
 
     match result {
@@ -525,7 +496,7 @@ fn warm_existing_profile<R>(
     capability: &crate::config::EmbeddingCapabilityConfig,
     profile_name: &str,
     report: &mut R,
-    install_mode: Option<DaemonEmbeddingsInstallMode>,
+    bootstrap_configured_profile: bool,
 ) -> Result<EmbeddingsBootstrapResult>
 where
     R: FnMut(EmbeddingsBootstrapProgress) -> Result<()>,
@@ -553,14 +524,10 @@ where
         report,
     )?;
 
-    let message = match install_mode {
-        Some(DaemonEmbeddingsInstallMode::Bootstrap) => {
-            format!("Configured embeddings and warmed profile `{profile_name}`.")
-        }
-        Some(DaemonEmbeddingsInstallMode::WarmExisting) => {
-            format!("Warmed configured embeddings profile `{profile_name}`.")
-        }
-        _ => format!("Pulled embedding profile `{profile_name}`."),
+    let message = if bootstrap_configured_profile {
+        format!("Configured embeddings and warmed profile `{profile_name}`.")
+    } else {
+        format!("Pulled embedding profile `{profile_name}`.")
     };
 
     Ok(EmbeddingsBootstrapResult {

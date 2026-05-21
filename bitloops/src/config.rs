@@ -21,7 +21,7 @@ pub use daemon_config::{
     persist_daemon_cli_settings, persist_dashboard_tls_hint, update_daemon_telemetry_consent,
 };
 pub(crate) use daemon_config::{
-    DaemonEmbeddingsInstallMode, default_daemon_config_toml, prepare_daemon_embeddings_install,
+    default_daemon_config_toml, prepare_daemon_embeddings_install,
     prepare_daemon_inference_install, prepare_daemon_local_embeddings_profile_install,
     prepare_daemon_platform_embeddings_install, validate_daemon_config_text,
 };
