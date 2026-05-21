@@ -703,7 +703,7 @@ model = "local-model"
     }
 
     #[test]
-    fn existing_init_embedding_profile_names_fills_missing_slots_from_daemon_config() {
+    fn existing_init_embedding_profile_names_does_not_fill_summary_embeddings_from_daemon_config() {
         let repo = tempfile::tempdir().expect("tempdir");
         write_bound_daemon_config(
             repo.path(),
@@ -751,7 +751,7 @@ code_embeddings = "repo_code"
             names,
             InitEmbeddingProfileNames {
                 code_embeddings: Some("repo_code".to_string()),
-                summary_embeddings: Some("daemon_summary".to_string()),
+                summary_embeddings: None,
             }
         );
     }
@@ -821,7 +821,7 @@ impl InitEmbeddingProfileNames {
 fn existing_init_embedding_profile_names(repo_root: &Path) -> Result<InitEmbeddingProfileNames> {
     let existing_policy = repo_semantic_embedding_policy(repo_root)?;
     let mut profile_names = embedding_profile_names_from_policy(&existing_policy);
-    if profile_names.code_embeddings.is_some() && profile_names.summary_embeddings.is_some() {
+    if profile_names.code_embeddings.is_some() {
         return Ok(profile_names);
     }
 
@@ -832,9 +832,6 @@ fn existing_init_embedding_profile_names(repo_root: &Path) -> Result<InitEmbeddi
     };
     if profile_names.code_embeddings.is_none() {
         profile_names.code_embeddings = daemon_profile_names.code_embeddings;
-    }
-    if profile_names.summary_embeddings.is_none() {
-        profile_names.summary_embeddings = daemon_profile_names.summary_embeddings;
     }
     Ok(profile_names)
 }

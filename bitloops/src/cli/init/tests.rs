@@ -5723,7 +5723,7 @@ model = "daemon-summary-model"
 }
 
 #[test]
-fn run_init_existing_selection_fills_partial_repo_embedding_policy_from_daemon() {
+fn run_init_existing_selection_does_not_fill_summary_embeddings_from_daemon() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
@@ -5831,7 +5831,7 @@ model = "daemon-summary-model"
         assert!(policy.contains("summary_mode = \"auto\""));
         assert!(policy.contains("summary_generation = \"daemon_summary_generation\""));
         assert!(policy.contains("code_embeddings = \"repo_code_profile\""));
-        assert!(policy.contains("summary_embeddings = \"daemon_summary_profile\""));
+        assert!(!policy.contains("summary_embeddings = "));
     });
 }
 
@@ -6560,7 +6560,7 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                                     exclude_from: Vec::new(),
                                                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                 no_embeddings: false,
-                                                no_summaries: false,
+                                                no_summaries: true,
                                                 context_guidance_runtime: None,
                                                 no_context_guidance: false,
                                                 context_guidance_gateway_url: None,
