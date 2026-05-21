@@ -3,7 +3,10 @@ use std::path::PathBuf;
 
 use tempfile::tempdir;
 
-use super::{REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME, discover_repo_policy};
+use super::{
+    FileRepoPolicySource, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME, RepoPolicySource,
+    discover_repo_policy,
+};
 
 #[test]
 fn discover_repo_policy_reads_local_daemon_binding() {
@@ -22,6 +25,45 @@ config_path = "/tmp/daemon/config.toml"
 
     assert_eq!(
         snapshot.daemon_config_path,
+        Some(PathBuf::from("/tmp/daemon/config.toml"))
+    );
+}
+
+#[test]
+fn file_repo_policy_source_exposes_strict_and_optional_policy_reads() {
+    let repo = tempdir().expect("temp dir");
+    std::fs::create_dir_all(repo.path().join(".git")).expect("create .git");
+    let source = FileRepoPolicySource::default();
+
+    let optional = source
+        .discover_optional(repo.path())
+        .expect("optional read should default when policy is absent");
+    assert_eq!(optional.root, None);
+
+    let strict_err = source
+        .discover_required(repo.path())
+        .expect_err("strict read should require a policy");
+    assert!(
+        strict_err
+            .to_string()
+            .contains("Bitloops project config not found"),
+        "unexpected error: {strict_err:#}"
+    );
+
+    fs::write(
+        repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+        r#"
+[daemon]
+config_path = "/tmp/daemon/config.toml"
+"#,
+    )
+    .expect("write local repo policy");
+
+    let required = source
+        .discover_required(repo.path())
+        .expect("strict read should load existing policy");
+    assert_eq!(
+        required.daemon_config_path,
         Some(PathBuf::from("/tmp/daemon/config.toml"))
     );
 }
