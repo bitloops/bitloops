@@ -120,15 +120,12 @@ impl IngesterHandler for CoverageIngestIngester {
 
             let observed_head_sha = try_head_hash(ctx.repo_root())
                 .context("resolve current git HEAD for coverage provenance")?;
-            let stored_commit_sha = observed_head_sha
-                .clone()
-                .unwrap_or_else(|| "current".to_string());
             let provenance = coverage::CurrentCoverageProvenance {
                 observed_head_sha: observed_head_sha.clone(),
                 repo_dirty: repo_dirty(ctx.repo_root()),
                 coverage_file_modified_at_unix: file_modified_unix(&coverage_path),
                 ingested_at_unix: unix_now(),
-                coverage_path: coverage_path.display().to_string(),
+                coverage_path: coverage_metadata_path(ctx.repo_root(), &coverage_path),
             };
             let mut g = store
                 .lock()
@@ -152,7 +149,7 @@ impl IngesterHandler for CoverageIngestIngester {
                     "ingester": TEST_HARNESS_COVERAGE_INGESTER_ID,
                     "status": "ok",
                     "reference_mode": "current",
-                    "commit_sha": stored_commit_sha,
+                    "commit_sha": "current",
                     "observed_head_sha": observed_head_sha,
                     "summary": {
                         "format": summary.format.as_str(),
@@ -187,6 +184,17 @@ fn file_modified_unix(path: &Path) -> Option<u64> {
         .duration_since(UNIX_EPOCH)
         .ok()
         .map(|duration| duration.as_secs())
+}
+
+fn coverage_metadata_path(repo_root: &Path, coverage_path: &Path) -> String {
+    if let Ok(relative) = coverage_path.strip_prefix(repo_root) {
+        return relative.to_string_lossy().to_string();
+    }
+
+    coverage_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| coverage_path.display().to_string())
 }
 
 fn repo_dirty(repo_root: &Path) -> Option<bool> {

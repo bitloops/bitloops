@@ -488,7 +488,7 @@ SELECT DISTINCT
 FROM artefacts_current a
 WHERE a.repo_id = ?1
   AND a.canonical_kind != 'file'
-  AND (a.path = ?2 OR ?2 LIKE '%' || a.path)
+  AND (a.path = ?2 OR substr(?2, -length(a.path)) = a.path)
 ORDER BY a.path ASC, a.start_line ASC
 "#,
                 )
@@ -839,6 +839,20 @@ mod tests {
                 )",
                 rusqlite::params!["repo-current"],
             )?;
+            conn.execute(
+                "INSERT INTO artefacts_current (
+                    repo_id, path, content_id, symbol_id, artefact_id, language,
+                    extraction_fingerprint, canonical_kind, language_kind, symbol_fqn,
+                    parent_symbol_id, parent_artefact_id, start_line, end_line,
+                    start_byte, end_byte, signature, modifiers, docstring, updated_at
+                ) VALUES (
+                    ?1, 'crates/demo/src/lib_rs', 'content-b', 'symbol::underscore', 'artefact::underscore', 'rust',
+                    'fingerprint-b', 'function', 'function_item',
+                    'crates/demo/src/lib_rs::underscore', NULL, NULL, 10, 14,
+                    0, 40, NULL, '[]', NULL, '2026-05-20T10:00:00Z'
+                )",
+                rusqlite::params!["repo-current"],
+            )?;
             Ok(())
         })?;
 
@@ -848,6 +862,14 @@ mod tests {
         )?;
 
         assert_eq!(rows, vec![("symbol::covered".to_string(), 10, 14)]);
+        let wildcard_rows = gateway.load_current_artefacts_for_file_lines(
+            "repo-current",
+            "/tmp/work/crates/demo/src/libXrs",
+        )?;
+        assert!(
+            wildcard_rows.is_empty(),
+            "underscore in stored path must not act as a LIKE wildcard"
+        );
         Ok(())
     }
 

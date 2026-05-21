@@ -33,9 +33,7 @@ pub struct CurrentCoverageProvenance {
 
 impl CurrentCoverageProvenance {
     fn capture_commit_sha(&self) -> String {
-        self.observed_head_sha
-            .clone()
-            .unwrap_or_else(|| "current".to_string())
+        "current".to_string()
     }
 
     fn metadata_json(&self) -> String {
@@ -163,7 +161,7 @@ pub fn execute_current(
         subject_test_symbol_id: test_artefact_id.map(|s| s.to_string()),
         line_truth: true,
         branch_truth: has_branches,
-        captured_at: provenance.ingested_at_unix.to_string(),
+        captured_at: chrono_now(),
         status: "complete".to_string(),
         metadata_json: Some(provenance.metadata_json()),
     };
@@ -327,12 +325,7 @@ where
 }
 
 fn chrono_now() -> String {
-    // Simple ISO-8601-ish timestamp without pulling in chrono crate
-    use std::time::SystemTime;
-    let duration = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{}", duration.as_secs())
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 fn parse_lcov_report(
@@ -782,12 +775,19 @@ end_of_record
 
         assert_eq!(summary.hits, 2);
         assert_eq!(store.captures.len(), 1);
-        assert_eq!(store.captures[0].commit_sha, "abc123");
+        assert_eq!(store.captures[0].commit_sha, "current");
+        assert!(
+            store.captures[0].captured_at.ends_with('Z')
+                && store.captures[0].captured_at.contains('T'),
+            "captured_at should be RFC3339 UTC, got {}",
+            store.captures[0].captured_at
+        );
         let metadata = store.captures[0].metadata_json.as_deref().unwrap();
         assert!(metadata.contains("\"reference_mode\":\"current\""));
+        assert!(metadata.contains("\"observed_head_sha\":\"abc123\""));
         assert!(metadata.contains("\"repo_dirty\":true"));
         assert_eq!(store.hits[0].production_symbol_id, "symbol::current");
-        assert_eq!(store.rebuild_commits, vec!["abc123".to_string()]);
+        assert_eq!(store.rebuild_commits, vec!["current".to_string()]);
         Ok(())
     }
 }

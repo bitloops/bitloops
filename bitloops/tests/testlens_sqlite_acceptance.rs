@@ -199,16 +199,16 @@ end_of_record
     );
 
     let conn = Connection::open(workspace.db_path()).expect("open sqlite db");
-    let (commit_sha, metadata_json): (String, String) = conn
+    let (commit_sha, captured_at, metadata_json): (String, String, String) = conn
         .query_row(
             r#"
-SELECT commit_sha, metadata_json
+SELECT commit_sha, captured_at, metadata_json
 FROM coverage_captures
 ORDER BY capture_id
 LIMIT 1
 "#,
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .expect("load current coverage capture");
     assert_eq!(
@@ -216,8 +216,20 @@ LIMIT 1
         "fresh test repositories should store current coverage under the current placeholder"
     );
     assert!(
+        captured_at.ends_with('Z') && captured_at.contains('T'),
+        "expected RFC3339 UTC captured_at, got {captured_at}"
+    );
+    assert!(
         metadata_json.contains("\"reference_mode\":\"current\""),
         "expected current reference metadata, got {metadata_json}"
+    );
+    assert!(
+        !metadata_json.contains(&workspace.repo_dir().to_string_lossy().to_string()),
+        "metadata should not persist absolute workspace path, got {metadata_json}"
+    );
+    assert!(
+        metadata_json.contains("\"coverage_path\":\"rust-current-coverage.lcov\""),
+        "metadata should persist repo-relative coverage path, got {metadata_json}"
     );
 
     let hit_count: i64 = conn
