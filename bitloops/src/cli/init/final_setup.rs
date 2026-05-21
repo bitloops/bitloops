@@ -53,7 +53,8 @@ pub(crate) fn choose_final_setup_options(
         telemetry: prompt_options.show_telemetry,
         auto_start_daemon: prompt_options.show_auto_start_daemon && can_prompt,
     };
-    let requires_prompt = ((sync.is_none() || ingest.is_none()) && prompt_options.show_sync_and_ingest)
+    let requires_prompt = ((sync.is_none() || ingest.is_none())
+        && prompt_options.show_sync_and_ingest)
         || prompt_options.show_telemetry
         || (prompt_options.show_auto_start_daemon && can_prompt);
 

@@ -110,6 +110,7 @@ fn TestRootCommand_SubcommandWiring() {
         "resume",
         "clean",
         "reset",
+        "configure",
         "enable",
         "disable",
         "uninstall",
@@ -120,6 +121,7 @@ fn TestRootCommand_SubcommandWiring() {
         "debug",
         "devql",
         "doctor",
+        "__delayed-daemon-restart",
         "__send_analytics",
         "completion",
         "curl-bash-post-install",
@@ -134,6 +136,35 @@ fn TestRootCommand_SubcommandWiring() {
 
 #[test]
 #[allow(non_snake_case)]
+fn TestRootCommand_ConfigureParsesWebMode() {
+    let parsed = Cli::try_parse_from(["bitloops", "configure", "--web"])
+        .expect("configure --web should parse");
+
+    let Some(Commands::Configure(args)) = parsed.command else {
+        panic!("expected configure command");
+    };
+
+    assert!(args.web);
+    assert!(args.file.is_none());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_ConfigureRequiresExactlyOneMode() {
+    let missing = Cli::try_parse_from(["bitloops", "configure"])
+        .err()
+        .expect("configure without a mode should fail");
+    assert!(missing.to_string().contains("--web"));
+
+    let conflicting =
+        Cli::try_parse_from(["bitloops", "configure", "--web", "--file", "config.toml"])
+            .err()
+            .expect("configure modes should conflict");
+    assert!(conflicting.to_string().contains("--web"));
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn TestRootCommand_HiddenVisibilityForInternalCommands() {
     let root = Cli::command();
     for name in [
@@ -141,6 +172,7 @@ fn TestRootCommand_HiddenVisibilityForInternalCommands() {
         "debug",
         "__daemon-process",
         "__daemon-supervisor",
+        "__delayed-daemon-restart",
         "__send_analytics",
         "completion",
         "curl-bash-post-install",
@@ -420,7 +452,7 @@ fn TestRootCommand_CurlBashPostInstall_WiresShellCompletionForSupportedShell() {
         || {
             let mut out = Vec::new();
             let mut input = Cursor::new(b"yes\n".to_vec());
-            let result = run_curl_bash_post_install_command_with_io(&mut out, &mut input);
+            let result = run_curl_bash_post_install_command_with_io(&mut out, &mut input, None);
             assert!(result.is_ok(), "post-install command should succeed");
 
             let rc_file = home.path().join(".zshrc");
@@ -451,7 +483,7 @@ fn TestRootCommand_CurlBashPostInstall_SupportedShellNoSkipsAppend() {
         || {
             let mut out = Vec::new();
             let mut input = Cursor::new(b"no\n".to_vec());
-            let result = run_curl_bash_post_install_command_with_io(&mut out, &mut input);
+            let result = run_curl_bash_post_install_command_with_io(&mut out, &mut input, None);
             assert!(result.is_ok(), "post-install command should succeed");
 
             assert!(
@@ -475,7 +507,7 @@ fn TestRootCommand_CurlBashPostInstall_UnsupportedShellIsBestEffort() {
         || {
             let mut out = Vec::new();
             let mut input = Cursor::new(Vec::<u8>::new());
-            let result = run_curl_bash_post_install_command_with_io(&mut out, &mut input);
+            let result = run_curl_bash_post_install_command_with_io(&mut out, &mut input, None);
             assert!(
                 result.is_ok(),
                 "unsupported shell should not fail hidden post-install command"
@@ -495,6 +527,28 @@ fn TestRootCommand_CurlBashPostInstall_UnsupportedShellIsBestEffort() {
             );
         },
     );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_CurlBashPostInstall_CanWriteDefaultDaemonConfigTemplate() {
+    let dir = TempDir::new().expect("temp dir");
+    let template_path = dir.path().join("default-config.toml");
+
+    let mut out = Vec::new();
+    let mut input = Cursor::new(Vec::<u8>::new());
+    let result = run_curl_bash_post_install_command_with_io(
+        &mut out,
+        &mut input,
+        Some(template_path.as_path()),
+    );
+
+    assert!(result.is_ok(), "post-install command should write template");
+    let content = std::fs::read_to_string(&template_path).expect("template should be written");
+    assert!(content.contains("[runtime]"));
+    assert!(content.contains("[stores.relational]"));
+    assert!(content.contains("[stores.events]"));
+    assert!(content.contains("[stores.blob]"));
 }
 
 #[test]

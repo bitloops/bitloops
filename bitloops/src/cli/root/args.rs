@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, ValueEnum};
 
 #[derive(Args, Debug, Clone, Default)]
@@ -72,6 +74,13 @@ pub enum CompletionShell {
 pub struct CompletionArgs {
     #[arg(value_enum)]
     pub shell: CompletionShell,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct CurlBashPostInstallArgs {
+    /// Write the default daemon config template to PATH.
+    #[arg(long = "write-default-config", value_name = "PATH", hide = true)]
+    pub write_default_config: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone, Default)]

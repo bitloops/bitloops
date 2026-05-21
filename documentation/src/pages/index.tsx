@@ -18,7 +18,8 @@ function HomepageHeader() {
         </Heading>
         <p className="hero__subtitle">{siteConfig.tagline}</p>
         <p>
-          Fastest start: <code>bitloops init --install-default-daemon</code>
+          Fastest start: <code>bitloops configure --web</code>, then{' '}
+          <code>bitloops init</code>
         </p>
         <div className={styles.buttons}>
           <Link

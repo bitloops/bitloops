@@ -41,6 +41,8 @@
 curl -fsSL https://bitloops.com/install.sh | bash
 ```
 
+The installer opens `bitloops configure --web` for daemon settings. For scripted installs, use `--default-config` to install the default daemon config without the browser.
+
 **Windows PowerShell:**
 
 ```powershell
@@ -50,7 +52,7 @@ irm https://bitloops.com/install.ps1 | iex
 Then, from inside the repo you want Bitloops to capture:
  
 ```bash
-bitloops init --install-default-daemon
+bitloops init
 ```
  
 Work normally with Codex, Claude Code, Cursor, Gemini, Opencode or Copilot. Commit as usual. Bitloops captures the relevant context around every change and keeps your codebase model fresh in the background.

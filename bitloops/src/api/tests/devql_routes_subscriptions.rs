@@ -342,7 +342,7 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
     assert!(sdl_body.contains(
         "runtimeExecutableResolutions(commands: [String!]!): [RuntimeExecutableResolutionObject!]!"
     ));
-    assert!(sdl_body.contains("capabilityPacks(repoId: String!): [CapabilityPackObject!]!"));
+    assert!(sdl_body.contains("capabilityPacks: [CapabilityPackObject!]!"));
     assert!(sdl_body.contains("runtimeSnapshot(repoId: String!): RuntimeSnapshotObject!"));
     assert!(
         sdl_body
@@ -355,6 +355,9 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
         sdl_body
             .contains("applyCapabilityPackConfig(input: ApplyCapabilityPackConfigInput!): ApplyCapabilityPackConfigResult!")
     );
+    assert!(sdl_body.contains("restartScheduled: Boolean!"));
+    assert!(!sdl_body.contains("repoLocalConfigPath"));
+    assert!(!sdl_body.contains("expectedRepoLocalRevision"));
     assert!(
         sdl_body.contains("startInit(repoId: String!, input: StartInitInput!): StartInitResult!")
     );

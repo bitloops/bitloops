@@ -101,17 +101,9 @@ impl RuntimeQueryRoot {
     }
 
     #[graphql(name = "capabilityPacks")]
-    async fn capability_packs(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(name = "repoId")] repo_id: String,
-    ) -> Result<Vec<CapabilityPackObject>> {
+    async fn capability_packs(&self, ctx: &Context<'_>) -> Result<Vec<CapabilityPackObject>> {
         let state = ctx.data_unchecked::<DashboardState>();
-        let request_context = ctx
-            .data_opt::<RuntimeRequestContext>()
-            .cloned()
-            .unwrap_or_default();
-        capability_packs_catalog_request(state, request_context, repo_id).await
+        capability_packs_catalog_request(state).await
     }
 }
 
@@ -217,11 +209,7 @@ impl RuntimeMutationRoot {
         input: PlanCapabilityPackConfigInput,
     ) -> Result<CapabilityPackConfigPlan> {
         let state = ctx.data_unchecked::<DashboardState>();
-        let request_context = ctx
-            .data_opt::<RuntimeRequestContext>()
-            .cloned()
-            .unwrap_or_default();
-        plan_capability_pack_config_request(state, request_context, input).await
+        plan_capability_pack_config_request(state, input).await
     }
 
     #[graphql(name = "applyCapabilityPackConfig")]
@@ -231,11 +219,7 @@ impl RuntimeMutationRoot {
         input: ApplyCapabilityPackConfigInput,
     ) -> Result<ApplyCapabilityPackConfigResult> {
         let state = ctx.data_unchecked::<DashboardState>();
-        let request_context = ctx
-            .data_opt::<RuntimeRequestContext>()
-            .cloned()
-            .unwrap_or_default();
-        apply_capability_pack_config_request(state, request_context, input).await
+        apply_capability_pack_config_request(state, input).await
     }
 }
 

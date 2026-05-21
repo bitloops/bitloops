@@ -96,10 +96,6 @@ impl PreparedSummarySetupPlan {
     pub(crate) fn new(action: PreparedSummarySetupAction) -> Self {
         Self { action }
     }
-
-    pub(crate) fn action(&self) -> &PreparedSummarySetupAction {
-        &self.action
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

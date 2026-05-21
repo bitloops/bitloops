@@ -21,23 +21,27 @@ curl -fsSL https://bitloops.com/install.sh | bash
 cargo install bitloops
 ```
 
-## 2. Fastest Start: Initialise A Project
+## 2. Configure The Daemon
 
 ```bash
-bitloops init --install-default-daemon
+bitloops configure --web
 ```
 
-This is the fastest way to get started from inside a git repository or subproject. It bootstraps the default daemon service if needed, creates or updates `.bitloops.local.toml`, adds it to `.git/info/exclude`, and installs or reconciles hooks for the selected agents.
+This creates the default daemon config and local stores if needed, starts or reuses the daemon, and opens the dashboard configuration page. For scripted installs, use the installer `--default-config` flag or run `bitloops configure --file /path/to/config.toml` with a complete daemon TOML file.
+
+## 3. Initialise A Project
+
+```bash
+bitloops init
+```
+
+Run this from inside a git repository or subproject. It creates or updates `.bitloops.local.toml`, adds it to `.git/info/exclude`, installs or reconciles hooks for the selected agents, and binds the repo to an existing daemon config when one is available.
 
 Use `--sync=true` when you want the initial current-state sync immediately:
 
 ```bash
-bitloops init --install-default-daemon --sync=true
+bitloops init --sync=true
 ```
-
-When you use `bitloops init --install-default-daemon` and embeddings are not already configured, interactive init asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now. Bitloops cloud is the recommended default. If you choose the local runtime, Bitloops installs the managed standalone `bitloops-local-embeddings` binary when needed and warms that profile. If init also runs sync or ingest, that managed runtime download happens afterwards.
-
-In an interactive terminal, plain `bitloops init` also asks whether you want to install that same default local embeddings setup when embeddings are still unconfigured.
 
 `bitloops init` can also queue an initial DevQL current-state sync after hook setup. Use `--sync=true` when you want that sync immediately, or `--sync=false` when you want to skip it. If you omit `--sync` in an interactive terminal, Bitloops asks after hook installation whether you want to sync the codebase now.
 
@@ -51,15 +55,15 @@ If you want to pin the supported agent set during bootstrap, repeat `--agent <na
 bitloops init --sync=false --agent claude-code --agent codex
 ```
 
-If telemetry consent is unresolved for an existing daemon config, interactive `bitloops init` can ask again. Non-interactive runs require an explicit telemetry flag.
+Daemon-only settings such as telemetry, inference, capability packs, and stores stay in `bitloops configure`.
 
-## 3. Start The Daemon Explicitly When You Need To
+## 4. Start The Daemon Explicitly When You Need To
 
 ```bash
 bitloops start --create-default-config
 ```
 
-Use this path when you want to bootstrap the default daemon before initialising a repo, or when you want to inspect or customise the daemon config separately.
+Use this lower-level path when you want to bootstrap or start the daemon without opening the configuration flow.
 
 On a fresh machine, use `--create-default-config` once. This writes the default global daemon config at the platform config location and creates the default local SQLite, DuckDB, and blob-store paths.
 
@@ -71,7 +75,7 @@ If you are using a repo-scoped or test-specific daemon config instead of the def
 bitloops start --config ./config.toml --bootstrap-local-stores
 ```
 
-## 4. Add Optional Shared Project Policy
+## 5. Add Optional Shared Project Policy
 
 If you want shared capture policy in git, create `.bitloops.toml` in the project root:
 
@@ -87,7 +91,7 @@ watch_poll_fallback_ms = 2500
 
 Keep `.bitloops.local.toml` for local-only overrides.
 
-## 5. Start Or Open Bitloops
+## 6. Start Or Open Bitloops
 
 Open the dashboard:
 

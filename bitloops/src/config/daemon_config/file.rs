@@ -234,6 +234,7 @@ pub fn persist_dashboard_tls_hint(enabled: bool) -> Result<PathBuf> {
     Ok(path)
 }
 
+#[cfg(test)]
 pub(crate) fn persist_daemon_store_backend_selection(
     source_path: &Path,
     target_path: &Path,
@@ -372,6 +373,7 @@ pub(crate) fn validate_daemon_config_text(data: &str, path: &Path) -> Result<()>
     parse_daemon_config_text(data, path).map(|_| ())
 }
 
+#[cfg(test)]
 fn set_or_remove_toml_string(table: &mut Table, key: &str, value: Option<&str>) {
     match value.map(str::trim).filter(|value| !value.is_empty()) {
         Some(value) => {
@@ -436,7 +438,7 @@ fn persist_daemon_cli_settings_at(
     Ok(path)
 }
 
-fn default_daemon_config_toml() -> Result<String> {
+pub(crate) fn default_daemon_config_toml() -> Result<String> {
     let mut doc = DocumentMut::new();
     doc["runtime"] = Item::Table(Table::new());
     doc["runtime"]["local_dev"] = Item::Value(false.into());

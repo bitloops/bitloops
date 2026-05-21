@@ -2,21 +2,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result as AnyhowResult, anyhow, bail};
-use async_graphql::{ID, InputObject, SimpleObject, types::Json};
+use async_graphql::{InputObject, SimpleObject, types::Json};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use toml_edit::{Array, DocumentMut, Item, Table, Value as TomlValue, de::from_str};
 
-use super::config::{map_runtime_api_error, resolve_runtime_devql_config};
-use super::roots::RuntimeRequestContext;
 use crate::api::DashboardState;
 use crate::capability_packs::builtin_packs;
-use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, REPO_POLICY_LOCAL_FILE_NAME, validate_daemon_config_text,
-    validate_repo_policy_text,
-};
+use crate::config::validate_daemon_config_text;
 use crate::graphql::{bad_user_input_error, graphql_error};
 use crate::host::inference::BITLOOPS_INFERENCE_RUNTIME_ID;
 
@@ -63,16 +59,12 @@ pub(crate) struct CapabilityPackFieldPatchInput {
 
 #[derive(Debug, Clone, InputObject)]
 pub(crate) struct PlanCapabilityPackConfigInput {
-    #[graphql(name = "repoId")]
-    pub(crate) repo_id: String,
     #[graphql(name = "explicitEnabled", default)]
     pub(crate) explicit_enabled: Vec<String>,
     #[graphql(name = "explicitDisabled", default)]
     pub(crate) explicit_disabled: Vec<String>,
     #[graphql(name = "daemonPatches", default)]
     pub(crate) daemon_patches: Vec<CapabilityPackFieldPatchInput>,
-    #[graphql(name = "repoLocalPatches", default)]
-    pub(crate) repo_local_patches: Vec<CapabilityPackFieldPatchInput>,
 }
 
 #[derive(Debug, Clone, InputObject)]
@@ -81,8 +73,6 @@ pub(crate) struct ApplyCapabilityPackConfigInput {
     pub(crate) plan_input: PlanCapabilityPackConfigInput,
     #[graphql(name = "expectedDaemonRevision")]
     pub(crate) expected_daemon_revision: String,
-    #[graphql(name = "expectedRepoLocalRevision")]
-    pub(crate) expected_repo_local_revision: Option<String>,
     #[graphql(name = "planHash")]
     pub(crate) plan_hash: String,
 }
@@ -188,10 +178,6 @@ pub(crate) struct CapabilityPackConfigPlan {
     pub(crate) daemon_config_path: String,
     #[graphql(name = "daemonRevision")]
     pub(crate) daemon_revision: String,
-    #[graphql(name = "repoLocalConfigPath")]
-    pub(crate) repo_local_config_path: String,
-    #[graphql(name = "repoLocalRevision")]
-    pub(crate) repo_local_revision: Option<String>,
     pub(crate) warnings: Vec<String>,
     pub(crate) blockers: Vec<String>,
     pub(crate) catalog: Vec<CapabilityPackObject>,
@@ -211,14 +197,12 @@ pub(crate) struct ApplyCapabilityPackConfigResult {
     pub(crate) message: String,
     #[graphql(name = "daemonConfigPath")]
     pub(crate) daemon_config_path: String,
-    #[graphql(name = "repoLocalConfigPath")]
-    pub(crate) repo_local_config_path: String,
     #[graphql(name = "restartRequired")]
     pub(crate) restart_required: bool,
+    #[graphql(name = "restartScheduled")]
+    pub(crate) restart_scheduled: bool,
     #[graphql(name = "reloadRequired")]
     pub(crate) reload_required: bool,
-    #[graphql(name = "initSessionId")]
-    pub(crate) init_session_id: Option<ID>,
     #[graphql(name = "planHash")]
     pub(crate) plan_hash: String,
 }
@@ -226,14 +210,12 @@ pub(crate) struct ApplyCapabilityPackConfigResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlannerTargetKind {
     Daemon,
-    RepoLocal,
 }
 
 impl PlannerTargetKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::Daemon => "daemon",
-            Self::RepoLocal => "repo_local",
         }
     }
 }
@@ -325,16 +307,11 @@ struct PackSelectionState {
 
 pub(crate) async fn capability_packs_catalog(
     state: &DashboardState,
-    request_context: RuntimeRequestContext,
-    repo_id: String,
 ) -> async_graphql::Result<Vec<CapabilityPackObject>> {
-    let cfg = resolve_runtime_devql_config(state, &request_context, repo_id.as_str())
-        .await
-        .map_err(map_runtime_api_error)?;
-    let daemon = load_daemon_file(resolve_daemon_path(&cfg.repo_root)?).map_err(|err| {
+    let daemon = load_daemon_file(state.config_path.clone()).map_err(|err| {
         graphql_error("internal", format!("failed to load daemon config: {err:#}"))
     })?;
-    let catalog = compute_catalog(&cfg.repo_root, &daemon.value, &[]).map_err(|err| {
+    let catalog = compute_catalog(&state.config_root, &daemon.value, &[]).map_err(|err| {
         graphql_error(
             "internal",
             format!("failed to build capability pack catalog: {err:#}"),
@@ -345,13 +322,9 @@ pub(crate) async fn capability_packs_catalog(
 
 pub(crate) async fn plan_capability_pack_config(
     state: &DashboardState,
-    request_context: RuntimeRequestContext,
     input: PlanCapabilityPackConfigInput,
 ) -> async_graphql::Result<CapabilityPackConfigPlan> {
-    let cfg = resolve_runtime_devql_config(state, &request_context, input.repo_id.as_str())
-        .await
-        .map_err(map_runtime_api_error)?;
-    build_plan(&cfg.repo_root, input).map_err(|err| {
+    build_plan(state.config_path.clone(), &state.config_root, input).map_err(|err| {
         graphql_error(
             "internal",
             format!("failed to build capability pack config plan: {err:#}"),
@@ -361,14 +334,14 @@ pub(crate) async fn plan_capability_pack_config(
 
 pub(crate) async fn apply_capability_pack_config(
     state: &DashboardState,
-    request_context: RuntimeRequestContext,
     input: ApplyCapabilityPackConfigInput,
 ) -> async_graphql::Result<ApplyCapabilityPackConfigResult> {
-    let cfg =
-        resolve_runtime_devql_config(state, &request_context, input.plan_input.repo_id.as_str())
-            .await
-            .map_err(map_runtime_api_error)?;
-    let plan = build_plan(&cfg.repo_root, input.plan_input.clone()).map_err(|err| {
+    let plan = build_plan(
+        state.config_path.clone(),
+        &state.config_root,
+        input.plan_input.clone(),
+    )
+    .map_err(|err| {
         graphql_error(
             "internal",
             format!("failed to rebuild capability pack config plan: {err:#}"),
@@ -385,11 +358,6 @@ pub(crate) async fn apply_capability_pack_config(
             "daemon config changed on disk; reload before saving".to_string(),
         ));
     }
-    if plan.repo_local_revision != input.expected_repo_local_revision {
-        return Err(bad_user_input_error(
-            "repo-local policy changed on disk; reload before saving".to_string(),
-        ));
-    }
     if !plan.blockers.is_empty() {
         return Err(bad_user_input_error(format!(
             "cannot apply blocked capability config plan: {}",
@@ -398,17 +366,10 @@ pub(crate) async fn apply_capability_pack_config(
     }
 
     let daemon_path = PathBuf::from(plan.daemon_config_path.clone());
-    let repo_local_path = PathBuf::from(plan.repo_local_config_path.clone());
     let daemon_target = load_daemon_file(daemon_path.clone()).map_err(|err| {
         graphql_error(
             "internal",
             format!("failed to reload daemon config before save: {err:#}"),
-        )
-    })?;
-    let repo_local_target = load_repo_local_file(repo_local_path.clone()).map_err(|err| {
-        graphql_error(
-            "internal",
-            format!("failed to reload repo-local policy before save: {err:#}"),
         )
     })?;
 
@@ -417,21 +378,15 @@ pub(crate) async fn apply_capability_pack_config(
             "daemon config changed on disk; reload before saving".to_string(),
         ));
     }
-    if repo_local_target.revision != input.expected_repo_local_revision {
-        return Err(bad_user_input_error(
-            "repo-local policy changed on disk; reload before saving".to_string(),
-        ));
-    }
 
-    let combined = build_combined_patches(&cfg.repo_root, &input.plan_input, &daemon_target.value)?;
-    let daemon_text = apply_patches_to_toml(&daemon_target.raw_text, &combined.0)?;
-    let repo_local_text = apply_patches_to_toml(&repo_local_target.raw_text, &combined.1)?;
+    let combined = build_combined_patches(&input.plan_input, &daemon_target.value)
+        .map_err(|err| bad_user_input_error(format!("invalid daemon config patch: {err:#}")))?;
+    let daemon_text = apply_patches_to_toml(&daemon_target.raw_text, &combined).map_err(|err| {
+        bad_user_input_error(format!("failed to apply daemon config patch: {err:#}"))
+    })?;
 
     validate_daemon_config_text(&daemon_text, &daemon_path).map_err(|err| {
         bad_user_input_error(format!("updated daemon config is invalid: {err:#}"))
-    })?;
-    validate_repo_policy_text(&repo_local_text, &repo_local_path).map_err(|err| {
-        bad_user_input_error(format!("updated repo-local policy is invalid: {err:#}"))
     })?;
 
     if let Some(parent) = daemon_path.parent() {
@@ -442,61 +397,55 @@ pub(crate) async fn apply_capability_pack_config(
             )
         })?;
     }
-    if let Some(parent) = repo_local_path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            graphql_error(
-                "internal",
-                format!("failed to prepare repo-local policy directory: {err}"),
-            )
-        })?;
-    }
 
     fs::write(&daemon_path, daemon_text.as_bytes()).map_err(|err| {
         graphql_error("internal", format!("failed to write daemon config: {err}"))
     })?;
-    if let Err(err) = fs::write(&repo_local_path, repo_local_text.as_bytes()) {
-        let _ = fs::write(&daemon_path, daemon_target.raw_text.as_bytes());
-        return Err(graphql_error(
-            "internal",
-            format!("failed to write repo-local policy: {err}"),
-        ));
-    }
+    let restart_scheduled = if plan.restart_required {
+        schedule_delayed_daemon_restart(&daemon_path).map_err(|err| {
+            graphql_error(
+                "internal",
+                format!("failed to schedule daemon restart: {err:#}"),
+            )
+        })?;
+        true
+    } else {
+        false
+    };
 
     Ok(ApplyCapabilityPackConfigResult {
         message: "Capability configuration saved.".to_string(),
         daemon_config_path: daemon_path.display().to_string(),
-        repo_local_config_path: repo_local_path.display().to_string(),
         restart_required: plan.restart_required,
+        restart_scheduled,
         reload_required: plan.reload_required,
-        init_session_id: None,
         plan_hash: plan.plan_hash,
     })
 }
 
 fn build_plan(
-    repo_root: &Path,
+    daemon_path: PathBuf,
+    metadata_root: &Path,
     input: PlanCapabilityPackConfigInput,
 ) -> AnyhowResult<CapabilityPackConfigPlan> {
-    let daemon = load_daemon_file(resolve_daemon_path(repo_root)?)?;
-    let repo_local = load_repo_local_file(repo_root.join(REPO_POLICY_LOCAL_FILE_NAME))?;
-    let catalog = compute_catalog(repo_root, &daemon.value, &input.explicit_enabled)?;
-    let combined_patches = build_combined_patches(repo_root, &input, &daemon.value)?;
-    let daemon_preview = apply_patches_to_json(&daemon.value, &combined_patches.0)?;
-    let repo_local_preview = apply_patches_to_json(&repo_local.value, &combined_patches.1)?;
+    let daemon = load_daemon_file(daemon_path)?;
+    let catalog = compute_catalog(metadata_root, &daemon.value, &input.explicit_enabled)?;
+    let combined_patches = build_combined_patches(&input, &daemon.value)?;
+    let daemon_preview = apply_patches_to_json(&daemon.value, &combined_patches)?;
 
     let selection = resolve_selection(
-        repo_root,
+        metadata_root,
         &daemon_preview,
         &input.explicit_enabled,
         &input.explicit_disabled,
     )?;
-    let mut shared_sections = build_shared_sections(&repo_local.value, &repo_local_preview);
+    let shared_sections = Vec::new();
     let mut ownership = BTreeMap::<String, String>::new();
     let mut packs = Vec::new();
     let mut blockers = selection.blockers.clone();
     let mut warnings = Vec::new();
 
-    for metadata in pack_metadata(repo_root)? {
+    for metadata in pack_metadata(metadata_root)? {
         let Some(ui_spec) = ui_spec_for_pack(metadata.id.as_str()) else {
             continue;
         };
@@ -516,7 +465,7 @@ fn build_plan(
             continue;
         }
         let (sections, pack_warnings, ready) = build_pack_sections(
-            repo_root,
+            metadata_root,
             metadata.id.as_str(),
             &daemon.value,
             &daemon_preview,
@@ -539,7 +488,6 @@ fn build_plan(
         });
     }
 
-    shared_sections.sort_by(|left, right| left.title.cmp(&right.title));
     packs.sort_by(|left, right| {
         let left_order = ui_spec_for_pack(left.id.as_str())
             .map(|spec| spec.display_order)
@@ -552,26 +500,17 @@ fn build_plan(
             .then_with(|| left.display_name.cmp(&right.display_name))
     });
 
-    let review_groups = build_review_groups(
-        &daemon.value,
-        &daemon_preview,
-        &repo_local.value,
-        &repo_local_preview,
-    );
+    let review_groups = build_review_groups(&daemon.value, &daemon_preview);
     let plan_hash = hash_plan(
         &input,
         daemon.revision.as_deref().unwrap_or(""),
-        repo_local.revision.as_deref().unwrap_or(""),
         &daemon_preview,
-        &repo_local_preview,
     )?;
 
     Ok(CapabilityPackConfigPlan {
         plan_hash,
         daemon_config_path: daemon.path.display().to_string(),
         daemon_revision: daemon.revision.unwrap_or_default(),
-        repo_local_config_path: repo_local.path.display().to_string(),
-        repo_local_revision: repo_local.revision,
         warnings,
         blockers,
         catalog,
@@ -698,19 +637,18 @@ fn resolve_selection(
     let mut visited = BTreeSet::new();
     let mut active_stack = Vec::<String>::new();
 
-    fn visit(
-        id: &str,
-        by_id: &BTreeMap<String, PackMetadata>,
-        explicit_disabled: &BTreeSet<String>,
-        states: &mut BTreeMap<String, PackSelectionState>,
-        visited: &mut BTreeSet<String>,
-        active_stack: &mut Vec<String>,
-        blockers: &mut Vec<String>,
-        source: &str,
-        reason: Option<String>,
-    ) {
-        if visited.contains(id) {
-            if let Some(existing) = states.get_mut(id)
+    struct SelectionVisitContext<'a> {
+        by_id: &'a BTreeMap<String, PackMetadata>,
+        explicit_disabled: &'a BTreeSet<String>,
+        states: &'a mut BTreeMap<String, PackSelectionState>,
+        visited: &'a mut BTreeSet<String>,
+        active_stack: &'a mut Vec<String>,
+        blockers: &'a mut Vec<String>,
+    }
+
+    fn visit(id: &str, ctx: &mut SelectionVisitContext<'_>, source: &str, reason: Option<String>) {
+        if ctx.visited.contains(id) {
+            if let Some(existing) = ctx.states.get_mut(id)
                 && existing.selection_source != "explicit"
                 && source == "explicit"
             {
@@ -719,39 +657,37 @@ fn resolve_selection(
             }
             return;
         }
-        if active_stack.iter().any(|entry| entry == id) {
-            let mut chain = active_stack.clone();
+        if ctx.active_stack.iter().any(|entry| entry == id) {
+            let mut chain = ctx.active_stack.clone();
             chain.push(id.to_string());
-            blockers.push(format!("dependency cycle detected: {}", chain.join(" -> ")));
+            ctx.blockers
+                .push(format!("dependency cycle detected: {}", chain.join(" -> ")));
             return;
         }
-        let Some(metadata) = by_id.get(id) else {
-            blockers.push(format!("missing dependency `{id}`"));
+        let Some(metadata) = ctx.by_id.get(id) else {
+            ctx.blockers.push(format!("missing dependency `{id}`"));
             return;
         };
-        if explicit_disabled.contains(id) && source != "explicit" {
-            blockers.push(format!(
+        if ctx.explicit_disabled.contains(id) && source != "explicit" {
+            ctx.blockers.push(format!(
                 "dependency `{id}` is explicitly disabled but required by another pack"
             ));
             return;
         }
-        active_stack.push(id.to_string());
-        for dependency in &metadata.dependencies {
+        let display_name = metadata.display_name.clone();
+        let dependencies = metadata.dependencies.clone();
+        ctx.active_stack.push(id.to_string());
+        for dependency in &dependencies {
             visit(
                 dependency.pack_id.as_str(),
-                by_id,
-                explicit_disabled,
-                states,
-                visited,
-                active_stack,
-                blockers,
+                ctx,
                 "dependency",
-                Some(format!("required by {}", metadata.display_name)),
+                Some(format!("required by {display_name}")),
             );
         }
-        active_stack.pop();
-        visited.insert(id.to_string());
-        states.insert(
+        ctx.active_stack.pop();
+        ctx.visited.insert(id.to_string());
+        ctx.states.insert(
             id.to_string(),
             PackSelectionState {
                 enabled: true,
@@ -761,18 +697,18 @@ fn resolve_selection(
         );
     }
 
-    for id in &explicit_enabled {
-        visit(
-            id,
-            &by_id,
-            &explicit_disabled,
-            &mut states,
-            &mut visited,
-            &mut active_stack,
-            &mut blockers,
-            "explicit",
-            None,
-        );
+    {
+        let mut visit_ctx = SelectionVisitContext {
+            by_id: &by_id,
+            explicit_disabled: &explicit_disabled,
+            states: &mut states,
+            visited: &mut visited,
+            active_stack: &mut active_stack,
+            blockers: &mut blockers,
+        };
+        for id in &explicit_enabled {
+            visit(id, &mut visit_ctx, "explicit", None);
+        }
     }
 
     for id in by_id.keys() {
@@ -1721,81 +1657,6 @@ fn build_runtime_section(
     )
 }
 
-fn build_shared_sections(current: &Value, proposed: &Value) -> Vec<CapabilityPackSectionObject> {
-    vec![
-        CapabilityPackSectionObject {
-            key: "repo-devql".to_string(),
-            title: "Repository sync and ingest".to_string(),
-            description: "Repo-local DevQL toggles mirrored from init.".to_string(),
-            fields: vec![
-                config_field(
-                    PlannerTargetKind::RepoLocal,
-                    &["devql", "sync_enabled"],
-                    "Sync enabled",
-                    "Enable DevQL sync for this repo.",
-                    "boolean",
-                    current,
-                    proposed,
-                    Vec::new(),
-                    false,
-                    false,
-                    true,
-                    Some(json!(true)),
-                ),
-                config_field(
-                    PlannerTargetKind::RepoLocal,
-                    &["devql", "ingest_enabled"],
-                    "Ingest enabled",
-                    "Enable DevQL ingest for this repo.",
-                    "boolean",
-                    current,
-                    proposed,
-                    Vec::new(),
-                    false,
-                    false,
-                    true,
-                    Some(json!(true)),
-                ),
-            ],
-        },
-        CapabilityPackSectionObject {
-            key: "repo-agents".to_string(),
-            title: "Agent surfaces".to_string(),
-            description: "Repo-local agent support and DevQL guidance.".to_string(),
-            fields: vec![
-                config_field(
-                    PlannerTargetKind::RepoLocal,
-                    &["agents", "supported"],
-                    "Supported agents",
-                    "Agents enabled for local prompt surfaces.",
-                    "json",
-                    current,
-                    proposed,
-                    Vec::new(),
-                    false,
-                    false,
-                    true,
-                    Some(json!(["claude-code"])),
-                ),
-                config_field(
-                    PlannerTargetKind::RepoLocal,
-                    &["agents", "devql_guidance_enabled"],
-                    "DevQL guidance enabled",
-                    "Enable local DevQL guidance surfaces.",
-                    "boolean",
-                    current,
-                    proposed,
-                    Vec::new(),
-                    false,
-                    false,
-                    true,
-                    Some(json!(true)),
-                ),
-            ],
-        },
-    ]
-}
-
 #[allow(clippy::too_many_arguments)]
 fn config_field(
     target: PlannerTargetKind,
@@ -1843,8 +1704,6 @@ fn config_field(
 fn build_review_groups(
     daemon_current: &Value,
     daemon_proposed: &Value,
-    repo_current: &Value,
-    repo_proposed: &Value,
 ) -> Vec<CapabilityPackReviewGroupObject> {
     let mut groups = Vec::new();
     let daemon_items = diff_value(String::new(), daemon_current, daemon_proposed);
@@ -1853,14 +1712,6 @@ fn build_review_groups(
             key: "daemon".to_string(),
             title: "Daemon config changes".to_string(),
             items: daemon_items,
-        });
-    }
-    let repo_items = diff_value(String::new(), repo_current, repo_proposed);
-    if !repo_items.is_empty() {
-        groups.push(CapabilityPackReviewGroupObject {
-            key: "repo-local".to_string(),
-            title: "Repo-local policy changes".to_string(),
-            items: repo_items,
         });
     }
     groups
@@ -1913,12 +1764,10 @@ fn preview_value(value: &Value) -> String {
 }
 
 fn build_combined_patches(
-    repo_root: &Path,
     input: &PlanCapabilityPackConfigInput,
     daemon_value: &Value,
-) -> AnyhowResult<(Vec<DraftPatch>, Vec<DraftPatch>)> {
+) -> AnyhowResult<Vec<DraftPatch>> {
     let mut daemon_patches = Vec::new();
-    let mut repo_patches = Vec::new();
 
     daemon_patches.push(DraftPatch {
         target: PlannerTargetKind::Daemon,
@@ -2020,49 +1869,46 @@ fn build_combined_patches(
     for patch in &input.daemon_patches {
         daemon_patches.push(to_draft_patch(PlannerTargetKind::Daemon, patch)?);
     }
-    for patch in &input.repo_local_patches {
-        repo_patches.push(to_draft_patch(PlannerTargetKind::RepoLocal, patch)?);
-    }
 
     let daemon_preview = apply_patches_to_json(daemon_value, &daemon_patches)?;
     for runtime_name in structured_runtime_names(&daemon_preview) {
-        if matches!(runtime_name.as_str(), "codex" | "claude") {
-            if let Some((command, args)) = probe_local_runtime(runtime_name.as_str()) {
-                daemon_patches.push(seed_if_missing(
-                    PlannerTargetKind::Daemon,
-                    &["inference", "runtimes", runtime_name.as_str(), "command"],
-                    Value::String(command),
-                    &daemon_preview,
-                ));
-                daemon_patches.push(seed_if_missing(
-                    PlannerTargetKind::Daemon,
-                    &["inference", "runtimes", runtime_name.as_str(), "args"],
-                    Value::Array(args.into_iter().map(Value::String).collect()),
-                    &daemon_preview,
-                ));
-                daemon_patches.push(seed_if_missing(
-                    PlannerTargetKind::Daemon,
-                    &[
-                        "inference",
-                        "runtimes",
-                        runtime_name.as_str(),
-                        "startup_timeout_secs",
-                    ],
-                    json!(5),
-                    &daemon_preview,
-                ));
-                daemon_patches.push(seed_if_missing(
-                    PlannerTargetKind::Daemon,
-                    &[
-                        "inference",
-                        "runtimes",
-                        runtime_name.as_str(),
-                        "request_timeout_secs",
-                    ],
-                    json!(900),
-                    &daemon_preview,
-                ));
-            }
+        if matches!(runtime_name.as_str(), "codex" | "claude")
+            && let Some((command, args)) = probe_local_runtime(runtime_name.as_str())
+        {
+            daemon_patches.push(seed_if_missing(
+                PlannerTargetKind::Daemon,
+                &["inference", "runtimes", runtime_name.as_str(), "command"],
+                Value::String(command),
+                &daemon_preview,
+            ));
+            daemon_patches.push(seed_if_missing(
+                PlannerTargetKind::Daemon,
+                &["inference", "runtimes", runtime_name.as_str(), "args"],
+                Value::Array(args.into_iter().map(Value::String).collect()),
+                &daemon_preview,
+            ));
+            daemon_patches.push(seed_if_missing(
+                PlannerTargetKind::Daemon,
+                &[
+                    "inference",
+                    "runtimes",
+                    runtime_name.as_str(),
+                    "startup_timeout_secs",
+                ],
+                json!(5),
+                &daemon_preview,
+            ));
+            daemon_patches.push(seed_if_missing(
+                PlannerTargetKind::Daemon,
+                &[
+                    "inference",
+                    "runtimes",
+                    runtime_name.as_str(),
+                    "request_timeout_secs",
+                ],
+                json!(900),
+                &daemon_preview,
+            ));
         }
     }
     if requires_managed_bitloops_inference(&daemon_preview) {
@@ -2112,33 +1958,7 @@ fn build_combined_patches(
         ));
     }
 
-    repo_patches.push(seed_if_missing(
-        PlannerTargetKind::RepoLocal,
-        &["devql", "sync_enabled"],
-        json!(true),
-        &Value::Object(Map::new()),
-    ));
-    repo_patches.push(seed_if_missing(
-        PlannerTargetKind::RepoLocal,
-        &["devql", "ingest_enabled"],
-        json!(true),
-        &Value::Object(Map::new()),
-    ));
-    repo_patches.push(seed_if_missing(
-        PlannerTargetKind::RepoLocal,
-        &["agents", "supported"],
-        json!(["claude-code"]),
-        &Value::Object(Map::new()),
-    ));
-    repo_patches.push(seed_if_missing(
-        PlannerTargetKind::RepoLocal,
-        &["agents", "devql_guidance_enabled"],
-        json!(true),
-        &Value::Object(Map::new()),
-    ));
-
-    let _ = repo_root;
-    Ok((dedupe_patches(daemon_patches), dedupe_patches(repo_patches)))
+    Ok(dedupe_patches(daemon_patches))
 }
 
 fn enabled_pack_ids(explicit_enabled: &[String], daemon_value: &Value) -> BTreeSet<String> {
@@ -2246,6 +2066,12 @@ fn to_draft_patch(
     target: PlannerTargetKind,
     patch: &CapabilityPackFieldPatchInput,
 ) -> AnyhowResult<DraftPatch> {
+    if !patch.target.trim().is_empty() && patch.target.trim() != target.as_str() {
+        bail!(
+            "capability config patches are daemon-scoped; unsupported target `{}`",
+            patch.target
+        );
+    }
     Ok(DraftPatch {
         target,
         path: patch.path.clone(),
@@ -2369,10 +2195,6 @@ fn load_daemon_file(path: PathBuf) -> AnyhowResult<LoadedConfigFile> {
     load_config_file(path, true)
 }
 
-fn load_repo_local_file(path: PathBuf) -> AnyhowResult<LoadedConfigFile> {
-    load_config_file(path, false)
-}
-
 fn load_config_file(path: PathBuf, require_exists: bool) -> AnyhowResult<LoadedConfigFile> {
     let raw_text = match fs::read_to_string(&path) {
         Ok(text) => text,
@@ -2394,11 +2216,6 @@ fn load_config_file(path: PathBuf, require_exists: bool) -> AnyhowResult<LoadedC
         value,
         revision,
     })
-}
-
-fn resolve_daemon_path(repo_root: &Path) -> AnyhowResult<PathBuf> {
-    crate::config::resolve_preferred_daemon_config_path_for_repo(repo_root)
-        .or_else(|_| Ok(repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)))
 }
 
 fn apply_patches_to_json(root: &Value, patches: &[DraftPatch]) -> AnyhowResult<Value> {
@@ -2576,30 +2393,42 @@ fn json_value_to_toml_item(value: &Value) -> AnyhowResult<Item> {
 fn hash_plan(
     input: &PlanCapabilityPackConfigInput,
     daemon_revision: &str,
-    repo_local_revision: &str,
     daemon_preview: &Value,
-    repo_local_preview: &Value,
 ) -> AnyhowResult<String> {
     let payload = serde_json::to_vec(&json!({
-        "repo_id": input.repo_id,
         "explicit_enabled": input.explicit_enabled,
         "explicit_disabled": input.explicit_disabled,
         "daemon_patches": input.daemon_patches.iter().map(|patch| json!({
-            "path": patch.path,
-            "value": patch.value,
-            "unset": patch.unset,
-        })).collect::<Vec<_>>(),
-        "repo_local_patches": input.repo_local_patches.iter().map(|patch| json!({
+            "target": patch.target,
             "path": patch.path,
             "value": patch.value,
             "unset": patch.unset,
         })).collect::<Vec<_>>(),
         "daemon_revision": daemon_revision,
-        "repo_local_revision": repo_local_revision,
         "daemon_preview": daemon_preview,
-        "repo_local_preview": repo_local_preview,
     }))?;
     Ok(revision_for_bytes(&payload))
+}
+
+fn schedule_delayed_daemon_restart(config_path: &Path) -> AnyhowResult<()> {
+    let executable = env::current_exe().context("resolving Bitloops executable for restart")?;
+    let mut command = Command::new(executable);
+    command
+        .arg("__delayed-daemon-restart")
+        .arg("--config")
+        .arg(config_path)
+        .arg("--delay-ms")
+        .arg("750")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command.spawn().with_context(|| {
+        format!(
+            "spawning delayed daemon restart for {}",
+            config_path.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn revision_for_bytes(bytes: &[u8]) -> String {
@@ -2723,5 +2552,51 @@ mod tests {
                 .iter()
                 .any(|blocker| blocker.contains("explicitly disabled"))
         );
+    }
+
+    #[test]
+    fn build_combined_patches_writes_only_daemon_config() {
+        let input = PlanCapabilityPackConfigInput {
+            explicit_enabled: vec!["context_guidance".to_string()],
+            explicit_disabled: Vec::new(),
+            daemon_patches: Vec::new(),
+        };
+        let daemon = json!({});
+
+        let patches = build_combined_patches(&input, &daemon).expect("patches");
+
+        assert!(
+            patches
+                .iter()
+                .all(|patch| patch.target == PlannerTargetKind::Daemon)
+        );
+        assert!(
+            patches
+                .iter()
+                .any(|patch| patch.path == ["runtime", "capability_policy", "explicit_enabled"])
+        );
+        assert!(patches.iter().all(|patch| !matches!(
+            patch.path.first().map(String::as_str),
+            Some("agents" | "devql")
+        )));
+    }
+
+    #[test]
+    fn build_combined_patches_rejects_repo_local_targets() {
+        let input = PlanCapabilityPackConfigInput {
+            explicit_enabled: Vec::new(),
+            explicit_disabled: Vec::new(),
+            daemon_patches: vec![CapabilityPackFieldPatchInput {
+                target: "repo_local".to_string(),
+                path: vec!["devql".to_string(), "sync_enabled".to_string()],
+                value: Some(Json(json!(true))),
+                unset: None,
+            }],
+        };
+
+        let err =
+            build_combined_patches(&input, &json!({})).expect_err("repo-local patch should fail");
+
+        assert!(err.to_string().contains("daemon-scoped"));
     }
 }

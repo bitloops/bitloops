@@ -39,7 +39,7 @@ fn resolve_executable(command: &str) -> Option<PathBuf> {
     }
 
     let path_env = env::var_os("PATH");
-    resolve_command_on_path(command, path_env.as_ref().map(|value| value.as_os_str()))
+    resolve_command_on_path(command, path_env.as_deref())
 }
 
 fn is_path_like_command(command: &str) -> bool {

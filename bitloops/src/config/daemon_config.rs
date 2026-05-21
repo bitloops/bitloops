@@ -11,6 +11,8 @@ mod toml;
 #[path = "daemon_config/tests.rs"]
 mod tests;
 
+pub(crate) use file::default_daemon_config_toml;
+#[cfg(test)]
 pub(crate) use file::persist_daemon_store_backend_selection;
 pub(crate) use file::validate_daemon_config_text;
 pub use file::{
@@ -23,4 +25,4 @@ pub(crate) use install::{
     prepare_daemon_embeddings_install, prepare_daemon_inference_install,
     prepare_daemon_local_embeddings_profile_install, prepare_daemon_platform_embeddings_install,
 };
-pub(crate) use plans::{DaemonEmbeddingsInstallMode, DaemonEmbeddingsInstallPlan};
+pub(crate) use plans::DaemonEmbeddingsInstallMode;

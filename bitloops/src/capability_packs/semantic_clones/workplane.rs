@@ -120,6 +120,7 @@ pub fn deactivate_embedding_pipeline_mailboxes(repo_root: &Path, source: &str) -
     )
 }
 
+#[allow(dead_code)]
 pub fn activate_selected_pipeline_mailboxes(
     repo_root: &Path,
     source: &str,

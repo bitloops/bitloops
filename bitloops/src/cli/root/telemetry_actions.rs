@@ -128,6 +128,7 @@ pub(crate) fn telemetry_action_for_command(
         crate::cli::Commands::Clean(args) => Some(clean_action(args)),
         crate::cli::Commands::Reset(args) => Some(reset_action(args)),
         crate::cli::Commands::Init(args) => Some(init_action(args)),
+        crate::cli::Commands::Configure(args) => Some(configure_action(args)),
         crate::cli::Commands::Login(args) => Some(login_action(args)),
         crate::cli::Commands::Logout(_args) => Some(logout_action()),
         crate::cli::Commands::Enable(args) => Some(enable_action(args)),
@@ -146,10 +147,11 @@ pub(crate) fn telemetry_action_for_command(
         crate::cli::Commands::DevqlWatcher(_) => None,
         crate::cli::Commands::DaemonProcess(_) => None,
         crate::cli::Commands::DaemonSupervisor(_) => None,
+        crate::cli::Commands::DelayedDaemonRestart(_) => None,
         crate::cli::Commands::Doctor(args) => Some(doctor_action(args)),
         crate::cli::Commands::SendAnalytics(_) => None,
         crate::cli::Commands::Completion(_) => None,
-        crate::cli::Commands::CurlBashPostInstall => None,
+        crate::cli::Commands::CurlBashPostInstall(_) => None,
         crate::cli::Commands::Help(args) => Some(help_action(args)),
     }
 }
@@ -188,6 +190,21 @@ fn daemon_start_action(
     insert_bool_property(&mut props, "has_host", args.host.is_some());
     insert_bool_property(&mut props, "has_bundle_dir", args.bundle_dir.is_some());
     new_action("bitloops daemon start", props)
+}
+
+fn configure_action(
+    args: &crate::cli::configure::ConfigureArgs,
+) -> crate::telemetry::analytics::ActionDescriptor {
+    let mut props = HashMap::new();
+    let mut flags = Vec::new();
+    if args.web {
+        flags.push("web");
+    }
+    if args.file.is_some() {
+        flags.push("file");
+    }
+    insert_flags(&mut props, flags);
+    new_action("bitloops configure", props)
 }
 
 fn daemon_stop_action(
@@ -355,35 +372,11 @@ fn init_action(args: &crate::cli::init::InitArgs) -> crate::telemetry::analytics
 
     let mut props = HashMap::new();
     let mut flags = Vec::new();
-    if args.install_default_daemon {
-        flags.push("install_default_daemon");
-    }
     if args.force {
         flags.push("force");
     }
-    if args.telemetry.is_some() {
-        flags.push("telemetry");
-    }
-    if args.no_telemetry {
-        flags.push("no_telemetry");
-    }
-    if args.skip_baseline {
-        flags.push("skip_baseline");
-    }
-    if args.no_summaries {
-        flags.push("no_summaries");
-    }
-    if args.context_guidance_runtime.is_some() {
-        flags.push("context_guidance_runtime");
-    }
-    if args.no_context_guidance {
-        flags.push("no_context_guidance");
-    }
-    if args.context_guidance_gateway_url.is_some() {
-        flags.push("context_guidance_gateway_url");
-    }
-    if args.context_guidance_api_key_env.is_some() {
-        flags.push("context_guidance_api_key_env");
+    if args.disable_devql_guidance {
+        flags.push("disable_devql_guidance");
     }
     if !args.exclude.is_empty() {
         flags.push("exclude");

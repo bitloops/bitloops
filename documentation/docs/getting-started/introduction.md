@@ -19,10 +19,11 @@ If you are upgrading from the older repo-local JSON model, read the [upgrade not
 
 ## Core Ideas
 
-- The fastest way to get started inside a repository is `bitloops init --install-default-daemon`
+- The fastest way to get started is `bitloops configure --web`, then `bitloops init` inside each repo
+- `bitloops configure` owns daemon config, capability packs, inference, telemetry, and daemon restart handoff
 - `bitloops start` launches the global daemon and can prompt to create the default daemon config on a fresh machine
 - `bitloops start --create-default-config` remains the explicit bootstrap path for the default daemon config plus local default store files
-- first-run interactive telemetry consent belongs to that default-config bootstrap in `bitloops start`
+- telemetry consent belongs to daemon configuration
 - `bitloops init` bootstraps the current project or subproject and can optionally queue an initial current-state sync
 - `bitloops enable` and `bitloops disable` let you toggle `Capture` and `DevQL Guidance` in the current project policy
 - `bitloops dashboard` opens the dashboard and starts the daemon if needed
@@ -31,4 +32,4 @@ If you are upgrading from the older repo-local JSON model, read the [upgrade not
 
 ## Next Step
 
-Follow the [quickstart](./quickstart.md) to initialise a project with `bitloops init --install-default-daemon`, or to use the explicit daemon-start flow when you need it.
+Follow the [quickstart](./quickstart.md) to configure the daemon and initialise a project.
