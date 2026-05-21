@@ -33,7 +33,7 @@ config_path = "/tmp/daemon/config.toml"
 fn file_repo_policy_source_exposes_strict_and_optional_policy_reads() {
     let repo = tempdir().expect("temp dir");
     std::fs::create_dir_all(repo.path().join(".git")).expect("create .git");
-    let source = FileRepoPolicySource::default();
+    let source = FileRepoPolicySource;
 
     let optional = source
         .discover_optional(repo.path())

@@ -408,10 +408,10 @@ fn apply_repo_semantic_embedding_policy(
         summary_mode.is_some() || repo_inference.summary_generation.as_ref().is_some();
     if repo_controls_summaries {
         inference.remove("summary_generation");
-        if summary_mode != Some(SemanticSummaryMode::Off) {
-            if let Some(profile) = repo_inference.summary_generation {
-                inference.insert("summary_generation".to_string(), Value::String(profile));
-            }
+        if summary_mode != Some(SemanticSummaryMode::Off)
+            && let Some(profile) = repo_inference.summary_generation
+        {
+            inference.insert("summary_generation".to_string(), Value::String(profile));
         }
     }
 
