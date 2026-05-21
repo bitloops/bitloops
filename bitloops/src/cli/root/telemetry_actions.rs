@@ -373,6 +373,9 @@ fn init_action(args: &crate::cli::init::InitArgs) -> crate::telemetry::analytics
     if args.no_summaries {
         flags.push("no_summaries");
     }
+    if args.summaries_mode.is_some() {
+        flags.push("summaries_mode");
+    }
     if args.context_guidance_runtime.is_some() {
         flags.push("context_guidance_runtime");
     }

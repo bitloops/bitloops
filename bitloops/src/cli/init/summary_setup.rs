@@ -9,20 +9,25 @@ use crate::cli::inference::{
 use crate::cli::telemetry_consent;
 use crate::config::{SemanticSummaryMode, resolve_semantic_clones_config_for_repo};
 
+use super::InitArgs;
+use super::args::SummariesMode;
 use super::cloud_login_status::resolve_cloud_logged_in_for_optional_setup;
 
 pub(crate) async fn choose_summary_setup_during_init(
     repo_root: &Path,
-    install_default_daemon: bool,
-    no_summaries: bool,
+    args: &InitArgs,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<SummarySetupSelection> {
-    if no_summaries {
+    if args.no_summaries || args.summaries_mode == Some(SummariesMode::Off) {
         return Ok(SummarySetupSelection::Skip);
     }
 
-    if resolve_semantic_clones_config_for_repo(repo_root).summary_mode == SemanticSummaryMode::Off {
+    let force_summaries_on = args.summaries_mode == Some(SummariesMode::On);
+    if !force_summaries_on
+        && resolve_semantic_clones_config_for_repo(repo_root).summary_mode
+            == SemanticSummaryMode::Off
+    {
         return Ok(SummarySetupSelection::Skip);
     }
 
@@ -43,7 +48,7 @@ pub(crate) async fn choose_summary_setup_during_init(
         out,
         input,
         interactive,
-        install_default_daemon,
+        args.install_default_daemon,
         cloud_logged_in,
     )
 }

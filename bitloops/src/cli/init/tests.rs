@@ -210,6 +210,7 @@ fn init_status_command_args(status_args: InitStatusArgs) -> InitArgs {
         embeddings_runtime: None,
         no_embeddings: false,
         no_summaries: false,
+        summaries_mode: None,
         context_guidance_runtime: None,
         no_context_guidance: false,
         context_guidance_gateway_url: None,
@@ -287,6 +288,7 @@ fn render_install_default_daemon_handoff_with_mkcert(
                                         embeddings_runtime: None,
                                         no_embeddings: true,
                                         no_summaries: false,
+                                        summaries_mode: None,
                                         context_guidance_runtime: None,
                                         no_context_guidance: false,
                                         context_guidance_gateway_url: None,
@@ -717,6 +719,8 @@ fn init_args_leave_embeddings_choice_unset_when_flags_are_omitted() {
 
     assert_eq!(args.embeddings_runtime, None);
     assert!(!args.no_embeddings);
+    assert_eq!(args.summaries_mode, None);
+    assert!(!args.no_summaries);
 }
 
 #[test]
@@ -755,6 +759,37 @@ fn init_args_support_no_summaries_flag() {
     };
 
     assert!(args.no_summaries);
+    assert_eq!(args.summaries_mode, None);
+}
+
+#[test]
+fn init_args_support_summaries_mode_flag_values() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--summaries-mode", "on"])
+        .expect("parse init summaries-mode on");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+
+    assert_eq!(
+        args.summaries_mode,
+        Some(crate::cli::init::SummariesMode::On)
+    );
+    assert!(!args.no_summaries);
+}
+
+#[test]
+fn init_args_reject_conflicting_no_summaries_and_summaries_mode_flags() {
+    let err = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--no-summaries",
+        "--summaries-mode",
+        "on",
+    ])
+    .err()
+    .expect("conflicting summaries flags should fail");
+
+    assert!(err.to_string().contains("--no-summaries"));
 }
 
 #[test]
@@ -838,6 +873,11 @@ fn choose_context_guidance_setup_during_init_skips_noninteractive_without_explic
 #[test]
 fn choose_summary_setup_during_init_skips_when_summary_mode_is_off() {
     let repo = tempfile::tempdir().expect("tempdir");
+    let parsed =
+        Cli::try_parse_from(["bitloops", "init", "--install-default-daemon"]).expect("parse init");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
     std::fs::write(
         repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
         "[semantic_clones]\nsummary_mode = \"off\"\n",
@@ -849,8 +889,7 @@ fn choose_summary_setup_during_init_skips_when_summary_mode_is_off() {
     let selection = test_runtime()
         .block_on(choose_summary_setup_during_init(
             repo.path(),
-            true,
-            false,
+            &args,
             &mut out,
             &mut input,
         ))
@@ -863,8 +902,60 @@ fn choose_summary_setup_during_init_skips_when_summary_mode_is_off() {
 }
 
 #[test]
+fn choose_summary_setup_during_init_on_bypasses_summary_mode_off() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--install-default-daemon",
+        "--summaries-mode",
+        "on",
+    ])
+    .expect("parse init summaries-mode on");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    std::fs::write(
+        repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+        "[semantic_clones]\nsummary_mode = \"off\"\n",
+    )
+    .expect("write config");
+    let mut out = Vec::new();
+    let mut input = Cursor::new("");
+
+    let selection = with_test_tty_override(false, || {
+        with_summary_generation_configured_hook(
+            |_| false,
+            || {
+                with_cloud_login_status_hook(
+                    || Ok(false),
+                    || {
+                        test_runtime().block_on(choose_summary_setup_during_init(
+                            repo.path(),
+                            &args,
+                            &mut out,
+                            &mut input,
+                        ))
+                    },
+                )
+            },
+        )
+    })
+    .expect("choose summary setup");
+
+    assert_eq!(
+        selection,
+        crate::cli::inference::SummarySetupSelection::Local
+    );
+}
+
+#[test]
 fn choose_summary_setup_interactive_does_not_resolve_cloud_login_status() {
     let repo = tempfile::tempdir().expect("tempdir");
+    let parsed = Cli::try_parse_from(["bitloops", "init"]).expect("parse init");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
     let mut out = Vec::new();
     let mut input = Cursor::new("\n");
 
@@ -877,8 +968,7 @@ fn choose_summary_setup_interactive_does_not_resolve_cloud_login_status() {
                     || {
                         test_runtime().block_on(choose_summary_setup_during_init(
                             repo.path(),
-                            false,
-                            false,
+                            &args,
                             &mut out,
                             &mut input,
                         ))
@@ -900,6 +990,10 @@ fn choose_summary_setup_interactive_does_not_resolve_cloud_login_status() {
 #[test]
 fn choose_summary_setup_noninteractive_treats_login_error_as_not_logged_in() {
     let repo = tempfile::tempdir().expect("tempdir");
+    let parsed = Cli::try_parse_from(["bitloops", "init"]).expect("parse init");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
     let mut out = Vec::new();
     let mut input = Cursor::new("");
 
@@ -912,8 +1006,7 @@ fn choose_summary_setup_noninteractive_treats_login_error_as_not_logged_in() {
                     || {
                         test_runtime().block_on(choose_summary_setup_during_init(
                             repo.path(),
-                            false,
-                            false,
+                            &args,
                             &mut out,
                             &mut input,
                         ))
@@ -1487,6 +1580,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
                 embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
+                summaries_mode: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -1578,6 +1672,7 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
                 embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
+                summaries_mode: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -1638,6 +1733,7 @@ keep = true
                 embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
+                summaries_mode: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -1698,6 +1794,7 @@ fn run_init_binds_repo_to_running_daemon_config() {
                 embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
+                summaries_mode: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -1769,6 +1866,7 @@ fn run_init_requests_daemon_watcher_reconcile_when_sync_is_disabled() {
                         embeddings_runtime: None,
                         no_embeddings: false,
                         no_summaries: false,
+                        summaries_mode: None,
                         context_guidance_runtime: None,
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
@@ -1885,6 +1983,7 @@ fn run_init_reconciles_daemon_watcher_before_sync_progress_when_sync_is_enabled(
                                 embeddings_runtime: None,
                                 no_embeddings: true,
                                 no_summaries: true,
+                                summaries_mode: None,
                                 context_guidance_runtime: None,
                                 no_context_guidance: true,
                                 context_guidance_gateway_url: None,
@@ -1964,6 +2063,7 @@ fn run_init_surfaces_daemon_watcher_reconcile_failures() {
                         embeddings_runtime: None,
                         no_embeddings: false,
                         no_summaries: false,
+                        summaries_mode: None,
                         context_guidance_runtime: None,
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
@@ -2048,6 +2148,7 @@ fn run_init_sync_enabled_fails_when_daemon_watcher_reconcile_fails() {
                                 embeddings_runtime: None,
                                 no_embeddings: true,
                                 no_summaries: true,
+                                summaries_mode: None,
                                 context_guidance_runtime: None,
                                 no_context_guidance: true,
                                 context_guidance_gateway_url: None,
@@ -2126,6 +2227,7 @@ fn run_init_requests_nested_repo_daemon_watcher_reconcile_when_sync_is_disabled(
                         embeddings_runtime: None,
                         no_embeddings: false,
                         no_summaries: false,
+                        summaries_mode: None,
                         context_guidance_runtime: None,
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
@@ -2196,6 +2298,7 @@ fn run_init_does_not_request_daemon_watcher_reconcile_when_repo_setup_fails() {
                         embeddings_runtime: None,
                         no_embeddings: false,
                         no_summaries: false,
+                        summaries_mode: None,
                         context_guidance_runtime: None,
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
@@ -2254,6 +2357,7 @@ fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
                 embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
+                summaries_mode: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2310,6 +2414,7 @@ fn run_init_rewrites_existing_daemon_binding() {
                 embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
+                summaries_mode: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2374,6 +2479,7 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
                 embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
+                summaries_mode: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2434,6 +2540,7 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                         embeddings_runtime: None,
                         no_embeddings: false,
                         no_summaries: false,
+                        summaries_mode: None,
                         context_guidance_runtime: None,
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
@@ -2495,6 +2602,7 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
                     embeddings_runtime: None,
                     no_embeddings: false,
                     no_summaries: false,
+                    summaries_mode: None,
                     context_guidance_runtime: None,
                     no_context_guidance: false,
                     context_guidance_gateway_url: None,
@@ -2549,6 +2657,7 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
                 embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
+                summaries_mode: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2600,6 +2709,7 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
                 embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
+                summaries_mode: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2658,6 +2768,7 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
                 embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
+                summaries_mode: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2780,6 +2891,7 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
                 embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
+                summaries_mode: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -2860,6 +2972,7 @@ fn run_init_with_invalid_explicit_agent_errors() {
                 embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
+                summaries_mode: None,
                 context_guidance_runtime: None,
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
@@ -3239,6 +3352,7 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                             embeddings_runtime: None,
                             no_embeddings: false,
                             no_summaries: false,
+                            summaries_mode: None,
                             context_guidance_runtime: None,
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
@@ -3303,6 +3417,7 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                             embeddings_runtime: None,
                             no_embeddings: false,
                             no_summaries: false,
+                            summaries_mode: None,
                             context_guidance_runtime: None,
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
@@ -3353,6 +3468,7 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                     embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                     no_embeddings: false,
                     no_summaries: false,
+                    summaries_mode: None,
                     context_guidance_runtime: None,
                     no_context_guidance: false,
                     context_guidance_gateway_url: None,
@@ -3449,6 +3565,7 @@ fn run_init_with_install_default_daemon_shows_shell_escaped_config_path() {
                                                                 embeddings_runtime: None,
                                                                 no_embeddings: true,
                                                                 no_summaries: false,
+                                                                summaries_mode: None,
                                                                 context_guidance_runtime: None,
                                                                 no_context_guidance: false,
                                                                 context_guidance_gateway_url: None,
@@ -3587,6 +3704,7 @@ fn run_init_without_install_default_daemon_prompts_for_skippable_embeddings_setu
                             embeddings_runtime: None,
                             no_embeddings: false,
                             no_summaries: false,
+                            summaries_mode: None,
                             context_guidance_runtime: None,
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
@@ -3667,6 +3785,7 @@ fn run_init_interactive_without_install_default_daemon_uses_full_setup_prompt_pa
                                     embeddings_runtime: None,
                                     no_embeddings: false,
                                     no_summaries: false,
+                                    summaries_mode: None,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -3757,6 +3876,7 @@ fn run_init_without_install_default_daemon_explicit_local_persists_repo_policy()
                         embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                         no_embeddings: false,
                         no_summaries: false,
+                        summaries_mode: None,
                         context_guidance_runtime: None,
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
@@ -3833,6 +3953,7 @@ fn run_init_without_install_default_daemon_explicit_platform_persists_repo_polic
                                 ),
                                 no_embeddings: false,
                                 no_summaries: false,
+                                summaries_mode: None,
                                 context_guidance_runtime: None,
                                 no_context_guidance: false,
                                 context_guidance_gateway_url: None,
@@ -4164,6 +4285,7 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                                             no_embeddings: false,
                                                                             no_summaries: false,
+                                                                            summaries_mode: None,
                                                                             context_guidance_runtime: None,
                                                                             no_context_guidance: false,
                                                                             context_guidance_gateway_url: None,
@@ -4344,6 +4466,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                             ),
                                             no_embeddings: false,
                                             no_summaries: false,
+                                            summaries_mode: None,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
@@ -4452,6 +4575,7 @@ fn run_init_with_install_default_daemon_leaves_embeddings_unchanged_when_noninte
                                     embeddings_runtime: None,
                                     no_embeddings: false,
                                     no_summaries: false,
+                                    summaries_mode: None,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -4530,6 +4654,7 @@ fn run_init_with_install_default_daemon_can_skip_embeddings_via_flag() {
                                 embeddings_runtime: None,
                                 no_embeddings: true,
                                 no_summaries: false,
+                                summaries_mode: None,
                                 context_guidance_runtime: None,
                                 no_context_guidance: false,
                                 context_guidance_gateway_url: None,
@@ -4664,6 +4789,7 @@ clickhouse_database = "bitloops"
                                     embeddings_runtime: None,
                                     no_embeddings: true,
                                     no_summaries: true,
+                                    summaries_mode: None,
                                     context_guidance_runtime: None,
                                     no_context_guidance: true,
                                     context_guidance_gateway_url: None,
@@ -4759,6 +4885,7 @@ model = "bge-m3"
             embeddings_runtime: None,
             no_embeddings: true,
             no_summaries: false,
+            summaries_mode: None,
             context_guidance_runtime: None,
             no_context_guidance: false,
             context_guidance_gateway_url: None,
@@ -4823,6 +4950,7 @@ fn run_init_no_embeddings_persists_repo_embedding_policy_off() {
                                     embeddings_runtime: None,
                                     no_embeddings: true,
                                     no_summaries: false,
+                                    summaries_mode: None,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -4954,6 +5082,7 @@ model = "bge-m3"
                                             ),
                                             no_embeddings: false,
                                             no_summaries: false,
+                                            summaries_mode: None,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
@@ -5071,6 +5200,7 @@ model = "text-embedding-3-small"
                                     embeddings_runtime: None,
                                     no_embeddings: false,
                                     no_summaries: false,
+                                    summaries_mode: None,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -5171,6 +5301,7 @@ model = "text-embedding-3-small"
                                     embeddings_runtime: None,
                                     no_embeddings: false,
                                     no_summaries: false,
+                                    summaries_mode: None,
                                     context_guidance_runtime: None,
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
@@ -5373,6 +5504,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                                     embeddings_runtime: None,
                                                                     no_embeddings: false,
                                                                     no_summaries: false,
+                                                                    summaries_mode: None,
                                                                     context_guidance_runtime: None,
                                                                     no_context_guidance: false,
                                                                     context_guidance_gateway_url: None,
@@ -5575,6 +5707,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                                 embeddings_runtime: None,
                                                                 no_embeddings: false,
                                                                 no_summaries: false,
+                                                                summaries_mode: None,
                                                                 context_guidance_runtime: None,
                                                                 no_context_guidance: false,
                                                                 context_guidance_gateway_url: None,
@@ -5766,6 +5899,7 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                                     embeddings_runtime: None,
                                                                     no_embeddings: false,
                                                                     no_summaries: false,
+                                                                    summaries_mode: None,
                                                                     context_guidance_runtime: None,
                                                                     no_context_guidance: false,
                                                                     context_guidance_gateway_url: None,
@@ -5929,6 +6063,7 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                 no_embeddings: false,
                                                 no_summaries: false,
+                                                summaries_mode: None,
                                                 context_guidance_runtime: None,
                                                 no_context_guidance: false,
                                                 context_guidance_gateway_url: None,
@@ -6100,6 +6235,7 @@ fn run_init_with_install_default_daemon_renders_follow_up_sync_waiting_state() {
                                                         Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                     no_embeddings: false,
                                                     no_summaries: false,
+                                                    summaries_mode: None,
                                                     context_guidance_runtime: None,
                                                     no_context_guidance: false,
                                                     context_guidance_gateway_url: None,
@@ -6264,6 +6400,7 @@ fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_w
                                                         Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                     no_embeddings: false,
                                                     no_summaries: false,
+                                                    summaries_mode: None,
                                                     context_guidance_runtime: None,
                                                     no_context_guidance: false,
                                                     context_guidance_gateway_url: None,
@@ -6415,6 +6552,7 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
                                                                             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                                             no_embeddings: false,
                                                                             no_summaries: false,
+                                                                            summaries_mode: None,
                                                                             context_guidance_runtime: None,
                                                                             no_context_guidance: false,
                                                                             context_guidance_gateway_url: None,
@@ -6506,6 +6644,7 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                             embeddings_runtime: None,
                             no_embeddings: false,
                             no_summaries: false,
+                            summaries_mode: None,
                             context_guidance_runtime: None,
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
@@ -6695,6 +6834,7 @@ fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
                                             embeddings_runtime: None,
                                             no_embeddings: true,
                                             no_summaries: false,
+                                            summaries_mode: None,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
@@ -6793,6 +6933,7 @@ fn run_init_with_install_default_daemon_can_skip_auto_start() {
                                             embeddings_runtime: None,
                                             no_embeddings: true,
                                             no_summaries: false,
+                                            summaries_mode: None,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
@@ -6850,6 +6991,7 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                     embeddings_runtime: None,
                     no_embeddings: false,
                     no_summaries: false,
+                    summaries_mode: None,
                     context_guidance_runtime: None,
                     no_context_guidance: false,
                     context_guidance_gateway_url: None,
@@ -6976,6 +7118,7 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                             embeddings_runtime: None,
                                             no_embeddings: false,
                                             no_summaries: false,
+                                            summaries_mode: None,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
@@ -7125,6 +7268,7 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                             embeddings_runtime: None,
                                             no_embeddings: false,
                                             no_summaries: false,
+                                            summaries_mode: None,
                                             context_guidance_runtime: None,
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,

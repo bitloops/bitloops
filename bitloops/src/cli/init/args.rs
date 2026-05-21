@@ -8,6 +8,13 @@ use crate::cli::inference::TextGenerationRuntime;
 
 pub(crate) const DEFAULT_INIT_INGEST_BACKFILL: usize = 50;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SummariesMode {
+    Auto,
+    Off,
+    On,
+}
+
 #[derive(Subcommand, Debug, Clone)]
 pub enum InitCommand {
     /// Show init status for the current repository.
@@ -115,6 +122,10 @@ pub struct InitArgs {
     /// Skip semantic summaries setup during init.
     #[arg(long, default_value_t = false)]
     pub no_summaries: bool,
+
+    /// Control semantic summaries setup behavior during init.
+    #[arg(long, value_enum, conflicts_with = "no_summaries")]
+    pub summaries_mode: Option<SummariesMode>,
 
     /// Select which text-generation runtime to configure for context guidance during init.
     #[arg(long, value_enum)]
