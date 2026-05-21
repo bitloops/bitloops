@@ -187,6 +187,44 @@ local_path = "stores/blob"
 }
 
 #[test]
+fn ensure_daemon_store_artifacts_does_not_reopen_existing_duckdb_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let config_path = dir.path().join("config.toml");
+    let duckdb_path = dir.path().join("stores/event/events.duckdb");
+    fs::create_dir_all(duckdb_path.parent().expect("duckdb parent")).expect("create event dir");
+    fs::write(&duckdb_path, b"existing daemon-owned duckdb file").expect("write duckdb file");
+    fs::write(
+        &config_path,
+        r#"
+[runtime]
+local_dev = false
+cli_version = "0.0.12"
+
+[stores.relational]
+sqlite_path = "stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "stores/event/events.duckdb"
+
+[stores.blob]
+local_path = "stores/blob"
+"#,
+    )
+    .expect("write daemon config");
+
+    ensure_daemon_store_artifacts(Some(config_path.as_path()))
+        .expect("bootstrap stores should not reopen an existing DuckDB file");
+
+    assert!(duckdb_path.is_file());
+    assert_eq!(
+        fs::read(&duckdb_path).expect("read duckdb file"),
+        b"existing daemon-owned duckdb file"
+    );
+    assert!(dir.path().join("stores/relational/relational.db").is_file());
+    assert!(dir.path().join("stores/blob").is_dir());
+}
+
+#[test]
 fn persist_daemon_store_backend_selection_copies_remote_store_selection_without_clobbering_local_paths()
  {
     let source = NamedTempFile::new().expect("create source config");

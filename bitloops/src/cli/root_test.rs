@@ -145,6 +145,22 @@ fn TestRootCommand_ConfigureParsesWebMode() {
     };
 
     assert!(args.web);
+    assert!(!args.default_config);
+    assert!(args.file.is_none());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_ConfigureParsesDefaultConfigMode() {
+    let parsed = Cli::try_parse_from(["bitloops", "configure", "--default-config"])
+        .expect("configure --default-config should parse");
+
+    let Some(Commands::Configure(args)) = parsed.command else {
+        panic!("expected configure command");
+    };
+
+    assert!(args.default_config);
+    assert!(!args.web);
     assert!(args.file.is_none());
 }
 
@@ -155,12 +171,19 @@ fn TestRootCommand_ConfigureRequiresExactlyOneMode() {
         .err()
         .expect("configure without a mode should fail");
     assert!(missing.to_string().contains("--web"));
+    assert!(missing.to_string().contains("--default-config"));
 
     let conflicting =
         Cli::try_parse_from(["bitloops", "configure", "--web", "--file", "config.toml"])
             .err()
             .expect("configure modes should conflict");
     assert!(conflicting.to_string().contains("--web"));
+
+    let conflicting_default =
+        Cli::try_parse_from(["bitloops", "configure", "--web", "--default-config"])
+            .err()
+            .expect("configure default config mode should conflict with web mode");
+    assert!(conflicting_default.to_string().contains("--default-config"));
 }
 
 #[test]

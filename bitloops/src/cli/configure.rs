@@ -12,7 +12,7 @@ const CONFIGURATION_ROUTE: &str = "/settings/configuration";
     ArgGroup::new("mode")
         .required(true)
         .multiple(false)
-        .args(["web", "file"])
+        .args(["web", "file", "default_config"])
 ))]
 pub struct ConfigureArgs {
     /// Open the daemon configuration dashboard.
@@ -22,6 +22,10 @@ pub struct ConfigureArgs {
     /// Install a complete daemon config.toml file.
     #[arg(long, value_name = "PATH")]
     pub file: Option<PathBuf>,
+
+    /// Install the default daemon config.toml file.
+    #[arg(long = "default-config", default_value_t = false)]
+    pub default_config: bool,
 }
 
 pub async fn run(args: ConfigureArgs) -> Result<()> {
@@ -35,8 +39,12 @@ pub(crate) async fn run_with_io(args: ConfigureArgs, out: &mut dyn Write) -> Res
         return run_web(out).await;
     }
 
+    if args.default_config {
+        return run_default_config(out).await;
+    }
+
     let Some(path) = args.file.as_deref() else {
-        bail!("missing configure mode; pass `--web` or `--file <path>`");
+        bail!("missing configure mode; pass `--web`, `--file <path>`, or `--default-config`");
     };
     run_file(path, out).await
 }
@@ -59,6 +67,24 @@ async fn run_web(out: &mut dyn Write) -> Result<()> {
 
     crate::api::open_in_default_browser(&url)?;
     writeln!(out, "Opened Bitloops daemon configuration at {url}")?;
+    Ok(())
+}
+
+async fn run_default_config(out: &mut dyn Write) -> Result<()> {
+    log::info!("cli configure default-config: installing generated default daemon config");
+    let target = crate::config::default_daemon_config_path()?;
+    let raw = crate::config::default_daemon_config_toml()?;
+    crate::config::validate_daemon_config_text(&raw, &target)
+        .with_context(|| format!("validating generated daemon config {}", target.display()))?;
+
+    install_config_atomically(&target, raw.as_bytes())?;
+    crate::config::ensure_daemon_store_artifacts(Some(target.as_path()))?;
+
+    writeln!(
+        out,
+        "Installed Bitloops default daemon config at {}",
+        target.display()
+    )?;
     Ok(())
 }
 
@@ -142,7 +168,9 @@ fn install_config_atomically(target: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::test_support::process_state::with_process_state;
-    use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_dir_overrides};
+    use crate::utils::platform_dirs::{
+        TestPlatformDirOverrides, bitloops_data_dir, with_test_platform_dir_overrides,
+    };
     use tempfile::TempDir;
 
     fn runtime() -> tokio::runtime::Runtime {
@@ -186,6 +214,7 @@ mod tests {
                     ConfigureArgs {
                         web: false,
                         file: Some(invalid.clone()),
+                        default_config: false,
                     },
                     &mut out,
                 ));
@@ -194,6 +223,125 @@ mod tests {
                 let default_path =
                     crate::config::default_daemon_config_path().expect("default config path");
                 assert!(!default_path.exists());
+            })
+        });
+    }
+
+    #[test]
+    fn configure_default_config_writes_expected_daemon_config() {
+        let temp = TempDir::new().expect("temp dir");
+
+        with_process_state(None, &[], || {
+            with_test_platform_dir_overrides(app_dir_overrides(&temp), || {
+                let mut out = Vec::new();
+                let result = runtime().block_on(run_with_io(
+                    ConfigureArgs {
+                        web: false,
+                        file: None,
+                        default_config: true,
+                    },
+                    &mut out,
+                ));
+
+                result.expect("configure --default-config should write default config");
+                let output = String::from_utf8(out).expect("output should be utf-8");
+                let default_path =
+                    crate::config::default_daemon_config_path().expect("default config path");
+                assert!(
+                    output.contains(default_path.to_string_lossy().as_ref()),
+                    "output should mention installed config path"
+                );
+
+                let content =
+                    fs::read_to_string(&default_path).expect("default config should exist");
+                crate::config::validate_daemon_config_text(&content, &default_path)
+                    .expect("default daemon config should validate");
+
+                let default_root = Path::new(".");
+                for path in [
+                    crate::utils::paths::default_relational_db_path(default_root),
+                    crate::utils::paths::default_events_db_path(default_root),
+                    crate::utils::paths::default_blob_store_path(default_root),
+                ] {
+                    assert!(
+                        content.contains(path.to_string_lossy().as_ref()),
+                        "default config should contain dynamic path {}",
+                        path.display()
+                    );
+                }
+
+                let data_dir = bitloops_data_dir().expect("data dir");
+                let platform_embeddings_binary_name = if cfg!(windows) {
+                    "bitloops-platform-embeddings.exe"
+                } else {
+                    "bitloops-platform-embeddings"
+                };
+                let bitloops_inference_binary_name = if cfg!(windows) {
+                    "bitloops-inference.exe"
+                } else {
+                    "bitloops-inference"
+                };
+                for path in [
+                    data_dir
+                        .join("tools")
+                        .join("bitloops-platform-embeddings")
+                        .join(platform_embeddings_binary_name),
+                    data_dir
+                        .join("tools")
+                        .join("bitloops-inference")
+                        .join(bitloops_inference_binary_name),
+                ] {
+                    assert!(
+                        content.contains(path.to_string_lossy().as_ref()),
+                        "default config should contain managed tool path {}",
+                        path.display()
+                    );
+                }
+
+                for expected in [
+                    "[runtime]",
+                    "local_dev = false",
+                    concat!("cli_version = \"", env!("CARGO_PKG_VERSION"), "\""),
+                    "[telemetry]",
+                    "enabled = true",
+                    "[inference.runtimes.bitloops_platform_embeddings]",
+                    "args = [\"--api-key-env\", \"BITLOOPS_PLATFORM_GATEWAY_TOKEN\"]",
+                    "[inference.runtimes.bitloops_inference]",
+                    "[inference.profiles.platform_code]",
+                    "driver = \"bitloops_embeddings_ipc\"",
+                    "model = \"bge-m3\"",
+                    "[inference.profiles.guidance_llm]",
+                    "model = \"ministral-3-3b-instruct\"",
+                    "api_key = \"${BITLOOPS_PLATFORM_GATEWAY_TOKEN}\"",
+                    "max_output_tokens = 4096",
+                    "[inference.profiles.summary_llm]",
+                    "max_output_tokens = 200",
+                    "[context_guidance.inference]",
+                    "guidance_generation = \"guidance_llm\"",
+                    "[semantic_clones]",
+                    "summary_mode = \"auto\"",
+                    "[semantic_clones.inference]",
+                    "summary_generation = \"summary_llm\"",
+                    "[inference.profiles.architecture_fact_synthesis_codex]",
+                    "task = \"structured_generation\"",
+                    "runtime = \"codex\"",
+                    "driver = \"codex_exec\"",
+                    "thinking_level = \"low\"",
+                    "[inference.profiles.architecture_role_adjudication_codex]",
+                    "max_output_tokens = 1024",
+                    "[architecture.inference]",
+                    "fact_synthesis = \"architecture_fact_synthesis_codex\"",
+                    "role_adjudication = \"architecture_role_adjudication_codex\"",
+                    "[inference.runtimes.codex]",
+                    "--ask-for-approval",
+                    "never",
+                    "request_timeout_secs = 600",
+                ] {
+                    assert!(
+                        content.contains(expected),
+                        "default config should contain {expected:?}"
+                    );
+                }
             })
         });
     }

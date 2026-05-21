@@ -51,7 +51,7 @@ pub(crate) fn choose_final_setup_options(
         sync: sync.unwrap_or(true),
         ingest: ingest.unwrap_or(true),
         telemetry: prompt_options.show_telemetry,
-        auto_start_daemon: prompt_options.show_auto_start_daemon && can_prompt,
+        auto_start_daemon: prompt_options.show_auto_start_daemon,
     };
     let requires_prompt = ((sync.is_none() || ingest.is_none())
         && prompt_options.show_sync_and_ingest)
@@ -514,4 +514,32 @@ fn selected_follow_up_checkbox() -> String {
 fn selected_follow_up_label(label: &str) -> String {
     const SELECTION_WHITE_HEX: &str = "#ffffff";
     color_hex_if_enabled(label, SELECTION_WHITE_HEX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_start_daemon_defaults_true_when_option_is_shown_without_prompting() {
+        crate::cli::telemetry_consent::with_test_tty_override(false, || {
+            let mut out = Vec::new();
+            let mut input = std::io::Cursor::new(Vec::<u8>::new());
+
+            let selection = choose_final_setup_options(
+                Some(true),
+                &mut out,
+                &mut input,
+                Some(true),
+                InitFinalSetupPromptOptions {
+                    show_sync_and_ingest: true,
+                    show_telemetry: false,
+                    show_auto_start_daemon: true,
+                },
+            )
+            .expect("selection should use defaults");
+
+            assert!(selection.auto_start_daemon);
+        });
+    }
 }

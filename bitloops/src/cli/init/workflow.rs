@@ -16,9 +16,18 @@ use crate::adapters::agents::AgentAdapterRegistry;
 use crate::cli::telemetry_consent;
 use crate::config::REPO_POLICY_LOCAL_FILE_NAME;
 use crate::config::settings::{
-    DEFAULT_STRATEGY, load_settings, set_devql_producer_settings, set_scope_exclusions,
+    DEFAULT_STRATEGY, load_settings, repo_semantic_embedding_policy, set_devql_producer_settings,
+    set_repo_semantic_embedding_policy, set_scope_exclusions,
     write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance,
 };
+use crate::config::{
+    RepoSemanticEmbeddingPolicy, SemanticCloneEmbeddingMode, SemanticClonesInferenceBindings,
+    SemanticSummaryMode,
+};
+
+const DEFAULT_INIT_CODE_EMBEDDINGS_PROFILE: &str = "platform_code";
+const DEFAULT_INIT_SUMMARY_GENERATION_PROFILE: &str = "summary_llm";
+const DEFAULT_INIT_SUMMARY_EMBEDDINGS_PROFILE: &str = "platform_code";
 
 fn resolve_cli_agents(values: &[String]) -> Result<Vec<String>> {
     let registry = AgentAdapterRegistry::builtin();
@@ -88,6 +97,7 @@ pub(crate) async fn run_for_project_root(
     if !scope_exclude.is_empty() || !scope_exclude_from.is_empty() {
         set_scope_exclusions(&local_policy_path, &scope_exclude, &scope_exclude_from)?;
     }
+    let semantic_policy = ensure_init_semantic_policy(&local_policy_path, project_root)?;
 
     let settings = load_settings(project_root).unwrap_or_default();
     let _git_count = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
@@ -130,6 +140,7 @@ pub(crate) async fn run_for_project_root(
     let should_sync = final_setup_selection.sync;
     let should_ingest = final_setup_selection.ingest;
     set_devql_producer_settings(&local_policy_path, should_sync, should_ingest)?;
+    let semantic_selection = init_semantic_runtime_selection(should_sync, &semantic_policy);
 
     if crate::daemon::daemon_url()?.is_some() {
         crate::cli::watcher_bootstrap::reconcile_repo_watcher(project_root)
@@ -153,9 +164,9 @@ pub(crate) async fn run_for_project_root(
                     repo_id: scope.repo.repo_id.clone(),
                     run_sync: should_sync,
                     run_ingest: should_ingest,
-                    run_code_embeddings: false,
-                    run_summaries: false,
-                    run_summary_embeddings: false,
+                    run_code_embeddings: semantic_selection.run_code_embeddings,
+                    run_summaries: semantic_selection.run_summaries,
+                    run_summary_embeddings: semantic_selection.run_summary_embeddings,
                     ingest_backfill,
                     embeddings_bootstrap: None,
                     summaries_bootstrap: None,
@@ -167,6 +178,70 @@ pub(crate) async fn run_for_project_root(
     }
 
     Ok(())
+}
+
+fn ensure_init_semantic_policy(
+    local_policy_path: &Path,
+    project_root: &Path,
+) -> Result<RepoSemanticEmbeddingPolicy> {
+    let existing = repo_semantic_embedding_policy(project_root)?;
+    if existing.present {
+        return Ok(existing);
+    }
+
+    let policy = default_init_semantic_policy();
+    set_repo_semantic_embedding_policy(local_policy_path, &policy)?;
+    Ok(policy)
+}
+
+fn default_init_semantic_policy() -> RepoSemanticEmbeddingPolicy {
+    RepoSemanticEmbeddingPolicy {
+        present: true,
+        summary_mode: Some(SemanticSummaryMode::Auto),
+        embedding_mode: Some(SemanticCloneEmbeddingMode::SemanticAwareOnce),
+        inference: SemanticClonesInferenceBindings {
+            summary_generation: Some(DEFAULT_INIT_SUMMARY_GENERATION_PROFILE.to_string()),
+            code_embeddings: Some(DEFAULT_INIT_CODE_EMBEDDINGS_PROFILE.to_string()),
+            summary_embeddings: Some(DEFAULT_INIT_SUMMARY_EMBEDDINGS_PROFILE.to_string()),
+        },
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InitSemanticRuntimeSelection {
+    run_code_embeddings: bool,
+    run_summaries: bool,
+    run_summary_embeddings: bool,
+}
+
+fn init_semantic_runtime_selection(
+    should_sync: bool,
+    policy: &RepoSemanticEmbeddingPolicy,
+) -> InitSemanticRuntimeSelection {
+    let embeddings_enabled = policy.embedding_mode != Some(SemanticCloneEmbeddingMode::Off);
+    let summaries_enabled = policy.summary_mode != Some(SemanticSummaryMode::Off);
+    let run_code_embeddings = should_sync
+        && embeddings_enabled
+        && non_empty_profile(policy.inference.code_embeddings.as_deref());
+    let run_summaries = should_sync
+        && summaries_enabled
+        && non_empty_profile(policy.inference.summary_generation.as_deref());
+    let run_summary_embeddings = run_code_embeddings
+        && run_summaries
+        && embeddings_enabled
+        && non_empty_profile(policy.inference.summary_embeddings.as_deref());
+
+    InitSemanticRuntimeSelection {
+        run_code_embeddings,
+        run_summaries,
+        run_summary_embeddings,
+    }
+}
+
+fn non_empty_profile(profile: Option<&str>) -> bool {
+    profile
+        .map(str::trim)
+        .is_some_and(|profile| !profile.is_empty())
 }
 
 fn existing_daemon_config_path() -> Result<Option<PathBuf>> {
