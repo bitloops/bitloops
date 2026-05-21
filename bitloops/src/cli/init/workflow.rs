@@ -30,7 +30,7 @@ use crate::cli::inference::{
     configure_cloud_summary_generation, configure_local_context_guidance_generation,
     configure_local_summary_generation, platform_context_guidance_gateway_url_override,
     platform_summary_gateway_url_override, prepare_cloud_summary_generation_plan,
-    prepare_local_summary_generation_plan, summary_generation_configured,
+    prepare_local_summary_generation_plan,
 };
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
@@ -245,7 +245,7 @@ pub(crate) async fn run_for_project_root(
         out.write_all(&surface_updates)?;
         out.flush()?;
     }
-    let final_setup_selection = choose_final_setup_options(
+    let mut final_setup_selection = choose_final_setup_options(
         args.sync,
         out,
         input,
@@ -255,11 +255,24 @@ pub(crate) async fn run_for_project_root(
             show_auto_start_daemon: args.install_default_daemon && !daemon_already_always_on,
         },
     )?;
+    if args.no_embeddings {
+        final_setup_selection.code_embeddings = false;
+        final_setup_selection.summary_embeddings = false;
+    }
+    if args.no_summaries {
+        final_setup_selection.summaries = false;
+        final_setup_selection.summary_embeddings = false;
+    }
+    if args.embeddings_runtime.is_some() && !args.no_embeddings {
+        final_setup_selection.code_embeddings = true;
+    }
     let repo_selected_embedding_lanes =
         init_repo_selected_embedding_lanes(final_setup_selection, args.no_summaries);
     let mut embeddings_bootstrap = None;
     let mut embeddings_bootstrap_rollback_plan = None;
     let mut prepared_summary_setup = None;
+    let mut selected_embedding_profile_name: Option<String> = None;
+    let mut selected_summary_generation_profile_name: Option<String> = None;
     let mut login_required = false;
     let embeddings_selection = should_install_embeddings_during_init(
         project_root,
@@ -271,12 +284,10 @@ pub(crate) async fn run_for_project_root(
     match embeddings_selection {
         InitEmbeddingsSetupSelection::Unchanged => {}
         InitEmbeddingsSetupSelection::Existing => {
-            persist_init_embeddings_policy(
-                project_root,
-                &local_policy_path,
-                InitEmbeddingsSetupSelection::Existing,
-                None,
-            )?;
+            selected_embedding_profile_name =
+                embedding_profile_name_from_policy(&previous_embeddings_policy)
+                    .map(str::to_string)
+                    .or(existing_init_embedding_profile_name(project_root)?);
         }
         InitEmbeddingsSetupSelection::Cloud => {
             login_required = true;
@@ -289,12 +300,8 @@ pub(crate) async fn run_for_project_root(
                     gateway_url.as_deref(),
                     Some(args.embeddings_api_key_env.as_str()),
                 )?;
-                persist_init_embeddings_policy(
-                    project_root,
-                    &local_policy_path,
-                    InitEmbeddingsSetupSelection::Cloud,
-                    Some(&prepared_bootstrap.request.profile_name),
-                )?;
+                selected_embedding_profile_name =
+                    Some(prepared_bootstrap.request.profile_name.clone());
                 embeddings_bootstrap_rollback_plan = prepared_bootstrap.rollback_plan;
                 embeddings_bootstrap = Some(prepared_bootstrap.request);
             } else {
@@ -305,6 +312,8 @@ pub(crate) async fn run_for_project_root(
                 )? {
                     writeln!(out, "{line}")?;
                 }
+                selected_embedding_profile_name =
+                    existing_init_embedding_profile_name(project_root)?;
             }
         }
         InitEmbeddingsSetupSelection::Local => {
@@ -315,26 +324,17 @@ pub(crate) async fn run_for_project_root(
                     None,
                     None,
                 )?;
-                persist_init_embeddings_policy(
-                    project_root,
-                    &local_policy_path,
-                    InitEmbeddingsSetupSelection::Local,
-                    Some(&prepared_bootstrap.request.profile_name),
-                )?;
+                selected_embedding_profile_name =
+                    Some(prepared_bootstrap.request.profile_name.clone());
                 embeddings_bootstrap_rollback_plan = prepared_bootstrap.rollback_plan;
                 embeddings_bootstrap = Some(prepared_bootstrap.request);
             } else {
                 install_embeddings_during_init(project_root, out)?;
+                selected_embedding_profile_name =
+                    existing_init_embedding_profile_name(project_root)?;
             }
         }
-        InitEmbeddingsSetupSelection::Skip => {
-            persist_init_embeddings_policy(
-                project_root,
-                &local_policy_path,
-                InitEmbeddingsSetupSelection::Skip,
-                None,
-            )?;
-        }
+        InitEmbeddingsSetupSelection::Skip => {}
     }
     let summary_selection = choose_summary_setup_during_init(
         project_root,
@@ -347,6 +347,10 @@ pub(crate) async fn run_for_project_root(
     .await?;
     if matches!(summary_selection, SummarySetupSelection::Cloud) {
         login_required = true;
+    }
+    if final_setup_selection.summaries {
+        selected_summary_generation_profile_name =
+            existing_init_summary_generation_profile_name(project_root);
     }
     let context_guidance_selection =
         choose_context_guidance_setup_during_init(project_root, &args, out, input).await?;
@@ -363,9 +367,10 @@ pub(crate) async fn run_for_project_root(
         SummarySetupSelection::Cloud => {
             let gateway_url_override = platform_summary_gateway_url_override();
             if args.install_default_daemon {
-                prepared_summary_setup = Some(prepare_cloud_summary_generation_plan(
-                    gateway_url_override.as_deref(),
-                ));
+                let plan = prepare_cloud_summary_generation_plan(gateway_url_override.as_deref());
+                selected_summary_generation_profile_name =
+                    prepared_summary_generation_profile_name(&plan).map(str::to_string);
+                prepared_summary_setup = Some(plan);
             } else {
                 let message = configure_cloud_summary_generation(
                     project_root,
@@ -377,22 +382,25 @@ pub(crate) async fn run_for_project_root(
                     )
                 })?;
                 writeln!(out, "{message}")?;
+                selected_summary_generation_profile_name =
+                    existing_init_summary_generation_profile_name(project_root);
             }
         }
         SummarySetupSelection::Local => {
             if args.install_default_daemon {
-                prepared_summary_setup = Some(
-                    prepare_local_summary_generation_plan(
-                        out,
-                        input,
-                        telemetry_consent::can_prompt_interactively(),
+                let plan = prepare_local_summary_generation_plan(
+                    out,
+                    input,
+                    telemetry_consent::can_prompt_interactively(),
+                )
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Bitloops init completed, but semantic summary setup failed: {err:#}"
                     )
-                    .map_err(|err| {
-                        anyhow::anyhow!(
-                            "Bitloops init completed, but semantic summary setup failed: {err:#}"
-                        )
-                    })?,
-                );
+                })?;
+                selected_summary_generation_profile_name =
+                    prepared_summary_generation_profile_name(&plan).map(str::to_string);
+                prepared_summary_setup = Some(plan);
             } else {
                 configure_local_summary_generation(
                     project_root,
@@ -405,6 +413,8 @@ pub(crate) async fn run_for_project_root(
                         "Bitloops init completed, but semantic summary setup failed: {err:#}"
                     )
                 })?;
+                selected_summary_generation_profile_name =
+                    existing_init_summary_generation_profile_name(project_root);
             }
         }
         SummarySetupSelection::Skip => {}
@@ -445,8 +455,14 @@ pub(crate) async fn run_for_project_root(
         }
         ContextGuidanceSetupSelection::Skip => {}
     }
+    persist_init_semantic_policy(
+        &local_policy_path,
+        &final_setup_selection,
+        selected_embedding_profile_name.as_deref(),
+        selected_summary_generation_profile_name.as_deref(),
+    )?;
     let summaries_selected =
-        prepared_summary_setup.is_some() || summary_generation_configured(project_root);
+        final_setup_selection.summaries && selected_summary_generation_profile_name.is_some();
     if args.install_default_daemon {
         maybe_enable_default_daemon_service(
             final_setup_selection.auto_start_daemon,
@@ -473,15 +489,16 @@ pub(crate) async fn run_for_project_root(
     let should_ingest = final_setup_selection.ingest;
     set_devql_producer_settings(&local_policy_path, should_sync, should_ingest)?;
     let semantic_policy = resolve_semantic_clones_config_for_repo(project_root);
-    let code_embeddings_selected = semantic_policy.embedding_mode
-        != SemanticCloneEmbeddingMode::Off
+    let code_embeddings_selected = final_setup_selection.code_embeddings
+        && semantic_policy.embedding_mode != SemanticCloneEmbeddingMode::Off
         && semantic_policy
             .inference
             .code_embeddings
             .as_deref()
             .is_some_and(|profile| !profile.trim().is_empty());
-    let summary_embeddings_selected = semantic_policy.embedding_mode
-        != SemanticCloneEmbeddingMode::Off
+    let summary_embeddings_selected = final_setup_selection.summary_embeddings
+        && final_setup_selection.summaries
+        && semantic_policy.embedding_mode != SemanticCloneEmbeddingMode::Off
         && semantic_policy
             .inference
             .summary_embeddings
@@ -621,106 +638,103 @@ mod tests {
     }
 }
 
-fn persist_init_embeddings_policy(
-    repo_root: &Path,
+fn persist_init_semantic_policy(
     local_policy_path: &Path,
-    selection: InitEmbeddingsSetupSelection,
-    selected_profile_name: Option<&str>,
+    selection: &super::final_setup::InitFinalSetupSelection,
+    embedding_profile_name: Option<&str>,
+    summary_generation_profile_name: Option<&str>,
 ) -> Result<()> {
-    let policy = match selection {
-        InitEmbeddingsSetupSelection::Unchanged => return Ok(()),
-        InitEmbeddingsSetupSelection::Skip => RepoSemanticEmbeddingPolicy::disabled(),
-        InitEmbeddingsSetupSelection::Cloud | InitEmbeddingsSetupSelection::Local => {
-            RepoSemanticEmbeddingPolicy::enabled_with_profile(selected_profile_name.unwrap_or(
-                match selection {
-                    InitEmbeddingsSetupSelection::Cloud => "platform_code",
-                    _ => "local_code",
-                },
-            ))
-        }
-        InitEmbeddingsSetupSelection::Existing => {
-            let existing_policy = repo_semantic_embedding_policy(repo_root)?;
-            let code_profile = existing_policy
-                .inference
-                .code_embeddings
-                .as_deref()
-                .map(str::trim)
-                .filter(|profile| !profile.is_empty())
-                .map(str::to_string);
-            let summary_profile = existing_policy
+    let summaries = selection.summaries && summary_generation_profile_name.is_some();
+    let code_embeddings = selection.code_embeddings && embedding_profile_name.is_some();
+    let summary_embeddings =
+        selection.summary_embeddings && selection.summaries && embedding_profile_name.is_some();
+    let embedding_mode = if code_embeddings || summary_embeddings {
+        Some(SemanticCloneEmbeddingMode::SemanticAwareOnce)
+    } else {
+        Some(SemanticCloneEmbeddingMode::Off)
+    };
+
+    set_repo_semantic_embedding_policy(
+        local_policy_path,
+        &RepoSemanticEmbeddingPolicy {
+            present: true,
+            summary_mode: Some(if summaries {
+                crate::config::SemanticSummaryMode::Auto
+            } else {
+                crate::config::SemanticSummaryMode::Off
+            }),
+            embedding_mode,
+            inference: crate::config::SemanticClonesInferenceBindings {
+                summary_generation: summaries.then(|| {
+                    summary_generation_profile_name
+                        .expect("summary profile checked above")
+                        .to_string()
+                }),
+                code_embeddings: code_embeddings.then(|| {
+                    embedding_profile_name
+                        .expect("embedding profile checked above")
+                        .to_string()
+                }),
+                summary_embeddings: summary_embeddings.then(|| {
+                    embedding_profile_name
+                        .expect("embedding profile checked above")
+                        .to_string()
+                }),
+            },
+        },
+    )
+}
+
+fn existing_init_embedding_profile_name(repo_root: &Path) -> Result<Option<String>> {
+    let existing_policy = repo_semantic_embedding_policy(repo_root)?;
+    if let Some(profile_name) = embedding_profile_name_from_policy(&existing_policy) {
+        return Ok(Some(profile_name.to_string()));
+    }
+
+    let config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)
+        .or_else(|_| crate::config::resolve_daemon_config_path_for_repo(repo_root))?;
+    let capability = crate::cli::embeddings::embedding_capability_for_config_path(&config_path)?;
+    Ok(crate::cli::embeddings::selected_inference_profile_name(&capability).map(str::to_string))
+}
+
+fn embedding_profile_name_from_policy(policy: &RepoSemanticEmbeddingPolicy) -> Option<&str> {
+    policy
+        .inference
+        .code_embeddings
+        .as_deref()
+        .map(str::trim)
+        .filter(|profile| !profile.is_empty())
+        .or_else(|| {
+            policy
                 .inference
                 .summary_embeddings
                 .as_deref()
                 .map(str::trim)
                 .filter(|profile| !profile.is_empty())
-                .map(str::to_string);
-            if code_profile.is_some() || summary_profile.is_some() {
-                RepoSemanticEmbeddingPolicy {
-                    present: true,
-                    summary_mode: None,
-                    embedding_mode: existing_policy
-                        .embedding_mode
-                        .or(Some(SemanticCloneEmbeddingMode::SemanticAwareOnce)),
-                    inference: crate::config::SemanticClonesInferenceBindings {
-                        summary_generation: existing_policy.inference.summary_generation,
-                        code_embeddings: code_profile,
-                        summary_embeddings: summary_profile,
-                    },
-                }
-            } else {
-                legacy_daemon_semantic_embedding_policy(repo_root).unwrap_or_else(|| {
-                    RepoSemanticEmbeddingPolicy::enabled_with_profile("local_code")
-                })
-            }
-        }
-    };
-    set_repo_semantic_embedding_policy(local_policy_path, &policy)
+        })
 }
 
-fn legacy_daemon_semantic_embedding_policy(
-    repo_root: &Path,
-) -> Option<RepoSemanticEmbeddingPolicy> {
-    let config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)
-        .or_else(|_| crate::config::resolve_daemon_config_path_for_repo(repo_root))
-        .ok()?;
-    let capability =
-        crate::cli::embeddings::embedding_capability_for_config_path(&config_path).ok()?;
-    let code_profile = non_empty_profile_name(
-        capability
-            .semantic_clones
-            .inference
-            .code_embeddings
-            .as_deref(),
-    );
-    let summary_profile = non_empty_profile_name(
-        capability
-            .semantic_clones
-            .inference
-            .summary_embeddings
-            .as_deref(),
-    );
-    if code_profile.is_some() || summary_profile.is_some() {
-        return Some(RepoSemanticEmbeddingPolicy {
-            present: true,
-            summary_mode: None,
-            embedding_mode: Some(capability.semantic_clones.embedding_mode),
-            inference: crate::config::SemanticClonesInferenceBindings {
-                summary_generation: capability.semantic_clones.inference.summary_generation,
-                code_embeddings: code_profile,
-                summary_embeddings: summary_profile,
-            },
-        });
-    }
-
-    crate::cli::embeddings::selected_inference_profile_name(&capability)
-        .map(RepoSemanticEmbeddingPolicy::enabled_with_profile)
-}
-
-fn non_empty_profile_name(value: Option<&str>) -> Option<String> {
-    value
+fn existing_init_summary_generation_profile_name(repo_root: &Path) -> Option<String> {
+    let capability = crate::config::resolve_inference_capability_config_for_repo(repo_root);
+    capability
+        .semantic_clones
+        .inference
+        .summary_generation
+        .as_deref()
         .map(str::trim)
         .filter(|profile| !profile.is_empty())
         .map(str::to_string)
+}
+
+fn prepared_summary_generation_profile_name(
+    plan: &crate::cli::inference::PreparedSummarySetupPlan,
+) -> Option<&'static str> {
+    match plan.action() {
+        PreparedSummarySetupAction::ConfigureCloud { .. } => Some("summary_llm"),
+        PreparedSummarySetupAction::ConfigureLocal { .. } => Some("summary_local"),
+        PreparedSummarySetupAction::InstallRuntimeOnly { .. }
+        | PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe { .. } => None,
+    }
 }
 
 async fn bound_running_daemon_config_path() -> Result<std::path::PathBuf> {
