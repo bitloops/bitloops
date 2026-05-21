@@ -25,10 +25,11 @@ pub(crate) enum InitEmbeddingsSetupSelection {
 pub(crate) fn should_install_embeddings_during_init(
     repo_root: &Path,
     args: &InitArgs,
+    repo_selected_embedding_lanes: bool,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<InitEmbeddingsSetupSelection> {
-    if args.no_embeddings {
+    if args.no_embeddings || !repo_selected_embedding_lanes {
         return Ok(InitEmbeddingsSetupSelection::Skip);
     }
 

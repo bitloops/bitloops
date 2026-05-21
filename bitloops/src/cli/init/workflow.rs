@@ -245,12 +245,29 @@ pub(crate) async fn run_for_project_root(
         out.write_all(&surface_updates)?;
         out.flush()?;
     }
+    let final_setup_selection = choose_final_setup_options(
+        args.sync,
+        out,
+        input,
+        effective_ingest,
+        InitFinalSetupPromptOptions {
+            show_telemetry: should_prompt_for_telemetry,
+            show_auto_start_daemon: args.install_default_daemon && !daemon_already_always_on,
+        },
+    )?;
+    let repo_selected_embedding_lanes =
+        final_setup_selection.code_embeddings || final_setup_selection.summary_embeddings;
     let mut embeddings_bootstrap = None;
     let mut embeddings_bootstrap_rollback_plan = None;
     let mut prepared_summary_setup = None;
     let mut login_required = false;
-    let embeddings_selection =
-        should_install_embeddings_during_init(project_root, &args, out, input)?;
+    let embeddings_selection = should_install_embeddings_during_init(
+        project_root,
+        &args,
+        repo_selected_embedding_lanes,
+        out,
+        input,
+    )?;
     match embeddings_selection {
         InitEmbeddingsSetupSelection::Unchanged => {}
         InitEmbeddingsSetupSelection::Existing => {
@@ -323,6 +340,7 @@ pub(crate) async fn run_for_project_root(
         project_root,
         args.install_default_daemon,
         args.no_summaries,
+        final_setup_selection.summaries,
         out,
         input,
     )
@@ -429,16 +447,6 @@ pub(crate) async fn run_for_project_root(
     }
     let summaries_selected =
         prepared_summary_setup.is_some() || summary_generation_configured(project_root);
-    let final_setup_selection = choose_final_setup_options(
-        args.sync,
-        out,
-        input,
-        effective_ingest,
-        InitFinalSetupPromptOptions {
-            show_telemetry: should_prompt_for_telemetry,
-            show_auto_start_daemon: args.install_default_daemon && !daemon_already_always_on,
-        },
-    )?;
     if args.install_default_daemon {
         maybe_enable_default_daemon_service(
             final_setup_selection.auto_start_daemon,

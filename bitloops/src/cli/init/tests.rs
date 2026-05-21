@@ -851,6 +851,7 @@ fn choose_summary_setup_during_init_skips_when_summary_mode_is_off() {
             repo.path(),
             true,
             false,
+            true,
             &mut out,
             &mut input,
         ))
@@ -860,6 +861,30 @@ fn choose_summary_setup_during_init_skips_when_summary_mode_is_off() {
         selection,
         crate::cli::inference::SummarySetupSelection::Skip
     );
+}
+
+#[test]
+fn summary_setup_skips_when_repo_did_not_select_summaries() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let mut out = Vec::new();
+    let mut input = Cursor::new("2\n");
+
+    let selection = test_runtime()
+        .block_on(choose_summary_setup_during_init(
+            repo.path(),
+            true,
+            false,
+            false,
+            &mut out,
+            &mut input,
+        ))
+        .expect("choose summary setup");
+
+    assert_eq!(
+        selection,
+        crate::cli::inference::SummarySetupSelection::Skip
+    );
+    assert!(String::from_utf8(out).expect("utf8 output").is_empty());
 }
 
 #[test]
@@ -879,6 +904,7 @@ fn choose_summary_setup_interactive_does_not_resolve_cloud_login_status() {
                             repo.path(),
                             false,
                             false,
+                            true,
                             &mut out,
                             &mut input,
                         ))
@@ -914,6 +940,7 @@ fn choose_summary_setup_noninteractive_treats_login_error_as_not_logged_in() {
                             repo.path(),
                             false,
                             false,
+                            true,
                             &mut out,
                             &mut input,
                         ))
@@ -1433,6 +1460,24 @@ fn init_embeddings_prompt_reprompts_after_invalid_input() {
     assert_eq!(selection, InitEmbeddingsSetupSelection::Skip);
     let rendered = String::from_utf8(out).expect("utf8 output");
     assert!(rendered.contains("Please choose 1, 2, or 3."));
+}
+
+#[test]
+fn embeddings_setup_skips_when_repo_did_not_select_embedding_lanes() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let parsed = Cli::try_parse_from(["bitloops", "init"]).expect("parse init");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    let mut out = Vec::new();
+    let mut input = Cursor::new("1\n");
+
+    let selection =
+        should_install_embeddings_during_init(repo.path(), &args, false, &mut out, &mut input)
+            .expect("choose embeddings setup");
+
+    assert_eq!(selection, InitEmbeddingsSetupSelection::Skip);
+    assert!(String::from_utf8(out).expect("utf8 output").is_empty());
 }
 
 #[test]
@@ -3566,7 +3611,7 @@ fn run_init_without_install_default_daemon_prompts_for_skippable_embeddings_setu
             },
             || {
                 let mut out = Vec::new();
-                let mut input = Cursor::new("3\n\n");
+                let mut input = Cursor::new("3\n3\n");
                 let runtime = test_runtime();
                 runtime
                     .block_on(run_with_io_async_for_project_root(
@@ -3640,7 +3685,7 @@ fn run_init_interactive_without_install_default_daemon_uses_full_setup_prompt_pa
                     |_repo_root| panic!("plain init should not install embeddings"),
                     || {
                         let mut out = Vec::new();
-                        let mut input = Cursor::new("3\n\n\n\n");
+                        let mut input = Cursor::new("3,4\n3\n\n\n");
                         let select = |_items: &[String], enable_devql_guidance: bool| {
                             Ok(InitAgentSelection {
                                 agents: vec!["claude-code".to_string()],
@@ -4133,7 +4178,7 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                             || {
                                                                 let mut out = Vec::new();
                                                                 let mut input =
-                                                                    Cursor::new("3\n\n");
+                                                                    Cursor::new("3,4\n3\n");
                                                                 let select = |_items: &[String],
                                                                               enable_devql_guidance: bool| {
                                                                     Ok(InitAgentSelection {
@@ -4766,6 +4811,7 @@ model = "bge-m3"
             embeddings_gateway_url: None,
             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
         },
+        true,
         &mut out,
         &mut input,
     )
@@ -5352,7 +5398,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                     },
                                                     || {
                                                         let mut out = Vec::new();
-                                                        let mut input = Cursor::new("1\n1\n");
+                                                        let mut input = Cursor::new("3\n1\n");
                                                         let runtime = test_runtime();
                                                         runtime
                                                             .block_on(run_with_io_async_for_project_root(
@@ -5554,7 +5600,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                 },
                                                 || {
                                                     let mut out = Vec::new();
-                                                    let mut input = Cursor::new("1\n1\n");
+                                                    let mut input = Cursor::new("3\n1\n");
                                                     let runtime = test_runtime();
                                                     runtime
                                                         .block_on(run_with_io_async_for_project_root(
@@ -5745,7 +5791,7 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                     },
                                                     || {
                                                         let mut out = Vec::new();
-                                                        let mut input = Cursor::new("1\n2\n");
+                                                        let mut input = Cursor::new("3,4\n1\n2\n");
                                                         let runtime = test_runtime();
                                                         runtime
                                                             .block_on(run_with_io_async_for_project_root(

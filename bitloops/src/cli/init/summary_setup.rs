@@ -15,10 +15,11 @@ pub(crate) async fn choose_summary_setup_during_init(
     repo_root: &Path,
     install_default_daemon: bool,
     no_summaries: bool,
+    repo_selected_summaries: bool,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<SummarySetupSelection> {
-    if no_summaries {
+    if no_summaries || !repo_selected_summaries {
         return Ok(SummarySetupSelection::Skip);
     }
 
