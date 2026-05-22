@@ -129,43 +129,7 @@ ORDER BY ts.path ASC, ts.start_line ASC
     }
 
     fn insert_coverage_capture(&mut self, capture: &CoverageCaptureRecord) -> Result<()> {
-        self.conn
-            .execute(
-                r#"
-INSERT INTO coverage_captures (
-  capture_id, repo_id, commit_sha, tool, format, scope_kind,
-  subject_test_symbol_id, line_truth, branch_truth, captured_at, status, metadata_json
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-ON CONFLICT(capture_id) DO UPDATE SET
-  repo_id = excluded.repo_id,
-  commit_sha = excluded.commit_sha,
-  tool = excluded.tool,
-  format = excluded.format,
-  scope_kind = excluded.scope_kind,
-  subject_test_symbol_id = excluded.subject_test_symbol_id,
-  line_truth = excluded.line_truth,
-  branch_truth = excluded.branch_truth,
-  captured_at = excluded.captured_at,
-  status = excluded.status,
-  metadata_json = excluded.metadata_json
-"#,
-                params![
-                    capture.capture_id,
-                    capture.repo_id,
-                    capture.commit_sha,
-                    capture.tool,
-                    capture.format.as_str(),
-                    capture.scope_kind.as_str(),
-                    capture.subject_test_symbol_id,
-                    capture.line_truth as i64,
-                    capture.branch_truth as i64,
-                    capture.captured_at,
-                    capture.status,
-                    capture.metadata_json,
-                ],
-            )
-            .with_context(|| format!("failed inserting coverage capture {}", capture.capture_id))?;
-        Ok(())
+        upsert_coverage_capture(&self.conn, capture)
     }
 
     fn insert_coverage_hits(&mut self, hits: &[CoverageHitRecord]) -> Result<()> {
@@ -175,32 +139,7 @@ ON CONFLICT(capture_id) DO UPDATE SET
             .context("failed to start coverage hits transaction")?;
 
         for hit in hits {
-            tx.execute(
-                r#"
-INSERT INTO coverage_hits (
-  capture_id, production_symbol_id, file_path, line, branch_id, covered, hit_count
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-ON CONFLICT(capture_id, production_symbol_id, line, branch_id) DO UPDATE SET
-  file_path = excluded.file_path,
-  covered = excluded.covered,
-  hit_count = excluded.hit_count
-"#,
-                params![
-                    hit.capture_id,
-                    hit.production_symbol_id,
-                    hit.file_path,
-                    hit.line,
-                    hit.branch_id,
-                    hit.covered as i64,
-                    hit.hit_count,
-                ],
-            )
-            .with_context(|| {
-                format!(
-                    "failed inserting coverage hit for capture {} symbol {} line {}",
-                    hit.capture_id, hit.production_symbol_id, hit.line
-                )
-            })?;
+            upsert_coverage_hit(&tx, hit)?;
         }
 
         tx.commit()
@@ -222,42 +161,46 @@ ON CONFLICT(capture_id, production_symbol_id, line, branch_id) DO UPDATE SET
             .context("failed to start coverage diagnostics transaction")?;
 
         for diag in diagnostics {
-            tx.execute(
-                r#"
-INSERT INTO coverage_diagnostics (
-  diagnostic_id, capture_id, repo_id, commit_sha, path, line,
-  severity, code, message, metadata_json
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-ON CONFLICT(diagnostic_id) DO UPDATE SET
-  capture_id = excluded.capture_id,
-  severity = excluded.severity,
-  code = excluded.code,
-  message = excluded.message,
-  metadata_json = excluded.metadata_json
-"#,
-                params![
-                    diag.diagnostic_id,
-                    diag.capture_id,
-                    diag.repo_id,
-                    diag.commit_sha,
-                    diag.path,
-                    diag.line,
-                    diag.severity,
-                    diag.code,
-                    diag.message,
-                    diag.metadata_json,
-                ],
-            )
-            .with_context(|| {
-                format!(
-                    "failed inserting coverage diagnostic {}",
-                    diag.diagnostic_id
-                )
-            })?;
+            upsert_coverage_diagnostic(&tx, diag)?;
         }
 
         tx.commit()
             .context("failed to commit coverage diagnostics transaction")?;
+        Ok(())
+    }
+
+    fn replace_coverage_capture(
+        &mut self,
+        capture: &CoverageCaptureRecord,
+        hits: &[CoverageHitRecord],
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction()
+            .context("failed to start coverage replacement transaction")?;
+
+        tx.execute(
+            "DELETE FROM coverage_hits WHERE capture_id = ?1",
+            params![capture.capture_id],
+        )
+        .context("failed deleting stale coverage hits")?;
+        tx.execute(
+            "DELETE FROM coverage_diagnostics WHERE capture_id = ?1",
+            params![capture.capture_id],
+        )
+        .context("failed deleting stale coverage diagnostics")?;
+
+        upsert_coverage_capture(&tx, capture)?;
+        for hit in hits {
+            upsert_coverage_hit(&tx, hit)?;
+        }
+        for diag in diagnostics {
+            upsert_coverage_diagnostic(&tx, diag)?;
+        }
+
+        tx.commit()
+            .context("failed to commit coverage replacement transaction")?;
         Ok(())
     }
 
@@ -336,6 +279,111 @@ WHERE cc.commit_sha = ?1
 
         Ok(inserted)
     }
+}
+
+fn upsert_coverage_capture(conn: &Connection, capture: &CoverageCaptureRecord) -> Result<()> {
+    conn.execute(
+        r#"
+INSERT INTO coverage_captures (
+  capture_id, repo_id, commit_sha, tool, format, scope_kind,
+  subject_test_symbol_id, line_truth, branch_truth, captured_at, status, metadata_json
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+ON CONFLICT(capture_id) DO UPDATE SET
+  repo_id = excluded.repo_id,
+  commit_sha = excluded.commit_sha,
+  tool = excluded.tool,
+  format = excluded.format,
+  scope_kind = excluded.scope_kind,
+  subject_test_symbol_id = excluded.subject_test_symbol_id,
+  line_truth = excluded.line_truth,
+  branch_truth = excluded.branch_truth,
+  captured_at = excluded.captured_at,
+  status = excluded.status,
+  metadata_json = excluded.metadata_json
+"#,
+        params![
+            capture.capture_id,
+            capture.repo_id,
+            capture.commit_sha,
+            capture.tool,
+            capture.format.as_str(),
+            capture.scope_kind.as_str(),
+            capture.subject_test_symbol_id,
+            capture.line_truth as i64,
+            capture.branch_truth as i64,
+            capture.captured_at,
+            capture.status,
+            capture.metadata_json,
+        ],
+    )
+    .with_context(|| format!("failed inserting coverage capture {}", capture.capture_id))?;
+    Ok(())
+}
+
+fn upsert_coverage_hit(conn: &Connection, hit: &CoverageHitRecord) -> Result<()> {
+    conn.execute(
+        r#"
+INSERT INTO coverage_hits (
+  capture_id, production_symbol_id, file_path, line, branch_id, covered, hit_count
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+ON CONFLICT(capture_id, production_symbol_id, line, branch_id) DO UPDATE SET
+  file_path = excluded.file_path,
+  covered = excluded.covered,
+  hit_count = excluded.hit_count
+"#,
+        params![
+            hit.capture_id,
+            hit.production_symbol_id,
+            hit.file_path,
+            hit.line,
+            hit.branch_id,
+            hit.covered as i64,
+            hit.hit_count,
+        ],
+    )
+    .with_context(|| {
+        format!(
+            "failed inserting coverage hit for capture {} symbol {} line {}",
+            hit.capture_id, hit.production_symbol_id, hit.line
+        )
+    })?;
+    Ok(())
+}
+
+fn upsert_coverage_diagnostic(conn: &Connection, diag: &CoverageDiagnosticRecord) -> Result<()> {
+    conn.execute(
+        r#"
+INSERT INTO coverage_diagnostics (
+  diagnostic_id, capture_id, repo_id, commit_sha, path, line,
+  severity, code, message, metadata_json
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+ON CONFLICT(diagnostic_id) DO UPDATE SET
+  capture_id = excluded.capture_id,
+  severity = excluded.severity,
+  code = excluded.code,
+  message = excluded.message,
+  metadata_json = excluded.metadata_json
+"#,
+        params![
+            diag.diagnostic_id,
+            diag.capture_id,
+            diag.repo_id,
+            diag.commit_sha,
+            diag.path,
+            diag.line,
+            diag.severity,
+            diag.code,
+            diag.message,
+            diag.metadata_json,
+        ],
+    )
+    .with_context(|| {
+        format!(
+            "failed inserting coverage diagnostic {}",
+            diag.diagnostic_id
+        )
+    })?;
+    Ok(())
 }
 
 impl TestHarnessQueryRepository for SqliteTestHarnessRepository {

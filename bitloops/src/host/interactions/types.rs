@@ -34,6 +34,8 @@ pub struct InteractionSession {
     pub last_event_at: String,
     #[serde(default)]
     pub updated_at: String,
+    #[serde(default)]
+    pub is_auxiliary: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

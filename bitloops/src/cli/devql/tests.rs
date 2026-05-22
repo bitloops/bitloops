@@ -351,6 +351,7 @@ fn seed_cli_analytics_sources(repo_root: &Path) {
             ended_at: None,
             last_event_at: "2026-04-22T09:03:00Z".to_string(),
             updated_at: "2026-04-22T09:03:00Z".to_string(),
+            is_auxiliary: false,
         })
         .expect("upsert analytics session");
     repository

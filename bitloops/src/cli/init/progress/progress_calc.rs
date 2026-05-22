@@ -10,20 +10,32 @@ pub(crate) fn task_progress(
     task: &crate::cli::devql::graphql::TaskGraphqlRecord,
 ) -> (Option<f64>, String) {
     if task.is_sync() {
-        if let Some(progress) = task.sync_progress.as_ref()
-            && progress.paths_total > 0
-        {
-            let ratio =
-                (progress.paths_completed as f64 / progress.paths_total as f64).clamp(0.0, 1.0);
-            return (
-                Some(ratio),
-                format!(
-                    " {:>3}% {}/{} paths",
-                    (ratio * 100.0).round() as usize,
-                    progress.paths_completed,
-                    progress.paths_total
-                ),
-            );
+        if let Some(progress) = task.sync_progress.as_ref() {
+            if progress.phase.eq_ignore_ascii_case("reconciling_edges") && progress.paths_total > 0
+            {
+                return (
+                    None,
+                    format!(
+                        " {} · {}/{} edge paths ",
+                        sync_phase_label(progress.phase.as_str()),
+                        progress.paths_completed,
+                        progress.paths_total
+                    ),
+                );
+            }
+            if progress.paths_total > 0 {
+                let ratio =
+                    (progress.paths_completed as f64 / progress.paths_total as f64).clamp(0.0, 1.0);
+                return (
+                    Some(ratio),
+                    format!(
+                        " {:>3}% {}/{} paths",
+                        (ratio * 100.0).round() as usize,
+                        progress.paths_completed,
+                        progress.paths_total
+                    ),
+                );
+            }
         }
         return (
             None,

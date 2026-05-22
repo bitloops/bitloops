@@ -487,6 +487,7 @@ pub(super) fn seed_graphql_historical_context_data(repo_root: &Path) {
         ended_at: Some("2026-03-26T09:11:00Z".to_string()),
         last_event_at: "2026-03-26T09:11:00Z".to_string(),
         updated_at: "2026-03-26T09:11:00Z".to_string(),
+        is_auxiliary: false,
     };
     spool
         .record_session(&session)
@@ -592,10 +593,13 @@ pub(super) fn seed_graphql_context_guidance_data(repo_root: &Path) {
         transcript_fragment: Some("Rejected std::any::type_name parsing.".to_string()),
         files_modified: vec!["src/target.ts".to_string()],
         tool_events: vec![GuidanceToolEvidence {
+            event_type: Some("tool_invocation_observed".to_string()),
             tool_kind: Some("shell".to_string()),
             input_summary: Some("cargo nextest run --lib context_guidance".to_string()),
             output_summary: Some("nextest passed".to_string()),
             command: Some("cargo nextest run --lib context_guidance".to_string()),
+            file_path: None,
+            evidence_text: None,
         }],
     };
     let output = GuidanceDistillationOutput {

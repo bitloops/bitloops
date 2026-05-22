@@ -963,3 +963,82 @@ fn daemon_devql_task_execution_logs_terminal_failure() {
         "expected terminal task failure log, got logs: {logs:?}"
     );
 }
+
+#[test]
+fn daemon_devql_task_execution_requeues_cancelled_sqlite_join() {
+    let dir = TempDir::new().expect("temp dir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+    let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo)
+        .expect("build devql config");
+    let coordinator = Arc::new(DevqlTaskCoordinator {
+        runtime_store: DaemonSqliteRuntimeStore::open_at(dir.path().join("daemon-runtime.sqlite"))
+            .expect("open daemon runtime store"),
+        lock: Mutex::new(()),
+        notify: Notify::new(),
+        worker_started: AtomicBool::new(false),
+        subscription_hub: Mutex::new(None),
+    });
+    let task = coordinator
+        .enqueue(
+            &cfg,
+            DevqlTaskSource::PostMerge,
+            DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec {
+                commits: vec!["8f1545adecc86036ed9c8f252edcc099f7016103".to_string()],
+                backfill: None,
+            }),
+        )
+        .expect("enqueue ingest task")
+        .task;
+
+    coordinator
+        .mutate_state(|state| {
+            let task = state
+                .tasks
+                .iter_mut()
+                .find(|candidate| candidate.task_id == task.task_id)
+                .expect("queued task should exist");
+            let now = unix_timestamp_now();
+            task.status = DevqlTaskStatus::Running;
+            task.started_at_unix = Some(now);
+            task.updated_at_unix = now;
+            Ok(())
+        })
+        .expect("mark task running");
+
+    let (result, logs) = capture_logs(|| {
+        coordinator.finish_task_failed(
+            &task.task_id,
+            anyhow::anyhow!("joining SQLite query task: task 16152 was cancelled"),
+        )
+    });
+
+    result.expect("finish task failed should requeue transient cancellation");
+    let task = coordinator
+        .task(&task.task_id)
+        .expect("load task")
+        .expect("task should remain in queue");
+    assert_eq!(task.status, DevqlTaskStatus::Queued);
+    assert!(task.started_at_unix.is_none());
+    assert!(task.completed_at_unix.is_none());
+    assert!(task.error.is_none());
+    assert!(
+        !logs
+            .iter()
+            .any(|entry| entry.level == log::Level::Error
+                && entry.message.contains("DevQL task failed")),
+        "cooperative cancellation should not log terminal failure, got logs: {logs:?}"
+    );
+}

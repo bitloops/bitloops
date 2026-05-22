@@ -11,6 +11,9 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
+pub(crate) use self::persist::{
+    CurrentEdgeReconcileOutcome, reconcile_current_local_edges_for_paths_with_progress,
+};
 pub(crate) use self::types::{MaterializedArtefact, MaterializedEdge, PreparedMaterialisationRows};
 use super::content_cache::{CachedArtefact, CachedExtraction};
 use super::types::DesiredFileState;

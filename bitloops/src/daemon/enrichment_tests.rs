@@ -954,6 +954,28 @@ max_output_tokens = 200
     fs::write(&config_path, config).expect("write test daemon config with guidance profile");
 }
 
+fn configure_architecture_role_adjudication_for_repo(target: &EnrichmentJobTarget) {
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("bind repo root to daemon config");
+
+    let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
+    config.push_str(
+        r#"
+[architecture.inference]
+role_adjudication = "role_adjudicator"
+"#,
+    );
+    fs::write(&config_path, config)
+        .expect("write test daemon config with role adjudication profile");
+}
+
 fn configure_embeddings_for_repo(target: &EnrichmentJobTarget, profile_name: &str) -> PathBuf {
     let config_path =
         crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
@@ -3083,6 +3105,82 @@ fn summary_refresh_pool_claims_context_guidance_job_when_generation_unconfigured
 }
 
 #[test]
+fn summary_refresh_pool_claims_ready_context_guidance_after_blocked_generic_jobs() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    configure_context_guidance_for_repo(&target);
+
+    for index in 0..40 {
+        insert_architecture_role_adjudication_workplane_job(
+            &coordinator,
+            &target,
+            &repo_id,
+            &format!("blocked-role-adjudication-{index}"),
+            index as u64,
+            10,
+        );
+    }
+    insert_context_guidance_workplane_job(
+        &coordinator,
+        &target,
+        &repo_id,
+        "context-guidance-ready-after-blocked",
+        20,
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::SummaryRefresh,
+    )
+    .expect("claim workplane job")
+    .expect("ready context guidance job should be claimable behind blocked architecture jobs");
+
+    assert_eq!(claimed.job_id, "context-guidance-ready-after-blocked");
+    assert_eq!(
+        claimed.capability_id,
+        crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_CAPABILITY_ID
+    );
+    assert_eq!(
+        claimed.mailbox_name,
+        crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_HISTORY_DISTILLATION_MAILBOX
+    );
+}
+
+#[test]
+fn summary_refresh_pool_claims_context_guidance_target_compaction_jobs() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    insert_context_guidance_target_compaction_workplane_job(
+        &coordinator,
+        &target,
+        &repo_id,
+        "context-guidance-target-compaction",
+        10,
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::SummaryRefresh,
+    )
+    .expect("claim workplane job")
+    .expect("target compaction job should be claimable by summary refresh pool");
+
+    assert_eq!(claimed.job_id, "context-guidance-target-compaction");
+    assert_eq!(
+        claimed.capability_id,
+        crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_CAPABILITY_ID
+    );
+    assert_eq!(
+        claimed.mailbox_name,
+        crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_TARGET_COMPACTION_MAILBOX
+    );
+}
+
+#[test]
 fn summary_refresh_pool_leaves_context_guidance_pending_when_configured_generation_is_broken() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
@@ -3889,6 +3987,110 @@ fn insert_context_guidance_workplane_job(
             .map_err(anyhow::Error::from)
         })
         .expect("insert context guidance workplane job");
+}
+
+fn insert_architecture_role_adjudication_workplane_job(
+    coordinator: &EnrichmentCoordinator,
+    target: &EnrichmentJobTarget,
+    repo_id: &str,
+    job_id: &str,
+    generation: u64,
+    updated_at_unix: u64,
+) {
+    let request = crate::capability_packs::architecture_graph::roles::RoleAdjudicationRequest {
+        repo_id: repo_id.to_string(),
+        generation,
+        target_kind: Some("file".to_string()),
+        artefact_id: None,
+        symbol_id: None,
+        path: Some(format!("src/blocked-{generation}.rs")),
+        language: Some("rust".to_string()),
+        canonical_kind: None,
+        reason: crate::capability_packs::architecture_graph::roles::AdjudicationReason::Unknown,
+        deterministic_confidence: None,
+        candidate_role_ids: Vec::new(),
+        current_assignment: None,
+    };
+    let dedupe_key = request.scope_key();
+    let payload =
+        crate::capability_packs::architecture_graph::roles::RoleAdjudicationMailboxPayload {
+            request,
+        };
+
+    coordinator
+        .workplane_store
+        .with_write_connection(|conn| {
+            conn.execute(
+                "INSERT INTO capability_workplane_jobs (
+                     job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                     dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                     started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                     lease_expires_at_unix, last_error
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, NULL, ?12, NULL, NULL, NULL, NULL)",
+                rusqlite::params![
+                    job_id,
+                    repo_id,
+                    target.repo_root.to_string_lossy().to_string(),
+                    target.config_root.to_string_lossy().to_string(),
+                    crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+                    dedupe_key,
+                    serde_json::to_string(&payload).expect("serialize role adjudication payload"),
+                    WorkplaneJobStatus::Pending.as_str(),
+                    sql_i64(updated_at_unix)?,
+                    sql_i64(updated_at_unix)?,
+                    sql_i64(updated_at_unix)?,
+                ],
+            )
+            .map(|_| ())
+            .map_err(anyhow::Error::from)
+        })
+        .expect("insert architecture role adjudication workplane job");
+}
+
+fn insert_context_guidance_target_compaction_workplane_job(
+    coordinator: &EnrichmentCoordinator,
+    target: &EnrichmentJobTarget,
+    repo_id: &str,
+    job_id: &str,
+    updated_at_unix: u64,
+) {
+    coordinator
+        .workplane_store
+        .with_write_connection(|conn| {
+            conn.execute(
+                "INSERT INTO capability_workplane_jobs (
+                     job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                     dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                     started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                     lease_expires_at_unix, last_error
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, NULL, ?12, NULL, NULL, NULL, NULL)",
+                rusqlite::params![
+                    job_id,
+                    repo_id,
+                    target.repo_root.to_string_lossy().to_string(),
+                    target.config_root.to_string_lossy().to_string(),
+                    crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_CAPABILITY_ID,
+                    crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_TARGET_COMPACTION_MAILBOX,
+                    format!("target_compaction:{repo_id}:path:src/lib.rs"),
+                    json!({
+                        "targetCompaction": {
+                            "repoId": repo_id,
+                            "targetType": "path",
+                            "targetValue": "src/lib.rs"
+                        }
+                    })
+                    .to_string(),
+                    WorkplaneJobStatus::Pending.as_str(),
+                    sql_i64(updated_at_unix)?,
+                    sql_i64(updated_at_unix)?,
+                    sql_i64(updated_at_unix)?,
+                ],
+            )
+            .map(|_| ())
+            .map_err(anyhow::Error::from)
+        })
+        .expect("insert context guidance target compaction workplane job");
 }
 
 fn insert_pending_artefact_jobs_bulk(
@@ -4895,6 +5097,82 @@ fn compaction_prunes_pending_summary_refresh_jobs_when_summary_provider_is_uncon
         1,
         "other pending work should be preserved"
     );
+}
+
+#[test]
+fn maintenance_completes_unconfigured_architecture_role_adjudication_jobs() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    insert_architecture_role_adjudication_workplane_job(
+        &coordinator,
+        &target,
+        &repo_id,
+        "stale-unconfigured-role-adjudication",
+        1,
+        10,
+    );
+
+    super::compact_and_prune_workplane_jobs(&coordinator.workplane_store)
+        .expect("compact workplane jobs");
+
+    let pending = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    assert!(
+        pending.is_empty(),
+        "unconfigured role_adjudication jobs should not remain pending"
+    );
+    let completed = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Completed);
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].job_id, "stale-unconfigured-role-adjudication");
+    assert_eq!(
+        completed[0].last_error.as_deref(),
+        Some("skipped: structured-generation slot `role_adjudication` is not configured")
+    );
+}
+
+#[test]
+fn maintenance_only_completes_unconfigured_role_adjudication_for_matching_repo_root() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, unconfigured_target, repo_id) = new_test_coordinator(&temp);
+    let configured_config_root = temp.path().join("configured-config");
+    let configured_repo_root = temp.path().join("configured-repo");
+    fs::create_dir_all(&configured_config_root).expect("create configured config root");
+    fs::create_dir_all(&configured_repo_root).expect("create configured repo root");
+    init_test_repo(
+        &configured_repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops@example.com",
+    );
+    let configured_target = sample_target(configured_config_root, configured_repo_root);
+    configure_architecture_role_adjudication_for_repo(&configured_target);
+
+    insert_architecture_role_adjudication_workplane_job(
+        &coordinator,
+        &unconfigured_target,
+        &repo_id,
+        "unconfigured-role-adjudication",
+        1,
+        10,
+    );
+    insert_architecture_role_adjudication_workplane_job(
+        &coordinator,
+        &configured_target,
+        &repo_id,
+        "configured-role-adjudication",
+        2,
+        11,
+    );
+
+    super::compact_and_prune_workplane_jobs(&coordinator.workplane_store)
+        .expect("compact workplane jobs");
+
+    let pending = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].job_id, "configured-role-adjudication");
+
+    let completed = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Completed);
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].job_id, "unconfigured-role-adjudication");
 }
 
 #[tokio::test]

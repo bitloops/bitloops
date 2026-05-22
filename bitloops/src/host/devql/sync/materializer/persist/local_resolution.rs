@@ -152,7 +152,7 @@ fn apply_local_edge_resolutions(
     }
 }
 
-fn compatible_resolution_languages(language: &str) -> Vec<&'static str> {
+pub(super) fn compatible_resolution_languages(language: &str) -> Vec<&'static str> {
     match language.trim().to_ascii_lowercase().as_str() {
         "typescript" | "javascript" => vec!["typescript", "javascript"],
         "rust" => vec!["rust"],
@@ -164,28 +164,35 @@ fn compatible_resolution_languages(language: &str) -> Vec<&'static str> {
     }
 }
 
-async fn load_current_targets_for_resolution(
-    relational: &crate::host::devql::RelationalStorage,
+fn current_targets_for_compatible_languages_sql(
     repo_id: &str,
-    current_path: &str,
-    language: &str,
-) -> Result<Vec<crate::host::language_adapter::LocalTargetInfo>> {
-    let compatible_languages = compatible_resolution_languages(language);
-    if compatible_languages.is_empty() {
-        return Ok(Vec::new());
-    }
+    excluded_path: Option<&str>,
+    compatible_languages: &[&str],
+) -> String {
+    let repo_filter = format!("repo_id = '{}'", crate::host::devql::esc_pg(repo_id));
+    let path_filter = excluded_path
+        .map(|path| format!(" AND path != '{}'", crate::host::devql::esc_pg(path)))
+        .unwrap_or_default();
     let in_list = compatible_languages
         .iter()
         .map(|language| format!("'{}'", crate::host::devql::esc_pg(language)))
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = format!(
+    format!(
         "SELECT symbol_fqn, symbol_id, artefact_id, language_kind \
          FROM artefacts_current \
-         WHERE repo_id = '{}' AND path != '{}' AND language IN ({in_list})",
-        crate::host::devql::esc_pg(repo_id),
-        crate::host::devql::esc_pg(current_path),
-    );
+         WHERE {repo_filter}{path_filter} AND language IN ({in_list})",
+    )
+}
+
+async fn load_current_targets_for_compatible_languages(
+    relational: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    excluded_path: Option<&str>,
+    compatible_languages: &[&str],
+) -> Result<Vec<crate::host::language_adapter::LocalTargetInfo>> {
+    let sql =
+        current_targets_for_compatible_languages_sql(repo_id, excluded_path, compatible_languages);
     let rows = relational.query_rows(&sql).await?;
     Ok(rows
         .into_iter()
@@ -201,28 +208,14 @@ async fn load_current_targets_for_resolution(
         .collect())
 }
 
-pub(super) fn load_current_targets_for_resolution_with_connection(
+fn load_current_targets_for_compatible_languages_with_connection(
     connection: &Connection,
     repo_id: &str,
-    current_path: &str,
-    language: &str,
+    excluded_path: Option<&str>,
+    compatible_languages: &[&str],
 ) -> Result<Vec<crate::host::language_adapter::LocalTargetInfo>> {
-    let compatible_languages = compatible_resolution_languages(language);
-    if compatible_languages.is_empty() {
-        return Ok(Vec::new());
-    }
-    let in_list = compatible_languages
-        .iter()
-        .map(|language| format!("'{}'", crate::host::devql::esc_pg(language)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = format!(
-        "SELECT symbol_fqn, symbol_id, artefact_id, language_kind \
-         FROM artefacts_current \
-         WHERE repo_id = '{}' AND path != '{}' AND language IN ({in_list})",
-        crate::host::devql::esc_pg(repo_id),
-        crate::host::devql::esc_pg(current_path),
-    );
+    let sql =
+        current_targets_for_compatible_languages_sql(repo_id, excluded_path, compatible_languages);
     let mut stmt = connection
         .prepare(&sql)
         .context("preparing current local target lookup query")?;
@@ -239,4 +232,57 @@ pub(super) fn load_current_targets_for_resolution_with_connection(
         .collect::<Result<Vec<_>, _>>()
         .context("collecting current local target lookup rows")?;
     Ok(rows)
+}
+
+async fn load_current_targets_for_resolution(
+    relational: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    current_path: &str,
+    language: &str,
+) -> Result<Vec<crate::host::language_adapter::LocalTargetInfo>> {
+    let compatible_languages = compatible_resolution_languages(language);
+    if compatible_languages.is_empty() {
+        return Ok(Vec::new());
+    }
+    load_current_targets_for_compatible_languages(
+        relational,
+        repo_id,
+        Some(current_path),
+        &compatible_languages,
+    )
+    .await
+}
+
+pub(super) fn load_current_targets_for_resolution_with_connection(
+    connection: &Connection,
+    repo_id: &str,
+    current_path: &str,
+    language: &str,
+) -> Result<Vec<crate::host::language_adapter::LocalTargetInfo>> {
+    let compatible_languages = compatible_resolution_languages(language);
+    if compatible_languages.is_empty() {
+        return Ok(Vec::new());
+    }
+    load_current_targets_for_compatible_languages_with_connection(
+        connection,
+        repo_id,
+        Some(current_path),
+        &compatible_languages,
+    )
+}
+
+pub(super) fn load_current_targets_for_languages_with_connection(
+    connection: &Connection,
+    repo_id: &str,
+    compatible_languages: &[&str],
+) -> Result<Vec<crate::host::language_adapter::LocalTargetInfo>> {
+    if compatible_languages.is_empty() {
+        return Ok(Vec::new());
+    }
+    load_current_targets_for_compatible_languages_with_connection(
+        connection,
+        repo_id,
+        None,
+        compatible_languages,
+    )
 }

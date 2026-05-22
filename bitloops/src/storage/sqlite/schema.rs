@@ -45,6 +45,22 @@ impl SqliteConnectionPool {
         })
         .context("migrating SQLite checkpoint schema for sessions.ended_at")?;
         self.with_write_connection(|conn| {
+            match conn.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN is_auxiliary INTEGER NOT NULL DEFAULT 0;",
+            ) {
+                Ok(()) => Ok(()),
+                Err(err)
+                    if err
+                        .to_string()
+                        .contains("duplicate column name: is_auxiliary") =>
+                {
+                    Ok(())
+                }
+                Err(err) => Err(err).context("executing SQLite is_auxiliary migration"),
+            }
+        })
+        .context("migrating SQLite checkpoint schema for sessions.is_auxiliary")?;
+        self.with_write_connection(|conn| {
             if !sqlite_table_exists(conn, "repo_watcher_registrations")?
                 || sqlite_table_has_column(conn, "repo_watcher_registrations", "state")?
             {

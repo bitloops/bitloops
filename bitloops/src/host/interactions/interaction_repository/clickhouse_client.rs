@@ -99,6 +99,11 @@ pub(super) fn session_from_row(row: &Value) -> Result<InteractionSession> {
         ended_at: empty_to_none(optional_string(row, "ended_at")),
         last_event_at: optional_string(row, "last_event_at"),
         updated_at: optional_string(row, "updated_at"),
+        is_auxiliary: row
+            .get("is_auxiliary")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+            == 1,
     })
 }
 

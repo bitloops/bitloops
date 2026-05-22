@@ -9,7 +9,9 @@ mod tests;
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
+use std::str::Utf8Error;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
@@ -90,6 +92,9 @@ pub(crate) fn execute_with_existing(
                 discovery_batch.files.push(discovered);
             }
             Err(err) => {
+                if is_non_utf8_discovery_error(&err) {
+                    continue;
+                }
                 record_discovery_issue(
                     &mut discovery_batch,
                     &candidate.relative_path,
@@ -252,6 +257,16 @@ fn find_language_support<'a>(
         .find(|support| support.language_id() == language_id)
         .map(Arc::as_ref)
         .ok_or_else(|| anyhow!("language test support `{language_id}` is not registered"))
+}
+
+pub(crate) fn is_non_utf8_discovery_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_err| io_err.kind() == ErrorKind::InvalidData)
+            || cause.downcast_ref::<Utf8Error>().is_some()
+            || cause.to_string().contains("valid UTF-8")
+    })
 }
 
 fn record_discovery_issue(batch: &mut TestDiscoveryBatch, path: &str, message: String) {

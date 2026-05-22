@@ -388,6 +388,7 @@ pub(crate) struct DashboardInteractionSession {
     pub(crate) started_at: String,
     pub(crate) ended_at: Option<String>,
     pub(crate) last_event_at: Option<String>,
+    pub(crate) is_auxiliary: bool,
     pub(crate) turn_count: i32,
     pub(crate) checkpoint_count: i32,
     pub(crate) token_usage: Option<DashboardTokenUsage>,
@@ -611,6 +612,7 @@ impl DashboardInteractionSession {
             started_at: summary.session.started_at.clone(),
             ended_at: summary.session.ended_at.clone(),
             last_event_at: non_empty(&summary.session.last_event_at),
+            is_auxiliary: summary.session.is_auxiliary,
             turn_count: summary.turn_count.try_into().unwrap_or(i32::MAX),
             checkpoint_count: summary.checkpoint_count.try_into().unwrap_or(i32::MAX),
             token_usage: summary

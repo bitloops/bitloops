@@ -353,6 +353,12 @@ pub fn default_condition_score() -> f64 {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchitectureRoleReconcileMetrics {
+    #[serde(default)]
+    pub phase_name: Option<String>,
+    #[serde(default)]
+    pub reconcile_mode: Option<String>,
+    #[serde(default)]
+    pub skipped_inactive: bool,
     pub full_reconcile: bool,
     pub affected_paths: usize,
     pub refreshed_paths: usize,
@@ -367,6 +373,16 @@ pub struct ArchitectureRoleReconcileMetrics {
     pub assignments_marked_stale: usize,
     pub assignment_history_rows: usize,
     pub adjudication_candidates: usize,
+    #[serde(default)]
+    pub transaction_count: usize,
+    #[serde(default)]
+    pub max_rss_kb: u64,
+    #[serde(default)]
+    pub max_sqlite_lock_wait_ms: u64,
+    #[serde(default)]
+    pub max_sqlite_lock_hold_ms: u64,
+    #[serde(default)]
+    pub file_batches: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

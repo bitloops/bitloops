@@ -44,17 +44,22 @@ impl ClickHouseInteractionRepository {
 
     pub(super) fn upsert_session(&self, session: &InteractionSession) -> Result<()> {
         super::ensure_repo_id(&self.repo_id, &session.repo_id, "interaction session")?;
+        let is_auxiliary = session.is_auxiliary
+            || self
+                .load_session(&session.session_id)?
+                .map(|existing| existing.is_auxiliary)
+                .unwrap_or(false);
         let sql = format!(
             "INSERT INTO interaction_sessions (
                 session_id, repo_id, branch, actor_id, actor_name, actor_email, actor_source,
                 agent_type, model, first_prompt,
                 transcript_path, worktree_path, worktree_id, started_at,
-                ended_at, last_event_at, updated_at
+                ended_at, last_event_at, is_auxiliary, updated_at
              ) VALUES (
                 '{session_id}', '{repo_id}', '{branch}', '{actor_id}', '{actor_name}',
                 '{actor_email}', '{actor_source}', '{agent_type}', '{model}', '{first_prompt}',
                 '{transcript_path}', '{worktree_path}', '{worktree_id}', '{started_at}',
-                '{ended_at}', '{last_event_at}',
+                '{ended_at}', '{last_event_at}', {is_auxiliary},
                 coalesce(parseDateTime64BestEffortOrNull('{updated_at}'), now64(3))
              )",
             session_id = esc_ch(&session.session_id),
@@ -73,6 +78,7 @@ impl ClickHouseInteractionRepository {
             started_at = esc_ch(&session.started_at),
             ended_at = esc_ch(session.ended_at.as_deref().unwrap_or("")),
             last_event_at = esc_ch(&session.last_event_at),
+            is_auxiliary = i32::from(is_auxiliary),
             updated_at = esc_ch(&session.updated_at),
         );
         blocking_exec(
@@ -240,6 +246,7 @@ impl ClickHouseInteractionRepository {
                     argMax(sessions.started_at, sessions.updated_at) AS started_at,
                     argMax(sessions.ended_at, sessions.updated_at) AS ended_at,
                     argMax(sessions.last_event_at, sessions.updated_at) AS last_event_at,
+                    argMax(sessions.is_auxiliary, sessions.updated_at) AS is_auxiliary,
                     toString(max(sessions.updated_at)) AS updated_at
                 FROM interaction_sessions AS sessions
                 WHERE {}
@@ -284,6 +291,7 @@ impl ClickHouseInteractionRepository {
                         argMax(sessions.started_at, sessions.updated_at) AS started_at,
                         argMax(sessions.ended_at, sessions.updated_at) AS ended_at,
                         argMax(sessions.last_event_at, sessions.updated_at) AS last_event_at,
+                        argMax(sessions.is_auxiliary, sessions.updated_at) AS is_auxiliary,
                         toString(max(sessions.updated_at)) AS updated_at
                     FROM interaction_sessions AS sessions
                     WHERE sessions.repo_id = '{repo_id}' AND sessions.session_id = '{session_id}'
@@ -511,6 +519,7 @@ CREATE TABLE IF NOT EXISTS interaction_sessions (
     started_at String,
     ended_at String,
     last_event_at String,
+    is_auxiliary UInt8,
     updated_at DateTime64(3, 'UTC')
 )
 ENGINE = ReplacingMergeTree(updated_at)
@@ -591,6 +600,7 @@ const SCHEMA_MIGRATIONS: &[&str] = &[
     "ALTER TABLE interaction_sessions ADD COLUMN IF NOT EXISTS actor_name String AFTER actor_id",
     "ALTER TABLE interaction_sessions ADD COLUMN IF NOT EXISTS actor_email String AFTER actor_name",
     "ALTER TABLE interaction_sessions ADD COLUMN IF NOT EXISTS actor_source String AFTER actor_email",
+    "ALTER TABLE interaction_sessions ADD COLUMN IF NOT EXISTS is_auxiliary UInt8 AFTER last_event_at",
     "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS branch String AFTER repo_id",
     "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS actor_id String AFTER branch",
     "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS actor_name String AFTER actor_id",

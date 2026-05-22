@@ -23,6 +23,7 @@ pub(super) fn map_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Inter
         ended_at: row.get(14)?,
         last_event_at: row.get(15)?,
         updated_at: row.get(16)?,
+        is_auxiliary: row.get::<_, i64>(17).unwrap_or_default() == 1,
     })
 }
 

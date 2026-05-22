@@ -5,29 +5,89 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, TransactionBehavior};
 
-use super::local_resolution::load_current_targets_for_resolution_with_connection;
+use super::local_resolution::{
+    compatible_resolution_languages, load_current_targets_for_languages_with_connection,
+};
 use super::reconcile::{
     apply_current_edge_replacements_tx, canonical_local_symbol_fqn_path, recompute_current_edge_id,
 };
 use super::{CurrentEdgeRecord, CurrentEdgeReplacement, SUPPORTED_LOCAL_RESOLUTION_LANGUAGES};
+use crate::storage::sqlite::SqliteWritePhaseMetrics;
+use crate::utils::process_metrics::current_process_max_rss_kb;
+
+const CURRENT_EDGE_RECONCILE_BATCH_SIZE: usize = 250;
+const CURRENT_EDGE_RECONCILE_SOURCE_PATH_BATCH_SIZE: usize = 250;
+const CURRENT_EDGE_RECONCILE_PHASE_NAME: &str = "current_edge_reconcile";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CurrentEdgeReconcileOutcome {
+    pub(crate) affected_rows: usize,
+    pub(crate) replacement_count: usize,
+    pub(crate) sqlite_phase_metrics: SqliteWritePhaseMetrics,
+    pub(crate) max_rss_kb: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CurrentEdgeReconcileProgress {
+    pub(crate) source_paths_total: usize,
+    pub(crate) source_paths_completed: usize,
+    pub(crate) current_path: Option<String>,
+}
 
 pub(crate) async fn reconcile_current_local_edges_for_paths(
     relational: &crate::host::devql::RelationalStorage,
     repo_id: &str,
     touched_paths: &[String],
-) -> Result<usize> {
+) -> Result<CurrentEdgeReconcileOutcome> {
+    reconcile_current_local_edges_for_paths_inner(relational, repo_id, touched_paths, None).await
+}
+
+pub(crate) async fn reconcile_current_local_edges_for_paths_with_progress(
+    relational: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    touched_paths: &[String],
+    progress_sender: tokio::sync::mpsc::UnboundedSender<CurrentEdgeReconcileProgress>,
+) -> Result<CurrentEdgeReconcileOutcome> {
+    reconcile_current_local_edges_for_paths_inner(
+        relational,
+        repo_id,
+        touched_paths,
+        Some(progress_sender),
+    )
+    .await
+}
+
+async fn reconcile_current_local_edges_for_paths_inner(
+    relational: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    touched_paths: &[String],
+    progress_sender: Option<tokio::sync::mpsc::UnboundedSender<CurrentEdgeReconcileProgress>>,
+) -> Result<CurrentEdgeReconcileOutcome> {
     let sqlite_path = relational.sqlite_path().to_path_buf();
     let repo_id = repo_id.to_string();
     let touched_paths = touched_paths.to_vec();
 
-    tokio::task::spawn_blocking(move || -> Result<usize> {
+    tokio::task::spawn_blocking(move || -> Result<CurrentEdgeReconcileOutcome> {
         let mut connection = open_current_state_reconciliation_connection(&sqlite_path)?;
-        reconcile_current_local_edges_for_paths_with_write_lock(
-            &mut connection,
-            &sqlite_path,
-            &repo_id,
-            &touched_paths,
-        )
+        match progress_sender {
+            Some(progress_sender) => {
+                reconcile_current_local_edges_for_paths_with_write_lock_and_progress(
+                    &mut connection,
+                    &sqlite_path,
+                    &repo_id,
+                    &touched_paths,
+                    move |update| {
+                        let _ = progress_sender.send(update);
+                    },
+                )
+            }
+            None => reconcile_current_local_edges_for_paths_with_write_lock(
+                &mut connection,
+                &sqlite_path,
+                &repo_id,
+                &touched_paths,
+            ),
+        }
     })
     .await
     .context("joining current local edge reconciliation task")?
@@ -38,9 +98,52 @@ pub(crate) fn reconcile_current_local_edges_for_paths_with_write_lock(
     sqlite_path: &Path,
     repo_id: &str,
     touched_paths: &[String],
-) -> Result<usize> {
-    crate::storage::sqlite::with_sqlite_write_lock(sqlite_path, || {
-        reconcile_current_local_edges_for_paths_inner(connection, repo_id, touched_paths)
+) -> Result<CurrentEdgeReconcileOutcome> {
+    reconcile_current_local_edges_for_paths_with_write_lock_and_progress(
+        connection,
+        sqlite_path,
+        repo_id,
+        touched_paths,
+        |_| {},
+    )
+}
+
+pub(crate) fn reconcile_current_local_edges_for_paths_with_write_lock_and_progress(
+    connection: &mut Connection,
+    sqlite_path: &Path,
+    repo_id: &str,
+    touched_paths: &[String],
+    mut on_progress: impl FnMut(CurrentEdgeReconcileProgress),
+) -> Result<CurrentEdgeReconcileOutcome> {
+    // Wait for earlier serialized writers to finish before we snapshot current rows,
+    // but do not hold the lock across the full reconcile.
+    crate::storage::sqlite::with_sqlite_write_lock(sqlite_path, || Ok(()))?;
+    let state = load_current_edge_reconcile_state(connection, repo_id, touched_paths)?;
+    if state.current_edges.is_empty() {
+        return Ok(CurrentEdgeReconcileOutcome::default());
+    }
+    let ((affected_rows, replacement_count), sqlite_phase_metrics) =
+        crate::storage::sqlite::with_sqlite_write_phase(CURRENT_EDGE_RECONCILE_PHASE_NAME, || {
+            process_current_edge_reconcile_batches(
+                connection,
+                repo_id,
+                &state,
+                |connection, replacements| {
+                    apply_current_edge_replacements_in_chunks_with_write_lock(
+                        connection,
+                        sqlite_path,
+                        repo_id,
+                        replacements,
+                    )
+                },
+                &mut on_progress,
+            )
+        })?;
+    Ok(CurrentEdgeReconcileOutcome {
+        affected_rows,
+        replacement_count,
+        sqlite_phase_metrics,
+        max_rss_kb: current_process_max_rss_kb(),
     })
 }
 
@@ -49,61 +152,44 @@ pub(super) fn reconcile_current_local_edges_for_paths_with_connection(
     repo_id: &str,
     touched_paths: &[String],
 ) -> Result<usize> {
-    reconcile_current_local_edges_for_paths_inner(connection, repo_id, touched_paths)
+    let state = load_current_edge_reconcile_state(connection, repo_id, touched_paths)?;
+    let (affected_rows, _replacement_count) = process_current_edge_reconcile_batches(
+        connection,
+        repo_id,
+        &state,
+        |connection, replacements| {
+            apply_current_edge_replacements_in_chunks(connection, repo_id, replacements)
+        },
+        |_| {},
+    )?;
+    Ok(affected_rows)
 }
 
-fn reconcile_current_local_edges_for_paths_inner(
+fn apply_current_edge_replacements_in_chunks_with_write_lock(
+    connection: &mut Connection,
+    sqlite_path: &Path,
+    repo_id: &str,
+    replacements: &[CurrentEdgeReplacement],
+) -> Result<usize> {
+    let mut affected_rows = 0usize;
+    for chunk in replacements.chunks(CURRENT_EDGE_RECONCILE_BATCH_SIZE) {
+        affected_rows += crate::storage::sqlite::with_sqlite_write_lock(sqlite_path, || {
+            apply_current_edge_replacements(connection, repo_id, chunk)
+        })?;
+    }
+    Ok(affected_rows)
+}
+
+fn apply_current_edge_replacements_in_chunks(
     connection: &mut Connection,
     repo_id: &str,
-    touched_paths: &[String],
+    replacements: &[CurrentEdgeReplacement],
 ) -> Result<usize> {
-    let touched_paths = touched_paths.iter().cloned().collect::<HashSet<_>>();
-    let current_edges = load_current_edges_for_local_reconciliation_with_connection(
-        connection,
-        repo_id,
-        &touched_paths,
-    )?;
-    if current_edges.is_empty() {
-        return Ok(0);
+    let mut affected_rows = 0usize;
+    for chunk in replacements.chunks(CURRENT_EDGE_RECONCILE_BATCH_SIZE) {
+        affected_rows += apply_current_edge_replacements(connection, repo_id, chunk)?;
     }
-    let source_paths = current_edges
-        .iter()
-        .map(|edge| edge.path.clone())
-        .collect::<HashSet<_>>();
-    let current_targets = load_current_targets_for_paths_for_local_resolution_with_connection(
-        connection,
-        repo_id,
-        &touched_paths,
-    )?;
-    let repo_wide_targets_by_source_path =
-        load_repo_wide_targets_for_touched_unresolved_source_paths_with_connection(
-            connection,
-            repo_id,
-            &touched_paths,
-            &current_edges,
-        )?;
-    let target_by_symbol_fqn = current_targets
-        .iter()
-        .cloned()
-        .map(|target| (target.symbol_fqn.clone(), target))
-        .collect::<HashMap<_, _>>();
-    let source_facts_by_path =
-        load_current_source_facts_for_paths_with_connection(connection, repo_id, &source_paths)?;
-    let replacements = build_current_edge_replacements_for_local_resolution(
-        repo_id,
-        &touched_paths,
-        &source_facts_by_path,
-        &current_targets,
-        &repo_wide_targets_by_source_path,
-        &target_by_symbol_fqn,
-        &current_edges,
-    );
-
-    if replacements.is_empty() {
-        return Ok(0);
-    }
-
-    apply_current_edge_replacements(connection, repo_id, &replacements)
+    Ok(affected_rows)
 }
 
 fn apply_current_edge_replacements(
@@ -118,6 +204,155 @@ fn apply_current_edge_replacements(
     tx.commit()
         .context("committing current local edge reconciliation transaction")?;
     Ok(affected_rows)
+}
+
+struct CurrentEdgeReconcileState {
+    touched_paths: HashSet<String>,
+    current_edges: Vec<CurrentEdgeRecord>,
+    current_targets: Vec<crate::host::language_adapter::LocalTargetInfo>,
+    repo_wide_targets_by_cache_key:
+        HashMap<String, Vec<crate::host::language_adapter::LocalTargetInfo>>,
+    target_by_symbol_fqn: HashMap<String, crate::host::language_adapter::LocalTargetInfo>,
+    source_paths_total: usize,
+}
+
+fn load_current_edge_reconcile_state(
+    connection: &mut Connection,
+    repo_id: &str,
+    touched_paths: &[String],
+) -> Result<CurrentEdgeReconcileState> {
+    let touched_paths = touched_paths.iter().cloned().collect::<HashSet<_>>();
+    let mut current_edges = load_current_edges_for_local_reconciliation_with_connection(
+        connection,
+        repo_id,
+        &touched_paths,
+    )?;
+    current_edges.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.edge_id.cmp(&right.edge_id))
+    });
+    let current_targets = load_current_targets_for_paths_for_local_resolution_with_connection(
+        connection,
+        repo_id,
+        &touched_paths,
+    )?;
+    let repo_wide_targets_by_cache_key =
+        load_repo_wide_targets_for_touched_unresolved_source_paths_with_connection(
+            connection,
+            repo_id,
+            &touched_paths,
+            &current_edges,
+        )?;
+    let target_by_symbol_fqn = current_targets
+        .iter()
+        .cloned()
+        .map(|target| (target.symbol_fqn.clone(), target))
+        .collect::<HashMap<_, _>>();
+    let source_paths_total = current_edge_source_path_count(&current_edges);
+    Ok(CurrentEdgeReconcileState {
+        touched_paths,
+        current_edges,
+        current_targets,
+        repo_wide_targets_by_cache_key,
+        target_by_symbol_fqn,
+        source_paths_total,
+    })
+}
+
+fn process_current_edge_reconcile_batches(
+    connection: &mut Connection,
+    repo_id: &str,
+    state: &CurrentEdgeReconcileState,
+    mut apply_replacements: impl FnMut(&mut Connection, &[CurrentEdgeReplacement]) -> Result<usize>,
+    mut on_progress: impl FnMut(CurrentEdgeReconcileProgress),
+) -> Result<(usize, usize)> {
+    let mut affected_rows = 0usize;
+    let mut replacement_count = 0usize;
+    let mut source_paths_completed = 0usize;
+
+    for range in current_edge_source_path_batch_ranges(
+        &state.current_edges,
+        CURRENT_EDGE_RECONCILE_SOURCE_PATH_BATCH_SIZE,
+    ) {
+        let batch_edges = &state.current_edges[range];
+        let batch_source_paths = batch_edges
+            .iter()
+            .map(|edge| edge.path.clone())
+            .collect::<HashSet<_>>();
+        let source_facts_by_path = load_current_source_facts_for_paths_with_connection(
+            connection,
+            repo_id,
+            &batch_source_paths,
+        )?;
+        let replacements = build_current_edge_replacements_for_local_resolution(
+            repo_id,
+            &state.touched_paths,
+            &source_facts_by_path,
+            &state.current_targets,
+            &state.repo_wide_targets_by_cache_key,
+            &state.target_by_symbol_fqn,
+            batch_edges,
+        );
+
+        replacement_count += replacements.len();
+        if !replacements.is_empty() {
+            affected_rows += apply_replacements(connection, &replacements)?;
+        }
+
+        source_paths_completed += batch_source_paths.len();
+        on_progress(CurrentEdgeReconcileProgress {
+            source_paths_total: state.source_paths_total,
+            source_paths_completed,
+            current_path: batch_edges.last().map(|edge| edge.path.clone()),
+        });
+    }
+
+    Ok((affected_rows, replacement_count))
+}
+
+fn current_edge_source_path_count(current_edges: &[CurrentEdgeRecord]) -> usize {
+    let mut count = 0usize;
+    let mut current_source_path = None::<&str>;
+    for edge in current_edges {
+        if current_source_path != Some(edge.path.as_str()) {
+            current_source_path = Some(edge.path.as_str());
+            count += 1;
+        }
+    }
+    count
+}
+
+fn current_edge_source_path_batch_ranges(
+    current_edges: &[CurrentEdgeRecord],
+    batch_size: usize,
+) -> Vec<std::ops::Range<usize>> {
+    if current_edges.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::new();
+    let mut batch_start = 0usize;
+    let mut paths_in_batch = 0usize;
+    let mut current_source_path = None::<&str>;
+
+    for (index, edge) in current_edges.iter().enumerate() {
+        if current_source_path == Some(edge.path.as_str()) {
+            continue;
+        }
+
+        if paths_in_batch == batch_size {
+            ranges.push(batch_start..index);
+            batch_start = index;
+            paths_in_batch = 0;
+        }
+
+        current_source_path = Some(edge.path.as_str());
+        paths_in_batch += 1;
+    }
+
+    ranges.push(batch_start..current_edges.len());
+    ranges
 }
 
 fn open_current_state_reconciliation_connection(path: &Path) -> Result<Connection> {
@@ -389,7 +624,7 @@ fn build_current_edge_replacements_for_local_resolution(
     touched_paths: &HashSet<String>,
     source_facts_by_path: &HashMap<String, crate::host::language_adapter::LocalSourceFacts>,
     current_targets: &[crate::host::language_adapter::LocalTargetInfo],
-    repo_wide_targets_by_source_path: &HashMap<
+    repo_wide_targets_by_cache_key: &HashMap<
         String,
         Vec<crate::host::language_adapter::LocalTargetInfo>,
     >,
@@ -397,17 +632,34 @@ fn build_current_edge_replacements_for_local_resolution(
     current_edges: &[CurrentEdgeRecord],
 ) -> Vec<CurrentEdgeReplacement> {
     let mut replacements = Vec::new();
+    let mut current_source_path = None::<&str>;
+    let mut current_source_path_targets =
+        None::<Vec<crate::host::language_adapter::LocalTargetInfo>>;
 
     for edge in current_edges {
+        if current_source_path != Some(edge.path.as_str()) {
+            current_source_path = Some(edge.path.as_str());
+            current_source_path_targets = None;
+        }
+
         if edge.to_symbol_id.is_none() {
             let source_facts = source_facts_by_path
                 .get(&edge.path)
                 .cloned()
                 .unwrap_or_default();
-            let resolution_targets = repo_wide_targets_by_source_path
-                .get(&edge.path)
-                .map(Vec::as_slice)
-                .unwrap_or(current_targets);
+            let resolution_targets = if touched_paths.contains(&edge.path) {
+                let cache_key = resolution_language_cache_key(&edge.language);
+                let path_targets = current_source_path_targets.get_or_insert_with(|| {
+                    cache_key
+                        .as_deref()
+                        .and_then(|key| repo_wide_targets_by_cache_key.get(key))
+                        .map(|targets| repo_wide_targets_for_source_path(targets, &edge.path))
+                        .unwrap_or_default()
+                });
+                path_targets.as_slice()
+            } else {
+                current_targets
+            };
             let expanded_edges = expand_current_edge_for_local_resolution(
                 repo_id,
                 edge,
@@ -471,32 +723,64 @@ fn build_current_edge_replacements_for_local_resolution(
     replacements
 }
 
+pub(crate) fn shared_repo_wide_target_cache_keys_for_touched_unresolved_source_paths(
+    current_edges: &[CurrentEdgeRecord],
+    touched_paths: &HashSet<String>,
+) -> HashSet<String> {
+    current_edges
+        .iter()
+        .filter(|edge| edge.to_symbol_id.is_none())
+        .filter(|edge| touched_paths.contains(&edge.path))
+        .filter_map(|edge| resolution_language_cache_key(&edge.language))
+        .collect()
+}
+
+fn resolution_language_cache_key(language: &str) -> Option<String> {
+    let mut compatible_languages = compatible_resolution_languages(language);
+    compatible_languages.sort_unstable();
+    (!compatible_languages.is_empty()).then(|| compatible_languages.join("|"))
+}
+
+pub(crate) fn repo_wide_targets_for_source_path(
+    repo_wide_targets: &[crate::host::language_adapter::LocalTargetInfo],
+    source_path: &str,
+) -> Vec<crate::host::language_adapter::LocalTargetInfo> {
+    repo_wide_targets
+        .iter()
+        .filter(|target| {
+            target
+                .symbol_fqn
+                .split_once("::")
+                .map(|(path, _)| path)
+                .unwrap_or(target.symbol_fqn.as_str())
+                != source_path
+        })
+        .cloned()
+        .collect()
+}
+
 fn load_repo_wide_targets_for_touched_unresolved_source_paths_with_connection(
     connection: &Connection,
     repo_id: &str,
     touched_paths: &HashSet<String>,
     current_edges: &[CurrentEdgeRecord],
 ) -> Result<HashMap<String, Vec<crate::host::language_adapter::LocalTargetInfo>>> {
-    let mut targets_by_path = HashMap::new();
+    let mut targets_by_cache_key = HashMap::new();
 
-    for edge in current_edges {
-        if edge.to_symbol_id.is_some() || !touched_paths.contains(&edge.path) {
-            continue;
-        }
-        if targets_by_path.contains_key(&edge.path) {
-            continue;
-        }
-
-        let targets = load_current_targets_for_resolution_with_connection(
+    for cache_key in shared_repo_wide_target_cache_keys_for_touched_unresolved_source_paths(
+        current_edges,
+        touched_paths,
+    ) {
+        let compatible_languages = cache_key.split('|').collect::<Vec<_>>();
+        let targets = load_current_targets_for_languages_with_connection(
             connection,
             repo_id,
-            &edge.path,
-            &edge.language,
+            &compatible_languages,
         )?;
-        targets_by_path.insert(edge.path.clone(), targets);
+        targets_by_cache_key.insert(cache_key, targets);
     }
 
-    Ok(targets_by_path)
+    Ok(targets_by_cache_key)
 }
 
 fn expand_current_edge_for_local_resolution(

@@ -158,6 +158,7 @@ pub(super) fn humanise_init_sync_phase(phase: &str) -> &'static str {
         "removing_paths" => "removing stale paths",
         "extracting_paths" => "extracting artefacts",
         "materialising_paths" => "materialising artefacts",
+        "reconciling_edges" => "reconciling edges",
         "running_gc" => "cleaning caches",
         "complete" => "complete",
         "failed" => "failed",

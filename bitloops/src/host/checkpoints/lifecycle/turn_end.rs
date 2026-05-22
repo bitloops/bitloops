@@ -144,6 +144,11 @@ pub fn handle_lifecycle_turn_end(
         .as_ref()
         .map(|state| state.pending.step_count + 1)
         .unwrap_or(1);
+    let session_is_auxiliary = session_before_capture
+        .as_ref()
+        .map(|state| state.is_auxiliary)
+        .unwrap_or(false)
+        || event.is_auxiliary;
 
     let runtime_store = RepoSqliteRuntimeStore::open(&repo_root)
         .context("opening runtime store for lifecycle turn-end metadata")?;
@@ -221,6 +226,7 @@ pub fn handle_lifecycle_turn_end(
                 ended_at: state.ended_at.clone(),
                 last_event_at: interaction_now.clone(),
                 updated_at: interaction_now.clone(),
+                is_auxiliary: session_is_auxiliary,
                 ..Default::default()
             })
             .unwrap_or(InteractionSession {
@@ -236,6 +242,7 @@ pub fn handle_lifecycle_turn_end(
                 ended_at: None,
                 last_event_at: interaction_now.clone(),
                 updated_at: interaction_now.clone(),
+                is_auxiliary: session_is_auxiliary,
                 ..Default::default()
             });
         if let Err(err) = spool.record_session(&session) {
@@ -352,6 +359,7 @@ pub fn handle_lifecycle_turn_end(
         let transition =
             transition_session_with_context(state.phase, SessionEvent::TurnEnd, context);
         if apply_session_transition(&mut state, transition, &mut SessionNoOpActionHandler).is_ok() {
+            state.is_auxiliary = session_is_auxiliary;
             let _ = backend.save_session(&state);
         }
     }

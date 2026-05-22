@@ -62,6 +62,21 @@ pub fn resolve_transcript_ref(session_id: &str, raw_path: Option<&str>) -> Strin
 }
 
 pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<LifecycleEvent>> {
+    // Codex Desktop fires hooks for its own background rollouts — title
+    // generation, ambient suggestions, internal probes — but never writes a
+    // JSONL transcript for those session_ids. It signals this by sending
+    // `transcript_path: null` in the hook payload. Keep those session ids in
+    // the spool, but mark them as auxiliary so broad dashboard surfaces can
+    // filter them out while preserving the rows for debugging. Real
+    // user-driven Codex sessions always carry a string transcript_path.
+    let mut raw_input = String::new();
+    stdin
+        .read_to_string(&mut raw_input)
+        .context("reading codex hook input")?;
+    let is_auxiliary = is_codex_auxiliary_hook_payload(&raw_input);
+    let mut replayed = std::io::Cursor::new(raw_input.into_bytes());
+    let stdin: &mut dyn Read = &mut replayed;
+
     match hook_name {
         HOOK_NAME_SESSION_START => {
             let raw = parse_session_info_input(stdin)?;
@@ -72,6 +87,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 session_id: session_id.clone(),
                 session_ref: resolve_transcript_ref(&session_id, Some(&raw.transcript_path)),
                 model: raw.model,
+                is_auxiliary,
                 ..LifecycleEvent::default()
             }))
         }
@@ -85,6 +101,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 session_ref: resolve_transcript_ref(&session_id, Some(&raw.transcript_path)),
                 prompt: raw.prompt,
                 model: raw.model,
+                is_auxiliary,
                 ..LifecycleEvent::default()
             }))
         }
@@ -109,6 +126,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 tool_response: raw.tool_response.clone(),
                 subagent_id: task_agent_id(raw.tool_response.as_ref()),
                 model: raw.model,
+                is_auxiliary,
                 ..LifecycleEvent::default()
             }))
         }
@@ -121,11 +139,28 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 session_id: session_id.clone(),
                 session_ref: resolve_transcript_ref(&session_id, Some(&raw.transcript_path)),
                 model: raw.model,
+                is_auxiliary,
                 ..LifecycleEvent::default()
             }))
         }
         _ => Ok(None),
     }
+}
+
+/// Returns true when the hook payload is one of Codex Desktop's
+/// internal/auxiliary rollouts. The discriminator is `transcript_path: null`
+/// in the JSON — Codex Desktop sends a JSON null for the transcript path on
+/// background calls (title generation, ambient suggestions) because no
+/// rollout JSONL is ever written. Real user-driven sessions always carry a
+/// string transcript_path.
+fn is_codex_auxiliary_hook_payload(raw: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return false;
+    };
+    matches!(
+        value.pointer("/transcript_path"),
+        Some(serde_json::Value::Null)
+    )
 }
 
 fn task_agent_id(tool_response: Option<&serde_json::Value>) -> String {

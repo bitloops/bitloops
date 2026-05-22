@@ -298,10 +298,13 @@ mod tests {
             transcript_fragment: Some("Captured transcript".to_string()),
             files_modified: vec!["src/target.ts".to_string()],
             tool_events: vec![GuidanceToolEvidence {
+                event_type: Some("tool_invocation_observed".to_string()),
                 tool_kind: Some("shell".to_string()),
                 input_summary: Some("cargo nextest".to_string()),
                 output_summary: Some("nextest passed".to_string()),
                 command: Some("cargo nextest run --lib context_guidance".to_string()),
+                file_path: None,
+                evidence_text: None,
             }],
         }
     }

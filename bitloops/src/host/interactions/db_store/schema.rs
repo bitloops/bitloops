@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS interaction_sessions (
     ended_at TEXT,
     last_event_at TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT '',
+    is_auxiliary INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (repo_id, session_id)
 );
 
@@ -306,6 +307,10 @@ pub(super) fn ensure_additive_columns(conn: &rusqlite::Connection) -> Result<()>
             (
                 "updated_at",
                 "ALTER TABLE interaction_sessions ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "is_auxiliary",
+                "ALTER TABLE interaction_sessions ADD COLUMN is_auxiliary INTEGER NOT NULL DEFAULT 0",
             ),
         ],
     )?;

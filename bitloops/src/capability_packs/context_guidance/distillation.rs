@@ -8,7 +8,9 @@ use super::evidence::{
     GuidanceEvidenceInput, GuidanceEvidenceSource, GuidanceEvidenceToolEvent, evidence_input_body,
     evidence_input_title, evidence_target_symbols, knowledge_source_label,
 };
-use super::types::{GuidanceDistillationOutput, trim_guidance_distillation_output};
+use super::types::{
+    GuidanceDistillationOutput, GuidanceFactCategory, trim_guidance_distillation_output,
+};
 
 pub struct GuidanceDistillationInput {
     pub checkpoint_id: Option<String>,
@@ -23,11 +25,51 @@ pub struct GuidanceDistillationInput {
     pub tool_events: Vec<GuidanceToolEvidence>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuidanceToolEvidence {
+    pub event_type: Option<String>,
     pub tool_kind: Option<String>,
     pub input_summary: Option<String>,
     pub output_summary: Option<String>,
     pub command: Option<String>,
+    pub file_path: Option<String>,
+    pub evidence_text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DistilledGuidance {
+    pub output: GuidanceDistillationOutput,
+    pub report: GuidanceDistillationReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GuidanceDistillationReport {
+    pub raw_response_chars: usize,
+    pub raw_fact_count: usize,
+    pub validation_input_fact_count: usize,
+    pub validation_kept_fact_count: usize,
+    pub validation_discards: Vec<GuidanceValidationDiscard>,
+    pub quality_input_fact_count: usize,
+    pub quality_kept_fact_count: usize,
+    pub quality_discards: Vec<GuidanceQualityDiscardSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuidanceValidationDiscard {
+    pub kind: String,
+    pub reason: GuidanceValidationDiscardReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuidanceValidationDiscardReason {
+    MissingTargetWithoutDefault,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuidanceQualityDiscardSummary {
+    pub kind: String,
+    pub category: GuidanceFactCategory,
+    pub reason: String,
 }
 
 pub struct KnowledgeGuidanceDistillationInput {
@@ -62,6 +104,9 @@ The guidanceFacts field must be a flat array of fact objects.
 Do not nest facts under category keys such as decision, verification, or doNotRepeat.
 Do not return summary.context or guidanceFacts.decision objects.
 Only emit guidance that will help a future coding session. Preserve durable decisions, constraints, risks, reusable patterns, and specific verification requirements. If no durable guidance is supported by evidence, return "guidanceFacts": [].
+Durable decisions in summary.decisions must also be emitted as guidanceFacts with category DECISION or CONSTRAINT.
+Every guidanceFact must include appliesTo.paths or appliesTo.symbols; targetless facts are discarded.
+For multi-file refactors, target the production files that own the decision. Use tests as evidence unless the guidance is specifically about test contracts.
 Do not emit status updates, completed-work summaries, code-size metrics, line-count reductions, generic "tests passed" facts, generic "ensure quality" advice, or "the agent edited this file" context.
 VERIFICATION facts must name a reusable command/check and explain why a future session should run it.
 CONTEXT facts must describe a durable codebase boundary, invariant, dependency, or ownership fact."#;
@@ -90,50 +135,14 @@ pub fn build_guidance_distillation_prompt(input: &GuidanceDistillationInput) -> 
         }
     };
     let files_modified = bounded_files_modified(&evidence.target_paths);
-    let tool_events = evidence
-        .tool_events
-        .iter()
-        .take(MAX_TOOL_EVENTS)
-        .map(|event| {
-            format!(
-                "- kind: {}\n  command: {}\n  input: {}\n  output: {}",
-                bounded_text(
-                    event.tool_kind.as_deref().unwrap_or(""),
-                    MAX_TOOL_COMMAND_CHARS
-                ),
-                bounded_text(
-                    event.command.as_deref().unwrap_or(""),
-                    MAX_TOOL_COMMAND_CHARS
-                ),
-                bounded_text(
-                    event.input_summary.as_deref().unwrap_or(""),
-                    MAX_TOOL_INPUT_CHARS
-                ),
-                bounded_text(
-                    event.output_summary.as_deref().unwrap_or(""),
-                    MAX_TOOL_OUTPUT_CHARS
-                )
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let omitted_tool_events = evidence.tool_events.len().saturating_sub(MAX_TOOL_EVENTS);
-    let tool_events = if omitted_tool_events == 0 {
-        tool_events
-    } else if tool_events.is_empty() {
-        format!("- omitted_tool_events: {omitted_tool_events}")
-    } else {
-        format!("{tool_events}\n- omitted_tool_events: {omitted_tool_events}")
-    };
+    let tool_events = render_high_value_tool_events(&evidence.tool_events);
     let title = evidence_input_title(&evidence);
     let body = evidence_input_body(&evidence);
     let explicit_symbols = bounded_files_modified(evidence_target_symbols(&evidence));
     let knowledge_label = knowledge_source_label(&evidence).unwrap_or_default();
     let prompt = bounded_text(evidence.prompt.as_deref().unwrap_or(""), MAX_PROMPT_CHARS);
-    let transcript = bounded_text(
-        evidence.transcript_fragment.as_deref().unwrap_or(""),
-        MAX_TRANSCRIPT_CHARS,
-    );
+    let transcript =
+        bounded_history_transcript(evidence.transcript_fragment.as_deref().unwrap_or(""));
     let transcript = if body.is_empty() {
         transcript
     } else if transcript.is_empty() {
@@ -151,6 +160,8 @@ pub fn build_guidance_distillation_prompt(input: &GuidanceDistillationInput) -> 
         "{schema}\n\
 Emit guidance only when supported by supplied evidence from the prompt, transcript, modified paths, or tool events. \
 Prefer decisions, constraints, risks, rejected approaches, and do-not-repeat lessons. \
+When the user selected implementation decisions, emit those decisions as guidanceFacts and cite the decision evidence. \
+For Write/Edit evidence, prefer facts about the durable design decision over facts that merely say a file changed. \
 Use concise evidenceExcerpt text copied or tightly paraphrased from the history. \
 Use appliesTo.paths only from modified or explicitly referenced paths. \
 Use appliesTo.symbols only when symbols are explicitly named. \
@@ -263,6 +274,8 @@ fn history_evidence_input(input: &GuidanceDistillationInput) -> GuidanceEvidence
                 input_summary: event.input_summary.clone(),
                 output_summary: event.output_summary.clone(),
                 command: event.command.clone(),
+                file_path: event.file_path.clone(),
+                evidence_text: event.evidence_text.clone(),
             })
             .collect(),
     }
@@ -288,6 +301,158 @@ fn knowledge_evidence_input(input: &KnowledgeGuidanceDistillationInput) -> Guida
         target_symbols: input.target_symbols.clone(),
         tool_events: Vec::new(),
     }
+}
+
+fn render_high_value_tool_events(events: &[GuidanceEvidenceToolEvent]) -> String {
+    let mut indexed = events.iter().enumerate().collect::<Vec<_>>();
+    indexed.sort_by(|(left_index, left), (right_index, right)| {
+        tool_event_score(right)
+            .cmp(&tool_event_score(left))
+            .then_with(|| left_index.cmp(right_index))
+    });
+
+    let selected = indexed
+        .into_iter()
+        .take(MAX_TOOL_EVENTS)
+        .map(|(_, event)| render_tool_event(event))
+        .collect::<Vec<_>>();
+    let omitted_tool_events = events.len().saturating_sub(selected.len());
+
+    match (selected.is_empty(), omitted_tool_events) {
+        (true, 0) => String::new(),
+        (true, omitted) => format!("- omitted_tool_events: {omitted}"),
+        (false, 0) => format!("high_value_tool_events:\n{}", selected.join("\n")),
+        (false, omitted) => format!(
+            "high_value_tool_events:\n{}\n- omitted_tool_events: {omitted}",
+            selected.join("\n")
+        ),
+    }
+}
+
+fn bounded_history_transcript(value: &str) -> String {
+    let bounded = bounded_text(value, MAX_TRANSCRIPT_CHARS);
+    let high_value_lines = high_value_transcript_lines(value);
+    let missing_high_value_lines = high_value_lines
+        .into_iter()
+        .filter(|line| !bounded.contains(line))
+        .collect::<Vec<_>>();
+    if missing_high_value_lines.is_empty() {
+        return bounded;
+    }
+    let high_value_block = missing_high_value_lines.join("\n");
+    if bounded.is_empty() {
+        return bounded_text(high_value_block.as_str(), MAX_TRANSCRIPT_CHARS);
+    }
+    bounded_text(
+        format!("high_value_transcript_lines:\n{high_value_block}\n\n{bounded}").as_str(),
+        MAX_TRANSCRIPT_CHARS,
+    )
+}
+
+fn high_value_transcript_lines(value: &str) -> Vec<String> {
+    value
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            let text = line.to_ascii_lowercase();
+            contains_any(
+                text.as_str(),
+                &[
+                    "decisions locked",
+                    "questions have been answered",
+                    "user chose",
+                    "decision:",
+                ],
+            )
+        })
+        .take(12)
+        .map(str::to_string)
+        .collect()
+}
+
+fn render_tool_event(event: &GuidanceEvidenceToolEvent) -> String {
+    format!(
+        "- kind: {}\n  command: {}\n  input: {}\n  output: {}\n  file: {}\n  evidence: {}",
+        bounded_text(
+            event.tool_kind.as_deref().unwrap_or(""),
+            MAX_TOOL_COMMAND_CHARS
+        ),
+        bounded_text(
+            event.command.as_deref().unwrap_or(""),
+            MAX_TOOL_COMMAND_CHARS
+        ),
+        bounded_text(
+            event.input_summary.as_deref().unwrap_or(""),
+            MAX_TOOL_INPUT_CHARS
+        ),
+        bounded_text(
+            event.output_summary.as_deref().unwrap_or(""),
+            MAX_TOOL_OUTPUT_CHARS
+        ),
+        bounded_text(
+            event.file_path.as_deref().unwrap_or(""),
+            MAX_FILE_PATH_CHARS
+        ),
+        bounded_text(
+            event.evidence_text.as_deref().unwrap_or(""),
+            MAX_TOOL_OUTPUT_CHARS
+        ),
+    )
+}
+
+fn tool_event_score(event: &GuidanceEvidenceToolEvent) -> i32 {
+    let text = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        event.tool_kind.as_deref().unwrap_or(""),
+        event.command.as_deref().unwrap_or(""),
+        event.input_summary.as_deref().unwrap_or(""),
+        event.output_summary.as_deref().unwrap_or(""),
+        event.evidence_text.as_deref().unwrap_or("")
+    )
+    .to_ascii_lowercase();
+
+    let mut score = 0;
+    if contains_any(
+        text.as_str(),
+        &[
+            "askuserquestion",
+            "questions have been answered",
+            "decisions locked",
+        ],
+    ) {
+        score += 100;
+    }
+    if contains_any(
+        text.as_str(),
+        &["write", "edit", "multiedit", "structuredpatch", "content:"],
+    ) {
+        score += 80;
+    }
+    if contains_any(
+        text.as_str(),
+        &[
+            "error[e",
+            "failed",
+            "doesn't implement",
+            "cannot be formatted",
+        ],
+    ) {
+        score += 70;
+    }
+    if contains_any(
+        text.as_str(),
+        &["cargo ", "nextest", "test result", "passed"],
+    ) {
+        score += 60;
+    }
+    if contains_any(text.as_str(), &["src/", "tests/"]) {
+        score += 20;
+    }
+    score
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
 }
 
 fn bounded_files_modified(paths: &[String]) -> String {
@@ -337,26 +502,30 @@ pub fn parse_guidance_distillation_output_for_input(
     raw: &str,
     input: &GuidanceDistillationInput,
 ) -> Result<GuidanceDistillationOutput> {
-    let default_path = input
+    Ok(parse_guidance_distillation_output_for_input_with_report(raw, input)?.output)
+}
+
+pub fn parse_guidance_distillation_output_for_input_with_report(
+    raw: &str,
+    input: &GuidanceDistillationInput,
+) -> Result<DistilledGuidance> {
+    let candidate_paths = candidate_paths_for_input(input);
+    parse_guidance_distillation_output_with_default_targets_and_report(
+        raw,
+        &candidate_paths,
+        &[],
+        false,
+    )
+}
+
+fn candidate_paths_for_input(input: &GuidanceDistillationInput) -> Vec<String> {
+    input
         .files_modified
         .iter()
         .map(|path| path.trim())
         .filter(|path| !path.is_empty())
-        .collect::<Vec<_>>();
-    let default_path = if default_path.len() == 1 {
-        Some(default_path[0])
-    } else {
-        None
-    };
-    match default_path {
-        Some(default_path) => parse_guidance_distillation_output_with_default_targets(
-            raw,
-            &[default_path.to_string()],
-            &[],
-            false,
-        ),
-        None => parse_guidance_distillation_output_with_default_targets(raw, &[], &[], false),
-    }
+        .map(str::to_string)
+        .collect()
 }
 
 fn parse_guidance_distillation_output_with_default_targets(
@@ -365,6 +534,23 @@ fn parse_guidance_distillation_output_with_default_targets(
     default_symbols: &[String],
     constrain_to_defaults: bool,
 ) -> Result<GuidanceDistillationOutput> {
+    Ok(
+        parse_guidance_distillation_output_with_default_targets_and_report(
+            raw,
+            default_paths,
+            default_symbols,
+            constrain_to_defaults,
+        )?
+        .output,
+    )
+}
+
+fn parse_guidance_distillation_output_with_default_targets_and_report(
+    raw: &str,
+    default_paths: &[String],
+    default_symbols: &[String],
+    constrain_to_defaults: bool,
+) -> Result<DistilledGuidance> {
     let payload = extract_json_object_from_text(raw)
         .ok_or_else(|| anyhow!("guidance distillation output did not contain a JSON object"))?;
     let parsed = match serde_json::from_str::<GuidanceDistillationOutput>(&payload) {
@@ -375,13 +561,40 @@ fn parse_guidance_distillation_output_with_default_targets(
             )
         })?,
     };
-    let validated = validate_guidance_distillation_output(
+    let raw_fact_count = parsed.guidance_facts.len();
+    let validation_input_fact_count = raw_fact_count;
+    let (validated, validation_discards) = validate_guidance_distillation_output_with_report(
         trim_guidance_distillation_output(parsed),
         default_paths,
         default_symbols,
         constrain_to_defaults,
     )?;
-    Ok(super::quality::filter_value_guidance_output(validated))
+    let validation_kept_fact_count = validated.guidance_facts.len();
+    let (filtered, quality_report) =
+        super::quality::filter_value_guidance_output_with_report(validated);
+    let quality_discards = quality_report
+        .discarded
+        .into_iter()
+        .map(|discard| GuidanceQualityDiscardSummary {
+            kind: discard.kind,
+            category: discard.category,
+            reason: format!("{:?}", discard.reason),
+        })
+        .collect();
+
+    Ok(DistilledGuidance {
+        output: filtered,
+        report: GuidanceDistillationReport {
+            raw_response_chars: raw.chars().count(),
+            raw_fact_count,
+            validation_input_fact_count,
+            validation_kept_fact_count,
+            validation_discards,
+            quality_input_fact_count: quality_report.input_fact_count,
+            quality_kept_fact_count: quality_report.kept_fact_count,
+            quality_discards,
+        },
+    })
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -619,13 +832,14 @@ fn summary_subject(file: Option<String>, function: Option<String>) -> Option<Str
     }
 }
 
-fn validate_guidance_distillation_output(
+fn validate_guidance_distillation_output_with_report(
     mut output: GuidanceDistillationOutput,
     default_paths: &[String],
     default_symbols: &[String],
     constrain_to_defaults: bool,
-) -> Result<GuidanceDistillationOutput> {
+) -> Result<(GuidanceDistillationOutput, Vec<GuidanceValidationDiscard>)> {
     let mut accepted_facts = Vec::new();
+    let mut discards = Vec::new();
     let default_path_set = default_paths
         .iter()
         .map(String::as_str)
@@ -645,13 +859,24 @@ fn validate_guidance_distillation_output(
             bail!("guidance distillation fact evidenceExcerpt must be non-empty");
         }
         if fact.applies_to.paths.is_empty() && fact.applies_to.symbols.is_empty() {
-            if default_paths.is_empty() && default_symbols.is_empty() {
-                continue;
-            } else {
+            let inferred_paths = infer_paths_from_fact_text(&fact, default_paths);
+            if inferred_paths.is_empty() && default_paths.len() == 1 && default_symbols.is_empty() {
                 fact.applies_to.paths.extend(default_paths.iter().cloned());
+            } else if inferred_paths.is_empty()
+                && default_symbols.len() == 1
+                && default_paths.is_empty()
+            {
                 fact.applies_to
                     .symbols
                     .extend(default_symbols.iter().cloned());
+            } else if inferred_paths.is_empty() {
+                discards.push(GuidanceValidationDiscard {
+                    kind: fact.kind,
+                    reason: GuidanceValidationDiscardReason::MissingTargetWithoutDefault,
+                });
+                continue;
+            } else {
+                fact.applies_to.paths = inferred_paths;
             }
         } else if constrain_to_defaults {
             fact.applies_to
@@ -670,7 +895,23 @@ fn validate_guidance_distillation_output(
         accepted_facts.push(fact);
     }
     output.guidance_facts = accepted_facts;
-    Ok(output)
+    Ok((output, discards))
+}
+
+fn infer_paths_from_fact_text(
+    fact: &super::types::GuidanceFactDraft,
+    candidate_paths: &[String],
+) -> Vec<String> {
+    let text = format!(
+        "{}\n{}",
+        fact.guidance.as_str(),
+        fact.evidence_excerpt.as_str()
+    );
+    candidate_paths
+        .iter()
+        .filter(|path| text.contains(path.as_str()))
+        .cloned()
+        .collect()
 }
 
 fn extract_json_object_from_text(content: &str) -> Option<String> {
@@ -696,6 +937,13 @@ impl GuidanceDistiller {
     }
 
     pub fn distill(&self, input: &GuidanceDistillationInput) -> Result<GuidanceDistillationOutput> {
+        Ok(self.distill_with_report(input)?.output)
+    }
+
+    pub fn distill_with_report(
+        &self,
+        input: &GuidanceDistillationInput,
+    ) -> Result<DistilledGuidance> {
         let raw = self
             .service
             .complete(
@@ -703,7 +951,7 @@ impl GuidanceDistiller {
                 &build_guidance_distillation_prompt(input),
             )
             .context("guidance distillation text generation failed")?;
-        parse_guidance_distillation_output_for_input(&raw, input)
+        parse_guidance_distillation_output_for_input_with_report(&raw, input)
             .context("guidance distillation model output was invalid")
     }
 

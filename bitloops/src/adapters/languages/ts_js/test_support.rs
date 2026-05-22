@@ -57,7 +57,8 @@ impl TypeScriptTestMappingHelper {
     pub(crate) fn supports_path(_absolute_path: &Path, relative_path: &str) -> bool {
         relative_path.ends_with(".test.ts")
             || relative_path.ends_with(".spec.ts")
-            || relative_path.contains("/__tests__/")
+            || (relative_path.contains("/__tests__/")
+                && has_typescript_or_javascript_extension(relative_path))
     }
 
     pub(crate) fn discover_tests(
@@ -308,6 +309,15 @@ fn read_source_file(path: &Path) -> Result<String> {
     fs::read_to_string(path).with_context(|| format!("failed reading test file {}", path.display()))
 }
 
+fn has_typescript_or_javascript_extension(relative_path: &str) -> bool {
+    matches!(
+        Path::new(relative_path)
+            .extension()
+            .and_then(|extension| extension.to_str()),
+        Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts")
+    )
+}
+
 fn normalize_join(base: &Path, relative: &Path) -> PathBuf {
     let joined = base.join(relative);
     let mut normalized = PathBuf::new();
@@ -328,4 +338,38 @@ fn normalize_join(base: &Path, relative: &Path) -> PathBuf {
 
 fn normalize_rel_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TypeScriptTestMappingHelper;
+    use std::path::Path;
+
+    #[test]
+    fn supports_typescript_and_javascript_source_files_in_test_locations() {
+        assert!(TypeScriptTestMappingHelper::supports_path(
+            Path::new(""),
+            "src/__tests__/report.spec.js"
+        ));
+        assert!(TypeScriptTestMappingHelper::supports_path(
+            Path::new(""),
+            "src/__tests__/report.spec.tsx"
+        ));
+        assert!(TypeScriptTestMappingHelper::supports_path(
+            Path::new(""),
+            "tests/report.test.ts"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_source_fixtures_inside_tests_directory() {
+        assert!(!TypeScriptTestMappingHelper::supports_path(
+            Path::new(""),
+            "src/__tests__/fixtures/report.xlsx"
+        ));
+        assert!(!TypeScriptTestMappingHelper::supports_path(
+            Path::new(""),
+            "src/__tests__/fixtures/snapshot.png"
+        ));
+    }
 }

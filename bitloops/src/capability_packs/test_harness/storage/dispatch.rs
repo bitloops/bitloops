@@ -128,6 +128,22 @@ impl TestHarnessRepository for BitloopsTestHarnessRepository {
         }
     }
 
+    fn replace_coverage_capture(
+        &mut self,
+        capture: &CoverageCaptureRecord,
+        hits: &[CoverageHitRecord],
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()> {
+        match self {
+            Self::Sqlite(repository) => {
+                repository.replace_coverage_capture(capture, hits, diagnostics)
+            }
+            Self::Postgres(repository) => {
+                repository.replace_coverage_capture(capture, hits, diagnostics)
+            }
+        }
+    }
+
     fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize> {
         match self {
             Self::Sqlite(repository) => {
@@ -154,6 +170,15 @@ impl TestHarnessCoverageGateway for BitloopsTestHarnessRepository {
         diagnostics: &[CoverageDiagnosticRecord],
     ) -> Result<()> {
         TestHarnessRepository::insert_coverage_diagnostics(self, diagnostics)
+    }
+
+    fn replace_coverage_capture(
+        &mut self,
+        capture: &CoverageCaptureRecord,
+        hits: &[CoverageHitRecord],
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()> {
+        TestHarnessRepository::replace_coverage_capture(self, capture, hits, diagnostics)
     }
 
     fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize> {
