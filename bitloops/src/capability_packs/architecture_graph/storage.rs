@@ -131,16 +131,23 @@ pub fn assertion_id(repo_id: &str, action: &str, target_kind: &str, identity: &s
     ))
 }
 
-pub async fn replace_computed_graph(
+pub(crate) async fn replace_computed_graph(
     relational: &RelationalStorage,
     repo_id: &str,
     facts: ArchitectureGraphFacts,
     generation_seq: u64,
     warnings: &[String],
     metrics: Value,
-) -> Result<()> {
+) -> Result<crate::host::devql::SerializedSqliteWriteOutcome> {
     relational
-        .replace_architecture_graph_current(repo_id, facts, generation_seq, warnings, metrics)
+        .replace_architecture_graph_current(
+            repo_id,
+            facts,
+            generation_seq,
+            warnings,
+            metrics,
+            crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_CONSUMER_ID,
+        )
         .await
         .context("replacing architecture graph computed facts")
 }

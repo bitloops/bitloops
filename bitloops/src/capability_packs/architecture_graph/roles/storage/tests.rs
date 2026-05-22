@@ -179,6 +179,62 @@ async fn replace_facts_for_paths_removes_stale_facts() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn replace_role_classification_state_chunks_large_write_sets() -> anyhow::Result<()> {
+    let (_temp, relational) = test_relational()?;
+    let path = "src/generated.rs".to_string();
+    let target = RoleTarget::file(&path);
+    let facts = (0..251)
+        .map(|index| ArchitectureArtefactFact {
+            repo_id: "repo-1".to_string(),
+            fact_id: super::super::taxonomy::fact_id(
+                "repo-1",
+                &target,
+                "symbol",
+                "name",
+                &format!("generated_{index}"),
+            ),
+            target: target.clone(),
+            language: Some("rust".to_string()),
+            fact_kind: "symbol".to_string(),
+            fact_key: "name".to_string(),
+            fact_value: format!("generated_{index}"),
+            source: "test".to_string(),
+            confidence: 1.0,
+            evidence: serde_json::json!([{ "path": path }]),
+            generation_seq: 1,
+        })
+        .collect::<Vec<_>>();
+
+    let outcome = replace_role_classification_state(
+        &relational,
+        RoleClassificationStateReplacement {
+            repo_id: "repo-1",
+            fact_and_signal_paths: std::slice::from_ref(&path),
+            facts: &facts,
+            signals: &[],
+            assignment_paths: &[],
+            assignments: &[],
+            assignment_history_writes: &[],
+            removed_assignment_paths: &[],
+            generation_seq: 1,
+        },
+    )
+    .await?;
+
+    let loaded = load_facts_for_paths(&relational, "repo-1", std::slice::from_ref(&path)).await?;
+    assert_eq!(loaded.len(), 251);
+    assert_eq!(
+        outcome.sqlite_phase_metrics.phase_name,
+        Some("architecture_graph.roles.current_state")
+    );
+    assert!(
+        outcome.sqlite_phase_metrics.transaction_count > 1,
+        "large role-current-state replacements should span multiple SQLite transactions"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_active_detection_rules_ignores_draft_rules() -> anyhow::Result<()> {
     let (_temp, relational) = test_relational()?;
     let role = role_fixture("repo-1", "runtime", "consumer", "Consumer");

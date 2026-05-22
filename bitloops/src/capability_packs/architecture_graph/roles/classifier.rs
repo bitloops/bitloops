@@ -384,7 +384,7 @@ pub async fn classify_architecture_roles_for_current_state(
         }
     }
     let removed_paths = removed_assignment_paths.iter().cloned().collect::<Vec<_>>();
-    let write_counts = replace_role_classification_state(
+    let apply_outcome = replace_role_classification_state(
         relational,
         RoleClassificationStateReplacement {
             repo_id: input.repo_id,
@@ -400,9 +400,19 @@ pub async fn classify_architecture_roles_for_current_state(
     )
     .await
     .context("replacing architecture role classification state for current state")?;
+    let write_counts = apply_outcome.write_counts;
 
     Ok(ArchitectureRoleReconcileOutcome {
         metrics: ArchitectureRoleReconcileMetrics {
+            phase_name: Some(
+                crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID.to_string(),
+            ),
+            reconcile_mode: Some(if input.scope.full_reconcile {
+                "full_reconcile".to_string()
+            } else {
+                "merged_delta".to_string()
+            }),
+            skipped_inactive: false,
             full_reconcile: input.scope.full_reconcile,
             affected_paths: input.scope.affected_paths.len(),
             refreshed_paths: extraction.refreshed_paths.len(),
@@ -418,6 +428,11 @@ pub async fn classify_architecture_roles_for_current_state(
             assignment_history_rows: write_counts.assignment_history_rows,
             adjudication_candidates: adjudication_candidates.len()
                 + unknown_or_high_impact_candidates,
+            transaction_count: apply_outcome.sqlite_phase_metrics.transaction_count,
+            max_rss_kb: apply_outcome.max_rss_kb,
+            max_sqlite_lock_wait_ms: apply_outcome.sqlite_phase_metrics.max_wait_ms,
+            max_sqlite_lock_hold_ms: apply_outcome.sqlite_phase_metrics.max_hold_ms,
+            file_batches: usize::from(input.scope.full_reconcile),
         },
         warnings: Vec::new(),
         architecture_embedding_refresh_paths: assignment_refresh_paths,

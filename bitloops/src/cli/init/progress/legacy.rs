@@ -131,8 +131,13 @@ fn task_status_text(task: &crate::cli::devql::graphql::TaskGraphqlRecord) -> Str
         );
         if let Some(progress) = task.sync_progress.as_ref() {
             if progress.paths_total > 0 {
+                let unit = if progress.phase.eq_ignore_ascii_case("reconciling_edges") {
+                    "edge paths"
+                } else {
+                    "files"
+                };
                 line.push_str(&format!(
-                    " · {}/{} files",
+                    " · {}/{} {unit}",
                     progress.paths_completed, progress.paths_total
                 ));
             }

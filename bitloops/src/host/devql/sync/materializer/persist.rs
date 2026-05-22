@@ -18,13 +18,19 @@ use super::sql::{
     insert_artefact_sql, insert_edge_sql, upsert_current_file_state_sql,
 };
 
-pub(crate) use self::current_edges::reconcile_current_local_edges_for_paths;
+pub(crate) use self::current_edges::{
+    CurrentEdgeReconcileOutcome, reconcile_current_local_edges_for_paths,
+    reconcile_current_local_edges_for_paths_with_progress,
+};
 #[cfg(test)]
 pub(crate) use self::current_edges::{
     load_current_edges_for_local_reconciliation_with_connection,
     load_current_source_facts_for_paths_with_connection,
     load_current_targets_for_paths_for_local_resolution_with_connection,
     reconcile_current_local_edges_for_paths_with_write_lock,
+    reconcile_current_local_edges_for_paths_with_write_lock_and_progress,
+    repo_wide_targets_for_source_path,
+    shared_repo_wide_target_cache_keys_for_touched_unresolved_source_paths,
 };
 pub(crate) use self::current_state::{persist_prepared_materialisation_tx, remove_paths_tx};
 pub(crate) use self::local_resolution::resolve_prepared_local_edges_with_connection;

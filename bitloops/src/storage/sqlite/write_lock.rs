@@ -7,11 +7,37 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+use super::phase::SqliteWritePhaseMetrics;
+
 const WRITE_LOCK_WAIT_WARN_THRESHOLD: Duration = Duration::from_secs(1);
 const WRITE_LOCK_HOLD_WARN_THRESHOLD: Duration = Duration::from_secs(5);
 
 thread_local! {
     static HELD_SQLITE_WRITE_LOCKS: RefCell<HashMap<PathBuf, usize>> = RefCell::new(HashMap::new());
+    static ACTIVE_SQLITE_WRITE_PHASES: RefCell<Vec<SqliteWritePhaseMetrics>> = const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn with_sqlite_write_phase<T>(
+    phase_name: &'static str,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<(T, SqliteWritePhaseMetrics)> {
+    ACTIVE_SQLITE_WRITE_PHASES.with(|phases| {
+        phases.borrow_mut().push(SqliteWritePhaseMetrics {
+            phase_name: Some(phase_name),
+            ..SqliteWritePhaseMetrics::default()
+        });
+    });
+    let result = operation();
+    let metrics = ACTIVE_SQLITE_WRITE_PHASES.with(|phases| {
+        phases
+            .borrow_mut()
+            .pop()
+            .unwrap_or(SqliteWritePhaseMetrics {
+                phase_name: Some(phase_name),
+                ..SqliteWritePhaseMetrics::default()
+            })
+    });
+    result.map(|value| (value, metrics))
 }
 
 pub(crate) fn with_sqlite_write_lock<T>(
@@ -56,6 +82,7 @@ pub(crate) fn with_sqlite_write_lock_map<T, E>(
     let result = operation();
     let held = hold_started.elapsed();
 
+    record_sqlite_write_lock_timing(waited, held);
     log_sqlite_write_lock_timing(&canonical_db_path, waited, held);
     result
 }
@@ -241,33 +268,51 @@ pub(crate) fn hold_sqlite_write_lock_until_release(
 }
 
 fn log_sqlite_write_lock_timing(db_path: &Path, waited: Duration, held: Duration) {
+    let phase_name = ACTIVE_SQLITE_WRITE_PHASES
+        .with(|phases| phases.borrow().last().and_then(|phase| phase.phase_name));
+    let phase_suffix = phase_name
+        .map(|phase| format!(" during phase `{phase}`"))
+        .unwrap_or_default();
     if waited >= WRITE_LOCK_WAIT_WARN_THRESHOLD {
         log::warn!(
-            "waited {}ms for SQLite write lock on {}",
+            "waited {}ms for SQLite write lock on {}{}",
             waited.as_millis(),
-            db_path.display()
+            db_path.display(),
+            phase_suffix
         );
     } else {
         log::debug!(
-            "waited {}ms for SQLite write lock on {}",
+            "waited {}ms for SQLite write lock on {}{}",
             waited.as_millis(),
-            db_path.display()
+            db_path.display(),
+            phase_suffix
         );
     }
 
     if held >= WRITE_LOCK_HOLD_WARN_THRESHOLD {
         log::warn!(
-            "held SQLite write lock for {}ms on {}",
+            "held SQLite write lock for {}ms on {}{}",
             held.as_millis(),
-            db_path.display()
+            db_path.display(),
+            phase_suffix
         );
     } else {
         log::debug!(
-            "held SQLite write lock for {}ms on {}",
+            "held SQLite write lock for {}ms on {}{}",
             held.as_millis(),
-            db_path.display()
+            db_path.display(),
+            phase_suffix
         );
     }
+}
+
+fn record_sqlite_write_lock_timing(waited: Duration, held: Duration) {
+    ACTIVE_SQLITE_WRITE_PHASES.with(|phases| {
+        if let Some(phase) = phases.borrow_mut().last_mut() {
+            let phase_name = phase.phase_name;
+            phase.record_timing(phase_name, waited, held);
+        }
+    });
 }
 
 #[cfg(test)]
