@@ -171,31 +171,6 @@ pub(super) async fn sqlite_exec_serialized_batch_transactional_path_with_phase_o
         .await
 }
 
-pub(super) async fn sqlite_replace_architecture_graph_current_path(
-    path: &Path,
-    repo_id: &str,
-    facts: ArchitectureGraphFacts,
-    generation_seq: u64,
-    warnings: &[String],
-    metrics: Value,
-) -> Result<()> {
-    RepoSqliteWriteActor::shared_for_path(path)?
-        .replace_architecture_graph(
-            ArchitectureGraphReplaceRequest {
-                repo_id: repo_id.to_string(),
-                facts,
-                generation_seq,
-                warnings: warnings.to_vec(),
-                metrics,
-                #[cfg(test)]
-                fail_after_writes: None,
-            },
-            None,
-        )
-        .await
-        .map(|_| ())
-}
-
 pub(super) async fn sqlite_replace_architecture_graph_current_path_with_phase_outcome(
     path: &Path,
     repo_id: &str,

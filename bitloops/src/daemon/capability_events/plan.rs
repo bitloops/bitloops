@@ -11,8 +11,10 @@ use crate::host::capability_host::{
 };
 
 use super::super::types::{CapabilityEventRunRecord, unix_timestamp_now};
+#[cfg(test)]
+use super::queue::GenerationRow;
 use super::queue::{
-    ArtefactChangeRow, FileChangeRow, GenerationRow, count_artefact_changes, count_file_changes,
+    ArtefactChangeRow, FileChangeRow, count_artefact_changes, count_file_changes,
     latest_generation_seq, load_artefact_changes, load_consumer_cursor,
     load_distinct_changed_paths, load_file_changes, load_generations, sql_i64,
 };
@@ -77,6 +79,7 @@ pub(super) fn build_execution_plan(
     let latest_generation = generations
         .last()
         .expect("checked non-empty generations before building execution plan");
+    let latest_generation_seq = latest_generation.generation_seq;
     let from_generation_seq = from_generation_seq_exclusive + 1;
     let suppress_generation_full_reconcile =
         architecture_graph_same_session_follow_up_delta_enabled(
@@ -330,6 +333,7 @@ fn partition_artefact_changes(
     (upserts, removals)
 }
 
+#[cfg(test)]
 pub(super) fn determine_reconcile_mode(
     last_applied_generation_seq: Option<u64>,
     generations: &[GenerationRow],

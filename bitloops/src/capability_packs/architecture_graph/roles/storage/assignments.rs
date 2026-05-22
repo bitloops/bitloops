@@ -11,9 +11,11 @@ use super::rows::{assignment_from_row, sql_opt_i64, sql_opt_text, sql_text};
 use super::signals::{
     count_role_signals_for_paths, delete_signals_for_paths_sql, insert_signal_sql,
 };
+#[cfg(test)]
+use crate::capability_packs::architecture_graph::roles::taxonomy::RoleLifecycle;
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
     ArchitectureArtefactFact, ArchitectureRoleAssignment, ArchitectureRoleRuleSignal,
-    AssignmentSource, AssignmentStatus, RoleLifecycle, assignment_history_id, assignment_id,
+    AssignmentSource, AssignmentStatus, assignment_history_id, assignment_id,
 };
 
 const ROLE_CLASSIFICATION_STATE_WRITE_BATCH_SIZE: usize = 250;
@@ -28,6 +30,7 @@ pub async fn upsert_assignment(
         .context("upserting architecture role assignment")
 }
 
+#[cfg(test)]
 pub async fn replace_assignments_for_paths(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -203,6 +206,7 @@ pub(crate) async fn replace_role_classification_state(
     })
 }
 
+#[cfg(test)]
 pub async fn replace_assignments_for_paths_with_history(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -277,6 +281,7 @@ async fn assignment_history_exists(
         > 0)
 }
 
+#[cfg(test)]
 pub async fn load_assignments_for_path(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -384,7 +389,7 @@ pub async fn load_current_assignment_by_id(
         .transpose()
 }
 
-pub async fn list_current_assignments_for_role(
+async fn list_current_assignments_for_role(
     relational: &RelationalStorage,
     repo_id: &str,
     role_id: &str,
@@ -506,6 +511,7 @@ pub async fn migrate_current_assignment_to_role(
     Ok(new_assignment_id)
 }
 
+#[cfg(test)]
 pub async fn mark_assignments_for_paths_stale(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -563,6 +569,7 @@ fn delete_assignments_for_paths_sql(repo_id: &str, paths: &[String]) -> String {
     )
 }
 
+#[cfg(test)]
 pub async fn retire_role_and_mark_assignments(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -610,6 +617,7 @@ pub async fn retire_role_and_mark_assignments(
         .context("retiring architecture role and marking assignments")
 }
 
+#[cfg(test)]
 async fn load_assignments_for_role_status(
     relational: &RelationalStorage,
     repo_id: &str,
