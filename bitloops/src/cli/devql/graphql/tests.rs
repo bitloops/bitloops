@@ -254,6 +254,57 @@ fn live_task_progress_bar_line_fits_requested_width() {
 }
 
 #[test]
+fn live_task_progress_bar_line_uses_indeterminate_summary_for_reconciling_edges() {
+    with_env_vars(&[("NO_COLOR", Some("1"))], || {
+        let mut task = sample_task("running");
+        task.sync_progress.as_mut().expect("sync progress").phase = "reconciling_edges".to_string();
+        task.sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .current_path = None;
+        task.sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_total = 3112;
+        task.sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_completed = 2000;
+        task.sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_remaining = 1112;
+
+        let rendered = format_live_task_progress_bar_line(&task, 0, Some(64));
+        assert!(rendered.contains("reconciling edges"));
+        assert!(rendered.contains("2000/3112 edge paths"));
+        assert!(!rendered.contains(" 64% "));
+    });
+}
+
+#[test]
+fn live_task_status_line_labels_reconciling_edge_counts() {
+    let mut task = sample_task("running");
+    task.sync_progress.as_mut().expect("sync progress").phase = "reconciling_edges".to_string();
+    task.sync_progress
+        .as_mut()
+        .expect("sync progress")
+        .paths_total = 3112;
+    task.sync_progress
+        .as_mut()
+        .expect("sync progress")
+        .paths_completed = 2000;
+    task.sync_progress
+        .as_mut()
+        .expect("sync progress")
+        .paths_remaining = 1112;
+
+    let rendered = format_live_task_status_line(&task, "*", None);
+    assert!(rendered.contains("reconciling edges"));
+    assert!(rendered.contains("2000/3112 edge paths"));
+}
+
+#[test]
 fn live_task_status_line_covers_terminal_states() {
     let queued = format_live_task_status_line(&sample_task("queued"), "*", None);
     assert!(queued.contains("Sync queued for bitloops"));

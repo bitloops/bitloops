@@ -306,21 +306,36 @@ impl RelationalStorage {
         .await
     }
 
-    pub async fn replace_architecture_graph_current(
+    pub(crate) async fn exec_serialized_batch_transactional_with_phase_outcome(
+        &self,
+        statements: &[String],
+        phase_name: &'static str,
+    ) -> Result<super::sqlite_write_actor::SerializedSqliteWriteOutcome> {
+        super::sqlite_write_actor::sqlite_exec_serialized_batch_transactional_path_with_phase_outcome(
+            self.sqlite_path(),
+            statements,
+            phase_name,
+        )
+        .await
+    }
+
+    pub(crate) async fn replace_architecture_graph_current(
         &self,
         repo_id: &str,
         facts: ArchitectureGraphFacts,
         generation_seq: u64,
         warnings: &[String],
         metrics: Value,
-    ) -> Result<()> {
-        super::sqlite_write_actor::sqlite_replace_architecture_graph_current_path(
+        phase_name: &'static str,
+    ) -> Result<super::sqlite_write_actor::SerializedSqliteWriteOutcome> {
+        super::sqlite_write_actor::sqlite_replace_architecture_graph_current_path_with_phase_outcome(
             self.sqlite_path(),
             repo_id,
             facts,
             generation_seq,
             warnings,
             metrics,
+            phase_name,
         )
         .await
     }

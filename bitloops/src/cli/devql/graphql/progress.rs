@@ -125,10 +125,17 @@ pub(crate) fn format_live_task_status_line(
             );
             if let Some(progress) = progress {
                 if progress.paths_total > 0 {
-                    line.push_str(&format!(
-                        " · {}/{}",
-                        progress.paths_completed, progress.paths_total
-                    ));
+                    if sync_progress_uses_indeterminate_bar(progress.phase.as_str()) {
+                        line.push_str(&format!(
+                            " · {}/{} edge paths",
+                            progress.paths_completed, progress.paths_total
+                        ));
+                    } else {
+                        line.push_str(&format!(
+                            " · {}/{}",
+                            progress.paths_completed, progress.paths_total
+                        ));
+                    }
                 }
                 if let Some(path) = progress.current_path.as_ref() {
                     line.push_str(&format!(" · {path}"));
@@ -274,6 +281,18 @@ pub(crate) fn format_live_task_progress_bar_line(
     let ratio = progress_ratio(task);
     let summary = if let Some((ratio, done, total)) = ratio {
         format!(" {:>3}% {done}/{total}", (ratio * 100.0).round() as usize)
+    } else if let Some(progress) = task
+        .sync_progress
+        .as_ref()
+        .filter(|progress| sync_progress_uses_indeterminate_bar(progress.phase.as_str()))
+        .filter(|progress| progress.paths_total > 0)
+    {
+        format!(
+            " {} · {}/{} edge paths ",
+            humanise_phase(task),
+            progress.paths_completed,
+            progress.paths_total
+        )
     } else {
         format!(" {} ", humanise_phase(task))
     };
@@ -295,7 +314,9 @@ pub(crate) fn format_live_task_progress_bar_line(
 fn progress_ratio(task: &TaskGraphqlRecord) -> Option<(f64, i32, i32)> {
     match kind_key(task).as_str() {
         "sync" => task.sync_progress.as_ref().and_then(|progress| {
-            if progress.paths_total > 0 {
+            if sync_progress_uses_indeterminate_bar(progress.phase.as_str()) {
+                None
+            } else if progress.paths_total > 0 {
                 Some((
                     (progress.paths_completed as f64 / progress.paths_total as f64).clamp(0.0, 1.0),
                     progress.paths_completed,
@@ -471,11 +492,16 @@ fn humanise_sync_phase(phase: &str) -> &'static str {
         "removing_paths" => "removing stale paths",
         "extracting_paths" => "extracting artefacts",
         "materialising_paths" => "materialising artefacts",
+        "reconciling_edges" => "reconciling edges",
         "running_gc" => "cleaning caches",
         "complete" => "complete",
         "failed" => "failed",
         _ => "working",
     }
+}
+
+fn sync_progress_uses_indeterminate_bar(phase: &str) -> bool {
+    phase.eq_ignore_ascii_case("reconciling_edges")
 }
 
 fn humanise_ingest_phase(phase: &str) -> &'static str {
