@@ -38,9 +38,17 @@ pub fn handle_lifecycle_turn_end(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::FallbackUnknown)?;
     let repo_root = crate::utils::paths::repo_root()?;
-    let backend = create_session_backend_or_local(&repo_root);
+    handle_lifecycle_turn_end_for_repo(&repo_root, agent, event)
+}
+
+pub fn handle_lifecycle_turn_end_for_repo(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
+    let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::FallbackUnknown)?;
+    let backend = create_session_backend_or_local(repo_root);
     let pre_prompt = backend.load_pre_prompt(&session_id).ok().flatten();
     let session_before_capture = backend.load_session(&session_id).ok().flatten();
     let (transcript_ref, attempted_sources) = resolve_turn_end_transcript_ref(
@@ -77,7 +85,7 @@ pub fn handle_lifecycle_turn_end(
     // Agents flush transcripts asynchronously; retry briefly before giving up.
     let transcript_data = read_transcript_with_retry(&transcript_ref)?;
 
-    if crate::git::is_empty_repository()? {
+    if is_empty_repository_for_repo(repo_root)? {
         return Err(anyhow!("empty repository"));
     }
 
@@ -98,7 +106,7 @@ pub fn handle_lifecycle_turn_end(
         && let Ok((files, pos)) =
             analyzer.extract_modified_files_from_offset(&transcript_ref_str, transcript_offset)
     {
-        transcript_modified_files = filter_and_normalize_paths_for_turn_end(&files, &repo_root);
+        transcript_modified_files = filter_and_normalize_paths_for_turn_end(&files, repo_root);
         new_transcript_position = pos;
     }
 
@@ -113,7 +121,7 @@ pub fn handle_lifecycle_turn_end(
     let all_prompts = metadata.prompts.clone();
     let summary = metadata.summary.clone();
 
-    let author = crate::git::get_git_author().unwrap_or(crate::git::GitAuthor {
+    let author = get_git_author_for_repo(repo_root).unwrap_or(crate::git::GitAuthor {
         name: "Unknown".to_string(),
         email: "unknown@local".to_string(),
     });
@@ -123,12 +131,12 @@ pub fn handle_lifecycle_turn_end(
         .map(|p| p.untracked_files.clone())
         .unwrap_or_default();
     let (git_modified, rel_new, rel_deleted) =
-        detect_file_changes_for_turn_end(&repo_root, Some(&pre_untracked));
+        detect_file_changes_for_turn_end(repo_root, Some(&pre_untracked));
     // Transcript parsing is primary, git modified files are fallback for
     // unrecognized tools/transcript parsing misses.
     let mut rel_modified = merge_unique_for_turn_end(transcript_modified_files, git_modified);
     // Remove files that are already committed to HEAD.
-    rel_modified = filter_to_uncommitted_files_for_turn_end(&repo_root, rel_modified);
+    rel_modified = filter_to_uncommitted_files_for_turn_end(repo_root, rel_modified);
 
     let token_usage = agent.as_token_calculator().and_then(|calc| {
         calc.calculate_token_usage(&transcript_ref_str, transcript_offset)
@@ -150,7 +158,7 @@ pub fn handle_lifecycle_turn_end(
         .unwrap_or(false)
         || event.is_auxiliary;
 
-    let runtime_store = RepoSqliteRuntimeStore::open(&repo_root)
+    let runtime_store = RepoSqliteRuntimeStore::open(repo_root)
         .context("opening runtime store for lifecycle turn-end metadata")?;
     let mut snapshot = SessionMetadataSnapshot::new(session_id.clone(), metadata.clone());
     snapshot.turn_id = turn_id.clone();
@@ -202,7 +210,7 @@ pub fn handle_lifecycle_turn_end(
     );
     let model = resolve_interaction_model_from_bytes(&event.model, &transcript_data);
 
-    if let Some(spool) = resolve_interaction_spool(&repo_root) {
+    if let Some(spool) = resolve_interaction_spool(repo_root) {
         let session = session_before_capture
             .as_ref()
             .map(|state| InteractionSession {
@@ -237,7 +245,7 @@ pub fn handle_lifecycle_turn_end(
                 first_prompt: last_prompt.clone(),
                 transcript_path: transcript_ref.clone(),
                 worktree_path: repo_root.to_string_lossy().to_string(),
-                worktree_id: crate::utils::paths::get_worktree_id(&repo_root).unwrap_or_default(),
+                worktree_id: crate::utils::paths::get_worktree_id(repo_root).unwrap_or_default(),
                 started_at: interaction_now.clone(),
                 ended_at: None,
                 last_event_at: interaction_now.clone(),
@@ -344,10 +352,10 @@ pub fn handle_lifecycle_turn_end(
             eprintln!("[bitloops] Warning: failed to spool turn_end event: {err}");
         }
     }
-    flush_interaction_spool_best_effort(&repo_root);
+    flush_interaction_spool_best_effort(repo_root);
 
     if total_changes > 0 {
-        let strategy = super::resolve_configured_strategy(&repo_root)?;
+        let strategy = super::resolve_configured_strategy(repo_root)?;
         strategy.save_step(&ctx)?;
     }
 
@@ -367,6 +375,80 @@ pub fn handle_lifecycle_turn_end(
     let _ = backend.delete_pre_prompt(&session_id);
 
     Ok(())
+}
+
+const GIT_ENV_KEYS_FOR_REPO_COMMANDS: [&str; 12] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_NOSYSTEM",
+];
+
+fn git_command_output_for_repo(repo_root: &Path, args: &[&str]) -> Result<std::process::Output> {
+    let mut command = std::process::Command::new("git");
+    command.args(args).current_dir(repo_root);
+    for key in GIT_ENV_KEYS_FOR_REPO_COMMANDS {
+        command.env_remove(key);
+    }
+    command
+        .output()
+        .with_context(|| format!("failed to execute git {}", args.join(" ")))
+}
+
+fn git_output_message(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
+    }
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn is_empty_repository_for_repo(repo_root: &Path) -> Result<bool> {
+    let git_dir = git_command_output_for_repo(repo_root, &["rev-parse", "--git-dir"])?;
+    if !git_dir.status.success() {
+        return Err(anyhow!(
+            "failed to open git repository: {}",
+            git_output_message(&git_dir)
+        ));
+    }
+
+    let head = git_command_output_for_repo(repo_root, &["rev-parse", "--verify", "HEAD"])?;
+    Ok(!head.status.success())
+}
+
+fn get_git_author_for_repo(repo_root: &Path) -> Result<crate::git::GitAuthor> {
+    let git_dir = git_command_output_for_repo(repo_root, &["rev-parse", "--git-dir"])?;
+    if !git_dir.status.success() {
+        return Err(anyhow!(
+            "failed to open git repository: {}",
+            git_output_message(&git_dir)
+        ));
+    }
+
+    let name = git_config_value_for_repo(repo_root, "user.name")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Unknown".to_string());
+    let email = git_config_value_for_repo(repo_root, "user.email")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unknown@local".to_string());
+
+    Ok(crate::git::GitAuthor { name, email })
+}
+
+fn git_config_value_for_repo(repo_root: &Path, key: &str) -> Option<String> {
+    let output = git_command_output_for_repo(repo_root, &["config", "--get", key]).ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn resolve_turn_end_transcript_ref(

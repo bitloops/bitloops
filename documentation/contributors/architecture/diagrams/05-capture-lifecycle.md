@@ -8,15 +8,42 @@ Use this when the question is "what side effects happen when a session progresse
 sequenceDiagram
     participant Agent as "Agent client"
     participant Hooks as "Hook dispatcher"
+    participant Adapters as "Agent adapters"
     participant Lifecycle as "Shared lifecycle"
     participant Runtime as "Repo runtime SQLite"
+    participant Daemon as "Daemon lifecycle worker"
     participant Strategy as "Checkpoint strategy"
     participant Git as "Working tree + Git"
     participant Repo as "Interaction repository"
     participant Spool as "DevQL producer spool"
 
-    Agent->>Hooks: session-start / prompt / tool / stop hooks
-    Hooks->>Lifecycle: normalize native hook payload
+    Agent->>Hooks: session-start / prompt / tool hooks
+    Hooks->>Adapters: parse agent-specific payload
+    Adapters->>Lifecycle: normalize native hook payload
+    Lifecycle->>Runtime: persist live session state
+    Lifecycle->>Strategy: save step or task step
+    Strategy->>Git: snapshot temporary checkpoint state
+    Strategy->>Runtime: persist checkpoint metadata
+    Lifecycle->>Repo: append interaction events
+
+    Note over Agent,Repo: Only Codex stop and Claude Code stop use the durable handoff; all other hooks stay synchronous.
+
+    Agent->>Hooks: Codex stop / Claude Code stop
+    Hooks->>Runtime: enqueue tiny raw Stop lifecycle spool job
+    alt SQLite enqueue accepted within bounded timeout
+        Runtime-->>Hooks: job accepted
+        Hooks-->>Agent: return quickly
+    else SQLite enqueue fails or times out
+        Runtime--xHooks: enqueue error
+        Hooks--xAgent: fail quickly and log/surface error
+    end
+
+    Note over Hooks,Runtime: Hook-side Stop handling does not read transcripts, update interaction projections, flush canonical interaction storage, or create checkpoint steps.
+
+    Daemon->>Runtime: claim lifecycle Stop jobs
+    Runtime-->>Daemon: raw Stop payload plus repo root
+    Daemon->>Adapters: replay raw payload with explicit repo-root context
+    Adapters->>Lifecycle: normalize Codex or Claude Stop payload
     Lifecycle->>Runtime: persist live session state
     Lifecycle->>Strategy: save step or task step
     Strategy->>Git: snapshot temporary checkpoint state
@@ -36,6 +63,12 @@ sequenceDiagram
 
 - Capture is about provenance and checkpoint formation.
 - The strategy decides how session turns map to temporary or committed checkpoints.
+- Codex and Claude Code Stop hooks record only a tiny raw Stop payload as a lifecycle spool job in repo runtime SQLite, then return quickly.
+- Stop hook enqueue is SQLite-only. If runtime SQLite cannot accept the tiny enqueue within the bounded timeout, the hook fails quickly and logs or surfaces the enqueue error.
+- Stop hook-side code must not read transcripts, update interaction projections, flush canonical interaction storage, or create checkpoint steps.
+- The daemon claims lifecycle Stop jobs from runtime SQLite and replays raw payloads through the existing lifecycle adapters using explicit repo-root context.
+- Agent-specific parsing stays in the Codex and Claude Code adapter layer.
+- Only Codex `stop` and Claude Code `stop` use this handoff; all other hooks remain synchronous.
 - Git lifecycle callbacks can queue repo-local DevQL follow-up work, but that does not make sync part of the capture flow.
 
 ## Glossary
@@ -48,9 +81,12 @@ sequenceDiagram
 | Agent client | An AI coding tool integrated with Bitloops. |
 | Hook | Code that runs automatically when an agent or Git reaches a lifecycle point. |
 | Hook dispatcher | Shared Bitloops code that routes hook events to the right handler. |
+| Agent adapters | Agent-specific code that parses native hook payloads before they enter the shared lifecycle. |
 | Shared lifecycle | The common event model Bitloops uses after normalizing different agent hook formats. |
 | Native hook payload | The original event data sent by a specific agent or by Git. |
 | Repo runtime SQLite | A small local SQLite database for operational state about one repo. |
+| Lifecycle spool job | A tiny durable runtime SQLite job that lets the daemon finish Stop lifecycle work outside the hook process. |
+| Daemon lifecycle worker | Background daemon worker that claims lifecycle spool jobs and replays them through the normal lifecycle path. |
 | Checkpoint strategy | The policy that decides how session activity becomes temporary or committed checkpoints. |
 | Temporary checkpoint | A checkpoint for work that is not necessarily tied to a final Git commit yet. |
 | Working tree | The checked-out files in the repository directory. |

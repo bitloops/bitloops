@@ -19,8 +19,9 @@ use crate::adapters::agents::{
 use crate::config::settings;
 use crate::host::checkpoints::lifecycle::adapters::{
     CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_POST_TOOL_USE, CLAUDE_HOOK_PRE_TASK,
-    CLAUDE_HOOK_PRE_TOOL_USE, COPILOT_HOOK_POST_TOOL_USE, COPILOT_HOOK_PRE_TOOL_USE,
-    GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_TOOL, route_hook_command_to_lifecycle,
+    CLAUDE_HOOK_PRE_TOOL_USE, CLAUDE_HOOK_STOP, CODEX_HOOK_STOP, COPILOT_HOOK_POST_TOOL_USE,
+    COPILOT_HOOK_PRE_TOOL_USE, GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_TOOL,
+    route_hook_command_to_lifecycle,
 };
 #[cfg(test)]
 use crate::host::checkpoints::session::backend::SessionBackend;
@@ -551,6 +552,40 @@ fn emit_hook_stdout_if_present(
     Ok(())
 }
 
+fn should_spool_lifecycle_stop_hook(agent_name: &str, hook_name: &str) -> bool {
+    matches!(
+        (agent_name, hook_name),
+        (AGENT_NAME_CODEX, CODEX_HOOK_STOP) | (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_STOP)
+    )
+}
+
+fn enqueue_lifecycle_stop_from_hook(
+    repo_root: &Path,
+    agent_name: &str,
+    hook_name: &str,
+    stdin: &str,
+) -> Result<crate::host::checkpoints::lifecycle::spool::LifecycleStopHookEnqueueResult> {
+    let repo = crate::host::devql::resolve_repo_identity(repo_root)
+        .context("resolving repo identity for lifecycle stop hook spool")?;
+    let config_root = crate::config::resolve_bound_daemon_config_root_for_repo(repo_root)
+        .context("resolving daemon config root for lifecycle stop hook spool")?;
+    let db_path = crate::config::resolve_repo_runtime_db_path_for_config_root(&config_root);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
+    let insert = crate::host::checkpoints::lifecycle::spool::LifecycleStopJobInsert {
+        repo_id: repo.repo_id,
+        repo_root: repo_root.to_path_buf(),
+        config_root,
+        agent_name: agent_name.to_string(),
+        hook_name: hook_name.to_string(),
+        raw_stdin: stdin.to_string(),
+        cwd,
+        received_at_unix: crate::host::checkpoints::lifecycle::spool::unix_timestamp_now(),
+    };
+    crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_stop_job_hook_safe_at(
+        &db_path, insert,
+    )
+}
+
 pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Result<()> {
     let agent = match args.agent {
         HooksAgent::Git(git_args) => return git::run(git_args, strategy_registry).await,
@@ -587,12 +622,24 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 hook_name,
                 &strategy_name,
                 || {
-                    route_hook_command_to_lifecycle(
-                        &repo_root,
-                        AGENT_NAME_CLAUDE_CODE,
-                        hook_name,
-                        &stdin,
-                    )
+                    if should_spool_lifecycle_stop_hook(AGENT_NAME_CLAUDE_CODE, hook_name) {
+                        enqueue_lifecycle_stop_from_hook(
+                            &repo_root,
+                            AGENT_NAME_CLAUDE_CODE,
+                            hook_name,
+                            &stdin,
+                        )
+                        .map(|_| {
+                            crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome::default()
+                        })
+                    } else {
+                        route_hook_command_to_lifecycle(
+                            &repo_root,
+                            AGENT_NAME_CLAUDE_CODE,
+                            hook_name,
+                            &stdin,
+                        )
+                    }
                 },
             );
             track_hook_action(
@@ -614,7 +661,26 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 AGENT_NAME_CODEX,
                 hook_name,
                 &strategy_name,
-                || route_hook_command_to_lifecycle(&repo_root, AGENT_NAME_CODEX, hook_name, &stdin),
+                || {
+                    if should_spool_lifecycle_stop_hook(AGENT_NAME_CODEX, hook_name) {
+                        enqueue_lifecycle_stop_from_hook(
+                            &repo_root,
+                            AGENT_NAME_CODEX,
+                            hook_name,
+                            &stdin,
+                        )
+                        .map(|_| {
+                            crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome::default()
+                        })
+                    } else {
+                        route_hook_command_to_lifecycle(
+                            &repo_root,
+                            AGENT_NAME_CODEX,
+                            hook_name,
+                            &stdin,
+                        )
+                    }
+                },
             );
             track_hook_action(
                 &repo_root,
@@ -965,6 +1031,9 @@ fn read_stdin() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+
+    use super::*;
     use crate::host::hooks::{BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV, agent_hooks_suppressed_by_env};
     use crate::test_support::process_state::enter_process_state;
 
@@ -984,6 +1053,111 @@ mod tests {
                 "value `{value}` should not suppress hooks"
             );
         }
+    }
+
+    #[test]
+    fn only_codex_and_claude_stop_hooks_use_lifecycle_spool() {
+        assert!(should_spool_lifecycle_stop_hook(
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_STOP
+        ));
+        assert!(should_spool_lifecycle_stop_hook(
+            AGENT_NAME_CLAUDE_CODE,
+            CLAUDE_HOOK_STOP
+        ));
+        assert!(!should_spool_lifecycle_stop_hook(
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP
+        ));
+        assert!(!should_spool_lifecycle_stop_hook(
+            AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_USER_PROMPT_SUBMIT
+        ));
+    }
+
+    #[test]
+    fn non_stop_hooks_remain_synchronous() {
+        let cases = [
+            (
+                AGENT_NAME_CODEX,
+                crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_SESSION_START,
+            ),
+            (
+                AGENT_NAME_CODEX,
+                crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_USER_PROMPT_SUBMIT,
+            ),
+            (
+                AGENT_NAME_CODEX,
+                crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_PRE_TOOL_USE,
+            ),
+            (
+                AGENT_NAME_CODEX,
+                crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_POST_TOOL_USE,
+            ),
+            (
+                AGENT_NAME_CURSOR,
+                crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP,
+            ),
+            (
+                AGENT_NAME_COPILOT,
+                crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP,
+            ),
+            (
+                AGENT_NAME_OPEN_CODE,
+                crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END,
+            ),
+        ];
+
+        for (agent, hook) in cases {
+            assert!(
+                !should_spool_lifecycle_stop_hook(agent, hook),
+                "unexpected spooling for agent={agent} hook={hook}"
+            );
+        }
+    }
+
+    #[test]
+    fn codex_stop_hook_enqueue_creates_spool_without_inline_turn() -> Result<()> {
+        let repo = tempfile::tempdir()?;
+        crate::test_support::git_fixtures::init_test_repo(
+            repo.path(),
+            "main",
+            "Bitloops Test",
+            "bitloops@example.com",
+        );
+        crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+
+        enqueue_lifecycle_stop_from_hook(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_STOP,
+            r#"{"session_id":"session-1","transcript_path":"/tmp/session.jsonl"}"#,
+        )?;
+
+        let conn = rusqlite::Connection::open(
+            crate::config::resolve_bound_repo_runtime_db_path_for_repo(repo.path())?,
+        )?;
+        let stop_jobs: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM agent_lifecycle_stop_spool_jobs",
+            [],
+            |row| row.get(0),
+        )?;
+        let turns_table_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'interaction_turns'",
+            [],
+            |row| row.get(0),
+        )?;
+        let turns = if turns_table_exists == 0 {
+            0
+        } else {
+            conn.query_row("SELECT COUNT(*) FROM interaction_turns", [], |row| {
+                row.get(0)
+            })?
+        };
+
+        assert_eq!(stop_jobs, 1);
+        assert_eq!(turns, 0, "hook enqueue must not run turn-end inline");
+        Ok(())
     }
 }
 

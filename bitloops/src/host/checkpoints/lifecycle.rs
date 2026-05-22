@@ -13,6 +13,7 @@ mod git_workspace;
 mod handlers_session;
 mod handlers_tail;
 pub(crate) mod interaction;
+pub(crate) mod spool;
 mod time_and_ids;
 mod transcript;
 mod turn_end;
@@ -22,7 +23,7 @@ pub mod adapters;
 
 pub use adapter::LifecycleAgentAdapter;
 pub use capture::capture_pre_prompt_state;
-pub use dispatch::dispatch_lifecycle_event;
+pub use dispatch::{dispatch_lifecycle_event, dispatch_lifecycle_event_for_repo};
 pub use handlers_session::{handle_lifecycle_session_start, handle_lifecycle_turn_start};
 pub use handlers_tail::{
     handle_lifecycle_compaction, handle_lifecycle_session_end, handle_lifecycle_subagent_end,
@@ -30,7 +31,7 @@ pub use handlers_tail::{
     handle_lifecycle_tool_invocation, handle_lifecycle_tool_result,
 };
 pub use transcript::{create_context_file, read_and_parse_hook_input, resolve_transcript_offset};
-pub use turn_end::handle_lifecycle_turn_end;
+pub use turn_end::{handle_lifecycle_turn_end, handle_lifecycle_turn_end_for_repo};
 pub use types::{
     LifecycleEvent, LifecycleEventType, PrePromptState, SessionIdPolicy, UNKNOWN_SESSION_ID,
     apply_session_id_policy,

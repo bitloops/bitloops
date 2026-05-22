@@ -46,6 +46,17 @@ impl DevqlTaskCoordinator {
         if let Err(err) = crate::host::devql::recover_running_producer_spool_jobs(config_root) {
             log::warn!("failed to recover DevQL producer spool jobs: {err:#}");
         }
+        match crate::host::runtime_store::open_runtime_sqlite_for_config_root(config_root) {
+            Ok(sqlite) => {
+                if let Err(err) = super::lifecycle_spool::recover_lifecycle_stop_spool_jobs(&sqlite)
+                {
+                    log::warn!("failed to recover lifecycle stop spool jobs: {err:#}");
+                }
+            }
+            Err(err) => {
+                log::warn!("failed to open runtime SQLite for lifecycle spool recovery: {err:#}")
+            }
+        }
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             self.worker_started.store(false, Ordering::SeqCst);
             log::error!("DevQL task worker activation requested without an active tokio runtime");
@@ -112,6 +123,15 @@ impl DevqlTaskCoordinator {
                 false
             }
         };
+
+        match crate::host::runtime_store::open_runtime_sqlite_for_config_root(
+            producer_spool_config_root,
+        )
+        .and_then(|sqlite| super::lifecycle_spool::process_lifecycle_stop_spool_once(&sqlite))
+        {
+            Ok(processed) => made_progress |= processed > 0,
+            Err(err) => log::warn!("daemon lifecycle stop spool worker error: {err:#}"),
+        }
 
         if !reconcile_blocked {
             match self.schedule_pending_producer_spool_jobs(producer_spool_config_root) {

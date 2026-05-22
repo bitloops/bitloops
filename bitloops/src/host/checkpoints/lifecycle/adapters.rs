@@ -13,7 +13,7 @@ use crate::adapters::agents::open_code::agent::OpenCodeAgent;
 use crate::adapters::agents::{TokenCalculator, TranscriptAnalyzer};
 
 use super::{
-    LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, dispatch_lifecycle_event,
+    LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, dispatch_lifecycle_event_for_repo,
     read_and_parse_hook_input,
 };
 
@@ -513,6 +513,16 @@ pub fn route_hook_command_to_lifecycle(
     hook_name: &str,
     stdin: &str,
 ) -> Result<HookCommandOutcome> {
+    let repo_root = crate::utils::paths::repo_root()?;
+    route_hook_command_to_lifecycle_for_repo(&repo_root, agent_name, hook_name, stdin)
+}
+
+pub fn route_hook_command_to_lifecycle_for_repo(
+    repo_root: &Path,
+    agent_name: &str,
+    hook_name: &str,
+    stdin: &str,
+) -> Result<HookCommandOutcome> {
     let resolved = AgentAdapterRegistry::builtin().resolve_with_trace(agent_name, None)?;
     let descriptor = resolved.registration.descriptor();
     let family = descriptor.protocol_family.id;
@@ -540,18 +550,26 @@ pub fn route_hook_command_to_lifecycle(
     };
 
     let mut input = std::io::Cursor::new(stdin.as_bytes());
-    let event = adapter.parse_hook_event(hook_name, &mut input).map_err(|err| {
+    let event = if adapter.agent_name() == crate::adapters::agents::AGENT_NAME_CODEX {
+        crate::adapters::agents::codex::lifecycle::parse_hook_event_for_repo(
+            hook_name, &mut input, repo_root,
+        )
+    } else {
+        adapter.parse_hook_event(hook_name, &mut input)
+    }
+    .map_err(|err| {
         anyhow!(
             "failed to parse lifecycle hook '{hook_name}' for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
         )
     })?;
     let outcome = HookCommandOutcome::default();
     if let Some(event) = event {
-        dispatch_lifecycle_event(Some(adapter.as_ref()), Some(&event)).map_err(|err| {
-            anyhow!(
-                "failed to dispatch lifecycle event for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
-            )
-        })?;
+        dispatch_lifecycle_event_for_repo(repo_root, Some(adapter.as_ref()), Some(&event))
+            .map_err(|err| {
+                anyhow!(
+                    "failed to dispatch lifecycle event for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
+                )
+            })?;
     }
     Ok(outcome)
 }

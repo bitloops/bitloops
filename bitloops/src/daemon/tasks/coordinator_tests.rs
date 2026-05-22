@@ -26,6 +26,96 @@ async fn run_all_producer_spool_jobs(
     }
 }
 
+#[test]
+fn daemon_lifecycle_spool_worker_processes_stop_job_and_deletes_it() -> anyhow::Result<()> {
+    let dir = TempDir::new().expect("temp dir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::write(
+        repo_root.join(crate::config::REPO_POLICY_FILE_NAME),
+        r#"
+[capture]
+enabled = true
+"#,
+    )
+    .expect("write repo policy");
+    std::fs::write(repo_root.join("tracked.txt"), "one\n").expect("write tracked file");
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "initial"]);
+
+    let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
+
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+    let sqlite = crate::host::runtime_store::open_runtime_sqlite_for_config_root(&config_root)
+        .expect("open repo runtime sqlite");
+    let transcript_path = repo_root.join("codex-transcript.jsonl");
+    std::fs::write(
+        &transcript_path,
+        serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": "No file changes"
+                }]
+            }
+        })
+        .to_string(),
+    )
+    .expect("write transcript");
+
+    crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_stop_job_sqlite(
+        &sqlite,
+        crate::host::checkpoints::lifecycle::spool::LifecycleStopJobInsert {
+            repo_id: repo.repo_id,
+            repo_root: repo_root.clone(),
+            config_root: config_root.clone(),
+            agent_name: crate::adapters::agents::AGENT_NAME_CODEX.to_string(),
+            hook_name: crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP.to_string(),
+            raw_stdin: serde_json::json!({
+                "sessionId": "codex-spooled-stop",
+                "transcriptPath": transcript_path.to_string_lossy(),
+            })
+            .to_string(),
+            cwd: repo_root.clone(),
+            received_at_unix: 1_778_800_000,
+        },
+    )
+    .expect("enqueue lifecycle stop job");
+
+    let processed =
+        crate::test_support::process_state::with_process_state(Some(&repo_root), &[], || {
+            super::worker::process_lifecycle_stop_spool_once_for_tests(&sqlite)
+        })?;
+
+    assert_eq!(processed, 1);
+    let remaining =
+        crate::host::checkpoints::lifecycle::spool::list_lifecycle_stop_jobs_for_tests(&sqlite)
+            .expect("list lifecycle stop jobs");
+    assert!(
+        remaining.is_empty(),
+        "processed lifecycle stop job should be deleted"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn receive_embeddings_bootstrap_outcome_waits_for_result_after_progress_channel_closes() {
     let (progress_tx, progress_rx) = mpsc::unbounded_channel();
