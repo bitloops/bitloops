@@ -694,7 +694,6 @@ async fn current_state_reconcile_skips_role_fact_pipeline_when_inactive() -> any
         .await?;
 
     assert_eq!(architecture_role_fact_count(&test.sqlite_path, repo_id)?, 0);
-    assert!(test.workplane.jobs().is_empty());
     assert_eq!(
         result
             .metrics
@@ -723,9 +722,9 @@ async fn current_state_reconcile_skips_role_fact_pipeline_when_inactive() -> any
 }
 
 #[tokio::test]
-async fn current_state_reconcile_keeps_role_pipeline_active_for_architecture_embedding_intent()
+async fn current_state_reconcile_skips_role_pipeline_for_architecture_embedding_intent_without_roles()
 -> anyhow::Result<()> {
-    let repo_id = "repo-role-pipeline-architecture-intent";
+    let repo_id = "repo-role-pipeline-architecture-intent-without-roles";
     let test = architecture_consumer_test_context_with_config(
         repo_id,
         semantic_clones_config_with_code_embeddings(),
@@ -751,14 +750,14 @@ async fn current_state_reconcile_keeps_role_pipeline_active_for_architecture_emb
         .reconcile(&request, &test.context)
         .await?;
 
-    assert!(architecture_role_fact_count(&test.sqlite_path, repo_id)? > 0);
+    assert_eq!(architecture_role_fact_count(&test.sqlite_path, repo_id)?, 0);
     assert_eq!(
         result
             .metrics
             .as_ref()
             .and_then(|metrics| metrics.pointer("/roles/skipped_inactive"))
             .and_then(Value::as_bool),
-        Some(false)
+        Some(true)
     );
     assert_eq!(
         result

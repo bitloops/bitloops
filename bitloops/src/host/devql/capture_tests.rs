@@ -94,6 +94,12 @@ fn capture_workspace_revision_persist_waits_for_shared_sqlite_write_lock() {
     let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
         .expect("build devql config");
     let db_path = devql_sqlite_path(dir.path());
+    // Warm the schema before timing the lock wait so this test does not depend on
+    // first-time DevQL bootstrap speed under CI load.
+    crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(dir.path())
+        .expect("open local relational store")
+        .initialise_local_devql_schema()
+        .expect("initialise local devql schema");
 
     let held_lock =
         crate::storage::sqlite::hold_sqlite_write_lock_until_release(db_path).expect("hold lock");
