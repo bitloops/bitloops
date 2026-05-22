@@ -9,25 +9,51 @@ This quickstart assumes you want the current daemon-first Bitloops setup.
 
 If you are coming from the old JSON and repo-local storage model, read the [upgrade note](../reference/upgrading-to-the-daemon-architecture.md).
 
-## 1. Install Bitloops
+## 1. Install Bitloops With The Default Config
 
-Choose one install method:
+For the fastest scripted setup, pass the installer default-config flag. This installs Bitloops, writes the generated default daemon config, runs the non-interactive configure flow for that default config, creates the default local stores, and starts or reuses the daemon.
 
-```bash
-curl -fsSL https://bitloops.com/install.sh | bash
-```
+macOS, Linux, WSL:
 
 ```bash
-cargo install bitloops
+curl -fsSL https://bitloops.com/install.sh | bash -s -- --default-config
 ```
 
-## 2. Configure The Daemon
+Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((irm https://bitloops.com/install.ps1))) -DefaultConfig
+```
+
+Windows CMD:
+
+```cmd
+curl.exe -fsSL https://bitloops.com/install.cmd -o install.cmd
+install.cmd --default-config
+```
+
+## 2. Or Configure Manually
+
+If you want to review settings in the browser, install without the default-config flag, then run:
 
 ```bash
 bitloops configure --web
 ```
 
-This creates the default daemon config and local stores if needed, starts or reuses the daemon, and opens the dashboard configuration page. For scripted installs, use the installer `--default-config` flag or run `bitloops configure --file /path/to/config.toml` with a complete daemon TOML file.
+`bitloops configure --web` creates the default daemon config and local stores if needed, starts or reuses the daemon, and opens the dashboard configuration page.
+
+If you install with Cargo, run the same manual configure step after install:
+
+```bash
+cargo install bitloops
+bitloops configure --web
+```
+
+For fully custom scripted setup, provide a complete daemon TOML file:
+
+```bash
+bitloops configure --file /path/to/config.toml
+```
 
 ## 3. Initialise A Project
 

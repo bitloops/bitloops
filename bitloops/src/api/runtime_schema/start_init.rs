@@ -33,9 +33,6 @@ impl StartInitInput {
         if self.run_summary_embeddings && !self.run_summaries {
             return Err("`runSummaryEmbeddings` requires `runSummaries=true`".to_string());
         }
-        if self.run_summary_embeddings && !self.run_code_embeddings {
-            return Err("`runSummaryEmbeddings` requires `runCodeEmbeddings=true`".to_string());
-        }
         Ok(StartInitSessionSelections {
             run_sync: self.run_sync,
             run_ingest: self.run_ingest,
@@ -140,4 +137,29 @@ impl From<SummaryBootstrapRequestInput> for SummaryBootstrapRequest {
 pub(crate) struct StartInitResult {
     #[graphql(name = "initSessionId")]
     pub init_session_id: ID,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summary_embeddings_can_run_without_code_embeddings() {
+        let selections = StartInitInput {
+            run_sync: true,
+            run_ingest: false,
+            run_code_embeddings: false,
+            run_summaries: true,
+            run_summary_embeddings: true,
+            ingest_backfill: None,
+            embeddings_bootstrap: None,
+            summaries_bootstrap: None,
+        }
+        .into_selections()
+        .expect("summary embeddings should not require code embeddings");
+
+        assert!(!selections.run_code_embeddings);
+        assert!(selections.run_summaries);
+        assert!(selections.run_summary_embeddings);
+    }
 }

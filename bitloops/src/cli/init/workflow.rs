@@ -9,10 +9,11 @@ use super::workflow_output::{
 };
 use super::{
     AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitAgentSelection, InitArgs,
-    InitEmbeddingsSetupSelection, InitFinalSetupPromptOptions, choose_embeddings_setup_during_init,
-    choose_final_setup_options, choose_summary_embeddings_setup_during_init,
-    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_init_files_excluded,
-    normalize_cli_exclusions, normalize_exclude_from_paths,
+    InitEmbeddingsSetupSelection, InitFinalSetupPromptOptions, InitSummaryEmbeddingsSetupSelection,
+    choose_embeddings_setup_during_init, choose_final_setup_options,
+    choose_summary_embeddings_setup_during_init, choose_summary_setup_during_init,
+    detect_or_select_agent, ensure_repo_init_files_excluded, normalize_cli_exclusions,
+    normalize_exclude_from_paths,
 };
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::cli::embeddings::{
@@ -224,12 +225,12 @@ async fn configure_init_semantic_policy(
     }
 
     let repo_selected_embedding_lanes = if existing.present {
-        init_semantic_policy_selects_embedding_lanes(&existing)
+        init_semantic_policy_should_offer_embedding_setup(&existing)
     } else {
         true
     };
     let repo_selected_summaries = if existing.present {
-        init_semantic_policy_selects_summaries(&existing)
+        init_semantic_policy_should_offer_summary_setup(&existing)
     } else {
         true
     };
@@ -307,16 +308,39 @@ async fn configure_init_semantic_policy(
     }
 
     let summary_embedding_candidate = selected_code_embeddings.clone();
-    if selected_summary_generation.is_some()
-        && choose_summary_embeddings_setup_during_init(
+    if selected_summary_generation.is_some() {
+        let summary_embeddings_selection = choose_summary_embeddings_setup_during_init(
             repo_selected_summaries,
             selected_summary_embeddings.is_some(),
             summary_embedding_candidate.as_deref(),
             out,
             input,
-        )?
-    {
-        selected_summary_embeddings = summary_embedding_candidate;
+        )?;
+        match summary_embeddings_selection {
+            InitSummaryEmbeddingsSetupSelection::Existing => {}
+            InitSummaryEmbeddingsSetupSelection::UseSelectedEmbeddingsProvider => {
+                selected_summary_embeddings = summary_embedding_candidate;
+            }
+            InitSummaryEmbeddingsSetupSelection::Cloud => {
+                login_required = true;
+                let gateway_url = platform_embeddings_gateway_url_override(None);
+                for line in install_or_configure_platform_embeddings(
+                    project_root,
+                    gateway_url.as_deref(),
+                    "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+                )? {
+                    writeln!(out, "{line}")?;
+                }
+                selected_summary_embeddings = current_code_embeddings_profile(project_root);
+            }
+            InitSummaryEmbeddingsSetupSelection::Local => {
+                for line in install_or_bootstrap_embeddings(project_root)? {
+                    writeln!(out, "{line}")?;
+                }
+                selected_summary_embeddings = current_code_embeddings_profile(project_root);
+            }
+            InitSummaryEmbeddingsSetupSelection::Skip => {}
+        }
     }
 
     if login_required {
@@ -335,15 +359,29 @@ fn init_semantic_policy_needs_provider_setup(
     project_root: &Path,
     policy: &RepoSemanticEmbeddingPolicy,
 ) -> bool {
-    let embeddings_missing = init_semantic_policy_selects_embedding_lanes(policy)
+    let embeddings_missing = init_semantic_policy_should_offer_embedding_setup(policy)
         && matches!(
             inspect_embeddings_install_state(project_root),
             EmbeddingsInstallState::NotConfigured
-        );
-    let summaries_missing = init_semantic_policy_selects_summaries(policy)
-        && !init_repo_summary_generation_configured(project_root);
+        )
+        || policy.embedding_mode == Some(SemanticCloneEmbeddingMode::Off);
+    let summaries_missing = init_semantic_policy_should_offer_summary_setup(policy)
+        && (policy.summary_mode == Some(SemanticSummaryMode::Off)
+            || !init_repo_summary_generation_configured(project_root));
+    let summary_embeddings_missing = init_semantic_policy_selects_summaries(policy)
+        && !non_empty_profile(policy.inference.summary_embeddings.as_deref());
 
-    embeddings_missing || summaries_missing
+    embeddings_missing || summaries_missing || summary_embeddings_missing
+}
+
+fn init_semantic_policy_should_offer_embedding_setup(policy: &RepoSemanticEmbeddingPolicy) -> bool {
+    policy.embedding_mode == Some(SemanticCloneEmbeddingMode::Off)
+        || init_semantic_policy_selects_embedding_lanes(policy)
+}
+
+fn init_semantic_policy_should_offer_summary_setup(policy: &RepoSemanticEmbeddingPolicy) -> bool {
+    policy.summary_mode == Some(SemanticSummaryMode::Off)
+        || init_semantic_policy_selects_summaries(policy)
 }
 
 fn init_semantic_policy_selects_embedding_lanes(policy: &RepoSemanticEmbeddingPolicy) -> bool {
@@ -455,7 +493,7 @@ fn init_semantic_runtime_selection(
     let run_summaries = should_sync
         && summaries_enabled
         && non_empty_profile(policy.inference.summary_generation.as_deref());
-    let run_summary_embeddings = run_code_embeddings
+    let run_summary_embeddings = should_sync
         && run_summaries
         && embeddings_enabled
         && non_empty_profile(policy.inference.summary_embeddings.as_deref());

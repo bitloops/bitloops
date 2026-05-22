@@ -28,14 +28,23 @@ Each developer may also keep:
 
 ### 1. Fastest onboarding path
 
-The fastest way to get started from inside the repository is:
+For scripted onboarding, run the installer with its default-config flag, then initialise the repository:
+
+```bash
+curl -fsSL https://bitloops.com/install.sh | bash -s -- --default-config
+bitloops init --sync=true
+```
+
+On Windows, use the same installer intent with PowerShell `-DefaultConfig` or CMD `--default-config`. This configures the daemon with the generated default config, creates `.bitloops.local.toml`, installs hooks, and follows the initial current-state sync.
+
+The manual browser-based alternative is:
 
 ```bash
 bitloops configure --web
 bitloops init --sync=true
 ```
 
-This configures the daemon, creates `.bitloops.local.toml`, installs hooks, and follows the initial current-state sync. Use the lower-level `bitloops start --create-default-config` path below only when someone needs to start the daemon without opening configuration.
+Use the lower-level `bitloops start --create-default-config` path below only when someone needs to start the daemon without opening configuration or running the installer configure step.
 
 ```bash
 bitloops start --create-default-config
@@ -66,7 +75,7 @@ From the repository root or a subproject directory:
 bitloops init --sync=true
 ```
 
-The fastest default path is `bitloops configure --web`, then `bitloops init --sync=true`.
+The fastest scripted path is the installer default-config flow, then `bitloops init --sync=true`. The manual alternative is `bitloops configure --web`, then `bitloops init --sync=true`.
 
 This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, and installs or reconciles hooks.
 
@@ -76,7 +85,7 @@ Daemon-level inference, telemetry, and capability-pack settings belong to `bitlo
 
 In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.
 
-`bitloops init` still does not run DevQL ingest. Use `bitloops devql tasks enqueue --kind ingest` when you want to populate checkpoint, commit, and event history.
+`bitloops init` does not run DevQL ingest unless you opt in. Use `--ingest=true` during init, or run `bitloops devql tasks enqueue --kind ingest` later, when you want to populate checkpoint, commit, and event history.
 
 Use `--agent <name>` repeatedly when a team wants to pin the supported agent set during bootstrap. For example:
 

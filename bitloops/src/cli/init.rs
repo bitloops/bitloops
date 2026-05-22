@@ -29,8 +29,9 @@ pub(crate) use repo_excludes::{
     clear_repo_local_policy_excluded, clear_repo_managed_skill_files_excluded,
 };
 pub(super) use semantic_setup::{
-    InitEmbeddingsSetupSelection, choose_embeddings_setup_during_init,
-    choose_summary_embeddings_setup_during_init, choose_summary_setup_during_init,
+    InitEmbeddingsSetupSelection, InitSummaryEmbeddingsSetupSelection,
+    choose_embeddings_setup_during_init, choose_summary_embeddings_setup_during_init,
+    choose_summary_setup_during_init,
 };
 
 pub type AgentSelector = dyn Fn(&[String], bool) -> std::result::Result<InitAgentSelection, String>;

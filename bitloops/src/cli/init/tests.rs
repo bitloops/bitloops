@@ -385,6 +385,81 @@ fn init_runtime_start_includes_semantic_lanes_and_repo_policy() {
 }
 
 #[test]
+fn init_runtime_start_can_select_summary_embeddings_without_code_embeddings() {
+    let repo = TempDir::new().expect("repo");
+    let app_dirs = TempDir::new().expect("app dirs");
+    setup_git_repo(&repo);
+
+    with_process_state(None, &[], || {
+        with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+            crate::config::ensure_daemon_config_exists().expect("write default daemon config");
+            let local_policy_path = repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME);
+            crate::config::settings::set_repo_semantic_embedding_policy(
+                &local_policy_path,
+                &crate::config::RepoSemanticEmbeddingPolicy {
+                    present: true,
+                    summary_mode: Some(crate::config::SemanticSummaryMode::Auto),
+                    embedding_mode: Some(
+                        crate::config::SemanticCloneEmbeddingMode::SemanticAwareOnce,
+                    ),
+                    inference: crate::config::SemanticClonesInferenceBindings {
+                        summary_generation: Some("summary_llm".to_string()),
+                        code_embeddings: None,
+                        summary_embeddings: Some("platform_code".to_string()),
+                    },
+                },
+            )
+            .expect("seed summary-only embeddings policy");
+
+            let captured_input = Arc::new(Mutex::new(None::<serde_json::Value>));
+            let captured_input_for_hook = Arc::clone(&captured_input);
+
+            crate::cli::devql::graphql::with_graphql_executor_hook(
+                move |_, query, variables| {
+                    if query.contains("mutation StartInit") {
+                        *captured_input_for_hook.lock().expect("captured input lock") =
+                            Some(variables["input"].clone());
+                        return Ok(serde_json::json!({
+                            "startInit": {
+                                "initSessionId": "init-summary-embeddings-test"
+                            }
+                        }));
+                    }
+                    if query.contains("query RuntimeSnapshot") {
+                        let repo_id = variables["repoId"].as_str().expect("repo id");
+                        return Ok(completed_runtime_snapshot_json(
+                            repo_id,
+                            "init-summary-embeddings-test",
+                        ));
+                    }
+                    panic!("unexpected GraphQL query: {query}");
+                },
+                || {
+                    let mut out = Vec::new();
+                    let args = InitArgs {
+                        sync: Some(true),
+                        ingest: Some(false),
+                        ..init_args()
+                    };
+                    run_with_writer_for_project_root(args, repo.path(), &mut out, None)
+                        .expect("init should complete");
+                },
+            );
+
+            let input = captured_input
+                .lock()
+                .expect("captured input lock")
+                .clone()
+                .expect("start init input should be captured");
+            assert_eq!(input["runSync"], serde_json::json!(true));
+            assert_eq!(input["runCodeEmbeddings"], serde_json::json!(false));
+            assert_eq!(input["runSummaries"], serde_json::json!(true));
+            assert_eq!(input["runSummaryEmbeddings"], serde_json::json!(true));
+        })
+    });
+}
+
+#[test]
 fn init_prompts_for_embeddings_and_summary_provider_setup() {
     let repo = TempDir::new().expect("repo");
     let app_dirs = TempDir::new().expect("app dirs");
@@ -479,6 +554,121 @@ fn init_prompts_for_provider_setup_when_existing_policy_profiles_are_unconfigure
                 let rendered = String::from_utf8(out).expect("utf8 output");
                 assert!(rendered.contains("Configure embeddings"));
                 assert!(rendered.contains("Configure semantic summaries"));
+            });
+        })
+    });
+}
+
+#[test]
+fn init_prompts_for_summaries_when_existing_policy_previously_skipped_them() {
+    let repo = TempDir::new().expect("repo");
+    let app_dirs = TempDir::new().expect("app dirs");
+    setup_git_repo(&repo);
+
+    with_process_state(None, &[], || {
+        with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+            crate::config::ensure_daemon_config_exists().expect("write default daemon config");
+            let local_policy_path = repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME);
+            crate::config::settings::set_repo_semantic_embedding_policy(
+                &local_policy_path,
+                &crate::config::RepoSemanticEmbeddingPolicy {
+                    present: true,
+                    summary_mode: Some(crate::config::SemanticSummaryMode::Off),
+                    embedding_mode: Some(
+                        crate::config::SemanticCloneEmbeddingMode::SemanticAwareOnce,
+                    ),
+                    inference: crate::config::SemanticClonesInferenceBindings {
+                        summary_generation: None,
+                        code_embeddings: Some("platform_code".to_string()),
+                        summary_embeddings: None,
+                    },
+                },
+            )
+            .expect("seed skipped summaries policy");
+
+            crate::cli::telemetry_consent::with_test_tty_override(true, || {
+                let mut out = Vec::new();
+                let mut input = std::io::Cursor::new(b"1\n".to_vec());
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                let args = InitArgs {
+                    sync: Some(false),
+                    ingest: Some(false),
+                    ..init_args()
+                };
+
+                runtime
+                    .block_on(run_with_io_async_for_project_root(
+                        args,
+                        repo.path(),
+                        &mut out,
+                        &mut input,
+                        None,
+                    ))
+                    .expect("init should complete");
+
+                let rendered = String::from_utf8(out).expect("utf8 output");
+                assert!(rendered.contains("Configure semantic summaries"));
+            });
+        })
+    });
+}
+
+#[test]
+fn init_prompts_for_summary_embeddings_when_code_embeddings_are_skipped() {
+    let repo = TempDir::new().expect("repo");
+    let app_dirs = TempDir::new().expect("app dirs");
+    setup_git_repo(&repo);
+
+    with_process_state(None, &[], || {
+        with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+            crate::config::ensure_daemon_config_exists().expect("write default daemon config");
+            let local_policy_path = repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME);
+            crate::config::settings::set_repo_semantic_embedding_policy(
+                &local_policy_path,
+                &crate::config::RepoSemanticEmbeddingPolicy {
+                    present: true,
+                    summary_mode: Some(crate::config::SemanticSummaryMode::Auto),
+                    embedding_mode: Some(crate::config::SemanticCloneEmbeddingMode::Off),
+                    inference: crate::config::SemanticClonesInferenceBindings {
+                        summary_generation: Some("summary_llm".to_string()),
+                        code_embeddings: None,
+                        summary_embeddings: None,
+                    },
+                },
+            )
+            .expect("seed summary-only policy");
+
+            crate::cli::telemetry_consent::with_test_tty_override(true, || {
+                let mut out = Vec::new();
+                let mut input = std::io::Cursor::new(b"3\n3\n".to_vec());
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                let args = InitArgs {
+                    sync: Some(false),
+                    ingest: Some(false),
+                    ..init_args()
+                };
+
+                runtime
+                    .block_on(run_with_io_async_for_project_root(
+                        args,
+                        repo.path(),
+                        &mut out,
+                        &mut input,
+                        None,
+                    ))
+                    .expect("init should complete");
+
+                let rendered = String::from_utf8(out).expect("utf8 output");
+                assert!(rendered.contains("Configure summary embeddings"));
+                assert!(rendered.contains("Bitloops Cloud"));
+                assert!(rendered.contains("Local embeddings"));
+                assert!(rendered.contains("Skip for now"));
             });
         })
     });

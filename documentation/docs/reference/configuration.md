@@ -23,7 +23,9 @@ Bitloops stores daemon configuration at:
 
 - `bitloops configure --web` creates the default file and local stores when needed, starts or reuses the daemon, and opens the dashboard configuration page.
 - `bitloops configure --file <path>` validates a complete daemon `config.toml`, installs it at the default daemon config path, ensures local stores exist, then restarts or starts the daemon.
-- Installers support `--default-config`, which writes the Rust default daemon TOML and runs `bitloops configure --file` for scripted setup.
+- `bitloops configure --default-config` installs the generated default daemon config directly and starts or reuses the daemon.
+- Installers support a default-config flag for scripted setup. On macOS, Linux, and WSL pass `--default-config` to `install.sh`; on Windows PowerShell pass `-DefaultConfig`; on Windows CMD pass `--default-config` or `/default-config`. The installers write the generated default daemon TOML and run `bitloops configure --file`.
+- The manual alternative is to install without the default-config flag, run `bitloops configure --web`, then run `bitloops init` inside each repo.
 - In interactive mode, plain `bitloops start` prompts to create the default file when it is missing.
 - `bitloops start --create-default-config` creates the default file and the matching default local SQLite, DuckDB, and blob-store paths.
 - `bitloops embeddings install --runtime platform` installs the managed `bitloops-platform-embeddings` runtime and writes the hosted runtime args into the daemon config. Add `--gateway-url https://gateway.example/v1/embeddings` only when you want an explicit gateway override.

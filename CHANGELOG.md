@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **Init and configure semantic setup now match the repo-local config split**: `bitloops configure` writes the default daemon config, starts or restarts the always-on daemon by default, and avoids opening store databases during configuration so DuckDB event-store locks from a running daemon do not block setup. `bitloops init` now keeps final setup focused on sync/ingest while restoring separate interactive setup choices for code embeddings, semantic summaries, and summary embeddings. Summary embeddings can be configured and run independently of code embeddings, so skipping code embeddings no longer hides the summary-embeddings prompt or lane.
+
 ## [0.0.29] - 2026-05-19
 
 ### Added

@@ -19,7 +19,8 @@ If you are upgrading from the older repo-local JSON model, read the [upgrade not
 
 ## Core Ideas
 
-- The fastest way to get started is `bitloops configure --web`, then `bitloops init` inside each repo
+- The fastest scripted setup is to run the installer with its default-config flag, then run `bitloops init` inside each repo
+- The manual browser-based alternative is `bitloops configure --web`, then `bitloops init`
 - `bitloops configure` owns daemon config, capability packs, inference, telemetry, and daemon restart handoff
 - `bitloops start` launches the global daemon and can prompt to create the default daemon config on a fresh machine
 - `bitloops start --create-default-config` remains the explicit bootstrap path for the default daemon config plus local default store files

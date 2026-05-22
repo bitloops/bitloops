@@ -9,15 +9,16 @@ Bitloops now follows a daemon-first architecture.
 
 ## High-Level Flow
 
-1. The fastest default onboarding path is `bitloops configure --web`, followed by `bitloops init` inside each repository or subproject you want to capture.
-2. `configure` owns the daemon config and daemon lifecycle.
-3. `init` creates or updates `.bitloops.local.toml`, installs hooks, and reconciles the repo watcher when the daemon is already running.
-4. Telemetry is a daemon configuration setting.
-5. `bitloops enable` and `bitloops disable` let you toggle `Capture` and `DevQL Guidance` in the nearest discovered project policy.
-6. If telemetry consent later becomes unresolved for an existing daemon config, use `bitloops configure --web`.
-7. Hooks and the slim CLI resolve the nearest project policy locally.
-8. The CLI parses or compiles requests locally, then the daemon receives mutations and queries over the local GraphQL transport.
-9. The daemon stores durable data in configured backends and serves the dashboard and DevQL.
+1. The fastest scripted onboarding path is to run the installer with its default-config flag, followed by `bitloops init` inside each repository or subproject you want to capture.
+2. The manual browser-based alternative is `bitloops configure --web`, followed by `bitloops init`.
+3. `configure` owns the daemon config and daemon lifecycle.
+4. `init` creates or updates `.bitloops.local.toml`, installs hooks, and reconciles the repo watcher when the daemon is already running.
+5. Telemetry is a daemon configuration setting.
+6. `bitloops enable` and `bitloops disable` let you toggle `Capture` and `DevQL Guidance` in the nearest discovered project policy.
+7. If telemetry consent later becomes unresolved for an existing daemon config, use `bitloops configure --web`.
+8. Hooks and the slim CLI resolve the nearest project policy locally.
+9. The CLI parses or compiles requests locally, then the daemon receives mutations and queries over the local GraphQL transport.
+10. The daemon stores durable data in configured backends and serves the dashboard and DevQL.
 
 ## Components
 

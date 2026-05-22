@@ -23,6 +23,15 @@ pub(crate) enum InitEmbeddingsSetupSelection {
     Skip,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InitSummaryEmbeddingsSetupSelection {
+    Existing,
+    UseSelectedEmbeddingsProvider,
+    Cloud,
+    Local,
+    Skip,
+}
+
 pub(crate) fn choose_embeddings_setup_during_init(
     repo_root: &Path,
     repo_selected_embedding_lanes: bool,
@@ -76,25 +85,25 @@ pub(crate) fn choose_summary_embeddings_setup_during_init(
     summary_embedding_profile_name: Option<&str>,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
-) -> Result<bool> {
+) -> Result<InitSummaryEmbeddingsSetupSelection> {
     if !repo_selected_summaries {
-        return Ok(false);
+        return Ok(InitSummaryEmbeddingsSetupSelection::Skip);
     }
     if repo_selected_summary_embeddings {
-        return Ok(true);
+        return Ok(InitSummaryEmbeddingsSetupSelection::Existing);
+    }
+    if !telemetry_consent::can_prompt_interactively() {
+        return Ok(InitSummaryEmbeddingsSetupSelection::Skip);
     }
     if summary_embedding_profile_name
         .map(str::trim)
         .filter(|profile| !profile.is_empty())
-        .is_none()
+        .is_some()
     {
-        return Ok(false);
-    }
-    if !telemetry_consent::can_prompt_interactively() {
-        return Ok(false);
+        return prompt_summary_embeddings_setup_selection(out, input);
     }
 
-    prompt_summary_embeddings_setup_selection(out, input)
+    prompt_summary_embeddings_provider_selection(out, input)
 }
 
 fn prompt_embeddings_setup_selection(
@@ -188,7 +197,7 @@ fn prompt_embeddings_setup_selection_with_text_input(
 fn prompt_summary_embeddings_setup_selection(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
-) -> Result<bool> {
+) -> Result<InitSummaryEmbeddingsSetupSelection> {
     if can_use_terminal_picker() {
         return prompt_summary_embeddings_setup_selection_with_picker(out);
     }
@@ -196,7 +205,9 @@ fn prompt_summary_embeddings_setup_selection(
     prompt_summary_embeddings_setup_selection_with_text_input(out, input)
 }
 
-fn prompt_summary_embeddings_setup_selection_with_picker(out: &mut dyn Write) -> Result<bool> {
+fn prompt_summary_embeddings_setup_selection_with_picker(
+    out: &mut dyn Write,
+) -> Result<InitSummaryEmbeddingsSetupSelection> {
     let options = vec![
         SingleSelectOption::new(
             "Enable summary embeddings (recommended)",
@@ -218,13 +229,17 @@ fn prompt_summary_embeddings_setup_selection_with_picker(out: &mut dyn Write) ->
         &[],
     )?;
 
-    Ok(selection == 0)
+    Ok(if selection == 0 {
+        InitSummaryEmbeddingsSetupSelection::UseSelectedEmbeddingsProvider
+    } else {
+        InitSummaryEmbeddingsSetupSelection::Skip
+    })
 }
 
 fn prompt_summary_embeddings_setup_selection_with_text_input(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
-) -> Result<bool> {
+) -> Result<InitSummaryEmbeddingsSetupSelection> {
     writeln!(out)?;
     writeln!(out, "Configure summary embeddings")?;
     writeln!(out)?;
@@ -254,9 +269,105 @@ fn prompt_summary_embeddings_setup_selection_with_text_input(
             .read_line(&mut line)
             .context("reading init summary embeddings setup selection")?;
         match line.trim().to_ascii_lowercase().as_str() {
-            "" | "1" | "enable" | "enabled" | "yes" | "y" => return Ok(true),
-            "2" | "skip" | "later" | "none" | "no" | "n" => return Ok(false),
+            "" | "1" | "enable" | "enabled" | "yes" | "y" => {
+                return Ok(InitSummaryEmbeddingsSetupSelection::UseSelectedEmbeddingsProvider);
+            }
+            "2" | "skip" | "later" | "none" | "no" | "n" => {
+                return Ok(InitSummaryEmbeddingsSetupSelection::Skip);
+            }
             _ => writeln!(out, "Please choose 1 or 2.")?,
+        }
+    }
+}
+
+fn prompt_summary_embeddings_provider_selection(
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<InitSummaryEmbeddingsSetupSelection> {
+    if can_use_terminal_picker() {
+        return prompt_summary_embeddings_provider_selection_with_picker(out);
+    }
+
+    prompt_summary_embeddings_provider_selection_with_text_input(out, input)
+}
+
+fn prompt_summary_embeddings_provider_selection_with_picker(
+    out: &mut dyn Write,
+) -> Result<InitSummaryEmbeddingsSetupSelection> {
+    let options = vec![
+        SingleSelectOption::new(
+            "Bitloops Cloud (recommended)",
+            vec!["Fast setup. No local compute required.".to_string()],
+        ),
+        SingleSelectOption::new(
+            "Local embeddings",
+            vec!["Runs on your machine (~4GB RAM, GPU recommended).".to_string()],
+        ),
+        SingleSelectOption::new("Skip for now", Vec::new()),
+    ];
+
+    writeln!(out)?;
+    let selection = prompt_single_select(
+        out,
+        "Configure summary embeddings",
+        &[
+            "Summary embeddings power semantic search over generated summaries".to_string(),
+            "They can use their own embeddings provider even when code embeddings are skipped."
+                .to_string(),
+        ],
+        &options,
+        0,
+        &[],
+    )?;
+
+    Ok(match selection {
+        0 => InitSummaryEmbeddingsSetupSelection::Cloud,
+        1 => InitSummaryEmbeddingsSetupSelection::Local,
+        2 => InitSummaryEmbeddingsSetupSelection::Skip,
+        _ => unreachable!("terminal picker returned invalid summary embeddings selection"),
+    })
+}
+
+fn prompt_summary_embeddings_provider_selection_with_text_input(
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<InitSummaryEmbeddingsSetupSelection> {
+    writeln!(out)?;
+    writeln!(out, "Configure summary embeddings")?;
+    writeln!(out)?;
+    writeln!(
+        out,
+        "Summary embeddings power semantic search over generated summaries"
+    )?;
+    writeln!(
+        out,
+        "They can use their own embeddings provider even when code embeddings are skipped."
+    )?;
+    writeln!(out)?;
+    writeln!(out, "1. Bitloops Cloud (recommended)")?;
+    writeln!(out, "   Fast setup. No local compute required.")?;
+    writeln!(out, "2. Local embeddings")?;
+    writeln!(out, "   Runs on your machine (~4GB RAM, GPU recommended).")?;
+    writeln!(out, "3. Skip for now")?;
+
+    loop {
+        writeln!(out, "Select an option [1/2/3]")?;
+        write!(out, "> ")?;
+        out.flush()?;
+
+        let mut line = String::new();
+        input
+            .read_line(&mut line)
+            .context("reading init summary embeddings provider selection")?;
+        match line.trim().to_ascii_lowercase().as_str() {
+            "" | "1" | "cloud" | "bitloops" => {
+                return Ok(InitSummaryEmbeddingsSetupSelection::Cloud);
+            }
+            "2" | "local" => return Ok(InitSummaryEmbeddingsSetupSelection::Local),
+            "3" | "skip" | "later" | "none" => {
+                return Ok(InitSummaryEmbeddingsSetupSelection::Skip);
+            }
+            _ => writeln!(out, "Please choose 1, 2, or 3.")?,
         }
     }
 }
