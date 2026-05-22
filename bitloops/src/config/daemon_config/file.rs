@@ -66,6 +66,9 @@ struct DaemonTomlFile {
     #[serde(default)]
     inference: Option<Value>,
     #[serde(default)]
+    #[serde(rename = "test_harness")]
+    _test_harness: Option<Value>,
+    #[serde(default)]
     dashboard: Option<Value>,
 }
 
@@ -75,6 +78,8 @@ struct RuntimeToml {
     #[serde(default)]
     local_dev: bool,
     cli_version: Option<String>,
+    #[serde(default, rename = "capability_policy")]
+    _capability_policy: Option<Value>,
 }
 
 #[derive(Debug, Deserialize, Default)]
