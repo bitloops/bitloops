@@ -1,11 +1,38 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::{cell::RefCell, rc::Rc};
 
 use anyhow::{Context, Result, bail};
 use clap::{ArgGroup, Args};
 
 const CONFIGURATION_ROUTE: &str = "/settings/configuration";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigureWebStartMode {
+    ReuseExistingDaemon,
+    StartService,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigureDaemonStartAction {
+    Restart,
+    StartService,
+}
+
+#[cfg(test)]
+type ConfigureDaemonStartHook = dyn Fn(
+        ConfigureDaemonStartAction,
+        &crate::daemon::ResolvedDaemonConfig,
+    ) -> Result<crate::daemon::DaemonRuntimeState>
+    + 'static;
+
+#[cfg(test)]
+thread_local! {
+    static CONFIGURE_DAEMON_START_HOOK: RefCell<Option<Rc<ConfigureDaemonStartHook>>> =
+        RefCell::new(None);
+}
 
 #[derive(Args, Debug, Clone)]
 #[command(group(
@@ -53,16 +80,20 @@ async fn run_web(out: &mut dyn Write) -> Result<()> {
     log::info!("cli configure web: bootstrapping default daemon and opening dashboard");
     let config_path = crate::config::bootstrap_default_daemon_environment()?;
     let daemon_config = crate::daemon::resolve_daemon_config(Some(config_path.as_path()))?;
-    let url = if let Some(url) = crate::daemon::daemon_url()? {
-        configuration_dashboard_url(&url)
-    } else {
-        let server_config = default_dashboard_server_config();
-        let state = if crate::daemon::service_metadata()?.is_some() {
-            crate::daemon::start_service(&daemon_config, server_config, None).await?
-        } else {
-            crate::daemon::start_detached(&daemon_config, server_config, None).await?
-        };
-        configuration_dashboard_url(&state.url)
+    let existing_url = crate::daemon::daemon_url()?;
+    let url = match configure_web_start_mode(existing_url.as_deref()) {
+        ConfigureWebStartMode::ReuseExistingDaemon => {
+            configuration_dashboard_url(existing_url.as_deref().expect("existing daemon url"))
+        }
+        ConfigureWebStartMode::StartService => {
+            let state = crate::daemon::start_service(
+                &daemon_config,
+                default_dashboard_server_config(),
+                None,
+            )
+            .await?;
+            configuration_dashboard_url(&state.url)
+        }
     };
 
     crate::api::open_in_default_browser(&url)?;
@@ -70,21 +101,44 @@ async fn run_web(out: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
+fn configure_web_start_mode(existing_daemon_url: Option<&str>) -> ConfigureWebStartMode {
+    if existing_daemon_url.is_some() {
+        ConfigureWebStartMode::ReuseExistingDaemon
+    } else {
+        ConfigureWebStartMode::StartService
+    }
+}
+
 async fn run_default_config(out: &mut dyn Write) -> Result<()> {
     log::info!("cli configure default-config: installing generated default daemon config");
+    let runtime = crate::daemon::runtime_state()?;
+    if runtime
+        .as_ref()
+        .is_some_and(|runtime| runtime.mode == crate::daemon::DaemonMode::Foreground)
+    {
+        bail!(
+            "cannot apply daemon config while a foreground daemon is running; stop it and rerun `bitloops configure --default-config`"
+        );
+    }
+    let service = crate::daemon::service_metadata()?;
+
     let target = crate::config::default_daemon_config_path()?;
     let raw = crate::config::default_daemon_config_toml()?;
     crate::config::validate_daemon_config_text(&raw, &target)
         .with_context(|| format!("validating generated daemon config {}", target.display()))?;
 
     install_config_atomically(&target, raw.as_bytes())?;
-    crate::config::ensure_daemon_store_artifacts(Some(target.as_path()))?;
+    let daemon_config = crate::daemon::resolve_daemon_config(Some(target.as_path()))?;
+    let state =
+        start_configured_daemon_after_install(&daemon_config, runtime.as_ref(), service.as_ref())
+            .await?;
 
     writeln!(
         out,
         "Installed Bitloops default daemon config at {}",
         target.display()
     )?;
+    writeln!(out, "Bitloops daemon is running at {}", state.url)?;
     Ok(())
 }
 
@@ -100,6 +154,7 @@ async fn run_file(path: &Path, out: &mut dyn Write) -> Result<()> {
             path.display()
         );
     }
+    let service = crate::daemon::service_metadata()?;
 
     let raw = fs::read_to_string(path)
         .with_context(|| format!("reading daemon config {}", path.display()))?;
@@ -108,16 +163,11 @@ async fn run_file(path: &Path, out: &mut dyn Write) -> Result<()> {
 
     let target = crate::config::default_daemon_config_path()?;
     install_config_atomically(&target, raw.as_bytes())?;
-    crate::config::ensure_daemon_store_artifacts(Some(target.as_path()))?;
 
     let daemon_config = crate::daemon::resolve_daemon_config(Some(target.as_path()))?;
-    let service = crate::daemon::service_metadata()?;
-    let state = if runtime.is_some() || service.is_some() {
-        crate::daemon::restart(Some(&daemon_config)).await?
-    } else {
-        crate::daemon::start_detached(&daemon_config, default_dashboard_server_config(), None)
-            .await?
-    };
+    let state =
+        start_configured_daemon_after_install(&daemon_config, runtime.as_ref(), service.as_ref())
+            .await?;
 
     writeln!(
         out,
@@ -126,6 +176,73 @@ async fn run_file(path: &Path, out: &mut dyn Write) -> Result<()> {
     )?;
     writeln!(out, "Bitloops daemon is running at {}", state.url)?;
     Ok(())
+}
+
+async fn start_configured_daemon_after_install(
+    daemon_config: &crate::daemon::ResolvedDaemonConfig,
+    runtime: Option<&crate::daemon::DaemonRuntimeState>,
+    service: Option<&crate::daemon::DaemonServiceMetadata>,
+) -> Result<crate::daemon::DaemonRuntimeState> {
+    let action = configure_daemon_start_action(runtime, service);
+
+    #[cfg(test)]
+    if let Some(result) = maybe_run_configure_daemon_start_hook(action, daemon_config) {
+        return result;
+    }
+
+    match action {
+        ConfigureDaemonStartAction::Restart => crate::daemon::restart(Some(daemon_config)).await,
+        ConfigureDaemonStartAction::StartService => {
+            crate::daemon::start_service(daemon_config, default_dashboard_server_config(), None)
+                .await
+        }
+    }
+}
+
+fn configure_daemon_start_action(
+    runtime: Option<&crate::daemon::DaemonRuntimeState>,
+    service: Option<&crate::daemon::DaemonServiceMetadata>,
+) -> ConfigureDaemonStartAction {
+    if runtime.is_some() || service.is_some() {
+        ConfigureDaemonStartAction::Restart
+    } else {
+        ConfigureDaemonStartAction::StartService
+    }
+}
+
+#[cfg(test)]
+fn maybe_run_configure_daemon_start_hook(
+    action: ConfigureDaemonStartAction,
+    daemon_config: &crate::daemon::ResolvedDaemonConfig,
+) -> Option<Result<crate::daemon::DaemonRuntimeState>> {
+    CONFIGURE_DAEMON_START_HOOK.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map(|hook| hook(action, daemon_config))
+    })
+}
+
+#[cfg(test)]
+fn with_configure_daemon_start_hook<T>(
+    hook: impl Fn(
+        ConfigureDaemonStartAction,
+        &crate::daemon::ResolvedDaemonConfig,
+    ) -> Result<crate::daemon::DaemonRuntimeState>
+    + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    CONFIGURE_DAEMON_START_HOOK.with(|cell| {
+        assert!(
+            cell.borrow().is_none(),
+            "configure daemon start hook already installed"
+        );
+        *cell.borrow_mut() = Some(Rc::new(hook));
+    });
+    let result = f();
+    CONFIGURE_DAEMON_START_HOOK.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    result
 }
 
 fn default_dashboard_server_config() -> crate::api::DashboardServerConfig {
@@ -189,6 +306,30 @@ mod tests {
         }
     }
 
+    fn fake_daemon_state(
+        daemon_config: &crate::daemon::ResolvedDaemonConfig,
+        mode: crate::daemon::DaemonMode,
+    ) -> crate::daemon::DaemonRuntimeState {
+        crate::daemon::DaemonRuntimeState {
+            version: 1,
+            config_path: daemon_config.config_path.clone(),
+            config_root: daemon_config.config_root.clone(),
+            pid: std::process::id(),
+            mode,
+            service_name: None,
+            url: "http://127.0.0.1:5667".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 5667,
+            bundle_dir: daemon_config.config_root.join("bundle"),
+            relational_db_path: daemon_config.relational_db_path.clone(),
+            events_db_path: daemon_config.events_db_path.clone(),
+            blob_store_path: daemon_config.blob_store_path.clone(),
+            repo_registry_path: daemon_config.repo_registry_path.clone(),
+            binary_fingerprint: crate::daemon::current_binary_fingerprint().unwrap_or_default(),
+            updated_at_unix: 0,
+        }
+    }
+
     #[test]
     fn configuration_dashboard_url_targets_configuration_route() {
         assert_eq!(
@@ -198,6 +339,37 @@ mod tests {
         assert_eq!(
             configuration_dashboard_url("http://127.0.0.1:5667/settings/configuration"),
             "http://127.0.0.1:5667/settings/configuration"
+        );
+    }
+
+    #[test]
+    fn configure_web_start_mode_uses_always_on_service_for_fresh_daemon() {
+        assert_eq!(
+            configure_web_start_mode(None),
+            ConfigureWebStartMode::StartService
+        );
+    }
+
+    #[test]
+    fn configure_daemon_start_action_restarts_existing_daemon() {
+        let temp = TempDir::new().expect("temp dir");
+        let daemon_config = crate::daemon::ResolvedDaemonConfig {
+            config_path: temp.path().join("config.toml"),
+            config_root: temp.path().to_path_buf(),
+            relational_db_path: temp.path().join("relational.db"),
+            events_db_path: temp.path().join("events.duckdb"),
+            blob_store_path: temp.path().join("blob"),
+            repo_registry_path: temp.path().join("repo-registry.json"),
+        };
+        let runtime = fake_daemon_state(&daemon_config, crate::daemon::DaemonMode::Detached);
+
+        assert_eq!(
+            configure_daemon_start_action(Some(&runtime), None),
+            ConfigureDaemonStartAction::Restart
+        );
+        assert_eq!(
+            configure_daemon_start_action(None, None),
+            ConfigureDaemonStartAction::StartService
         );
     }
 
@@ -233,15 +405,31 @@ mod tests {
 
         with_process_state(None, &[], || {
             with_test_platform_dir_overrides(app_dir_overrides(&temp), || {
+                let start_actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<
+                    ConfigureDaemonStartAction,
+                >::new(
+                )));
+                let start_actions_for_hook = std::rc::Rc::clone(&start_actions);
                 let mut out = Vec::new();
-                let result = runtime().block_on(run_with_io(
-                    ConfigureArgs {
-                        web: false,
-                        file: None,
-                        default_config: true,
+                let result = with_configure_daemon_start_hook(
+                    move |action, daemon_config| {
+                        start_actions_for_hook.borrow_mut().push(action);
+                        Ok(fake_daemon_state(
+                            daemon_config,
+                            crate::daemon::DaemonMode::Service,
+                        ))
                     },
-                    &mut out,
-                ));
+                    || {
+                        runtime().block_on(run_with_io(
+                            ConfigureArgs {
+                                web: false,
+                                file: None,
+                                default_config: true,
+                            },
+                            &mut out,
+                        ))
+                    },
+                );
 
                 result.expect("configure --default-config should write default config");
                 let output = String::from_utf8(out).expect("output should be utf-8");
@@ -250,6 +438,14 @@ mod tests {
                 assert!(
                     output.contains(default_path.to_string_lossy().as_ref()),
                     "output should mention installed config path"
+                );
+                assert!(
+                    output.contains("Bitloops daemon is running at http://127.0.0.1:5667"),
+                    "output should mention started daemon"
+                );
+                assert_eq!(
+                    start_actions.borrow().as_slice(),
+                    &[ConfigureDaemonStartAction::StartService]
                 );
 
                 let content =

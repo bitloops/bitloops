@@ -385,6 +385,106 @@ fn init_runtime_start_includes_semantic_lanes_and_repo_policy() {
 }
 
 #[test]
+fn init_prompts_for_embeddings_and_summary_provider_setup() {
+    let repo = TempDir::new().expect("repo");
+    let app_dirs = TempDir::new().expect("app dirs");
+    setup_git_repo(&repo);
+
+    with_process_state(None, &[], || {
+        with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+            crate::cli::telemetry_consent::with_test_tty_override(true, || {
+                let mut out = Vec::new();
+                let mut input = std::io::Cursor::new(b"3\n1\n".to_vec());
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                let args = InitArgs {
+                    sync: Some(false),
+                    ingest: Some(false),
+                    ..init_args()
+                };
+
+                runtime
+                    .block_on(run_with_io_async_for_project_root(
+                        args,
+                        repo.path(),
+                        &mut out,
+                        &mut input,
+                        None,
+                    ))
+                    .expect("init should complete");
+
+                let rendered = String::from_utf8(out).expect("utf8 output");
+                assert!(rendered.contains("Configure embeddings"));
+                assert!(rendered.contains("Bitloops Cloud"));
+                assert!(rendered.contains("Local embeddings"));
+                assert!(rendered.contains("Skip for now"));
+                assert!(rendered.contains("Configure semantic summaries"));
+                assert!(rendered.contains("Local (Ollama)"));
+            });
+        })
+    });
+}
+
+#[test]
+fn init_prompts_for_provider_setup_when_existing_policy_profiles_are_unconfigured() {
+    let repo = TempDir::new().expect("repo");
+    let app_dirs = TempDir::new().expect("app dirs");
+    setup_git_repo(&repo);
+
+    with_process_state(None, &[], || {
+        with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+            let local_policy_path = repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME);
+            crate::config::settings::set_repo_semantic_embedding_policy(
+                &local_policy_path,
+                &crate::config::RepoSemanticEmbeddingPolicy {
+                    present: true,
+                    summary_mode: Some(crate::config::SemanticSummaryMode::Auto),
+                    embedding_mode: Some(
+                        crate::config::SemanticCloneEmbeddingMode::SemanticAwareOnce,
+                    ),
+                    inference: crate::config::SemanticClonesInferenceBindings {
+                        summary_generation: Some("summary_llm".to_string()),
+                        code_embeddings: Some("platform_code".to_string()),
+                        summary_embeddings: Some("platform_code".to_string()),
+                    },
+                },
+            )
+            .expect("seed semantic policy");
+
+            crate::cli::telemetry_consent::with_test_tty_override(true, || {
+                let mut out = Vec::new();
+                let mut input = std::io::Cursor::new(b"3\n1\n".to_vec());
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                let args = InitArgs {
+                    sync: Some(false),
+                    ingest: Some(false),
+                    ..init_args()
+                };
+
+                runtime
+                    .block_on(run_with_io_async_for_project_root(
+                        args,
+                        repo.path(),
+                        &mut out,
+                        &mut input,
+                        None,
+                    ))
+                    .expect("init should complete");
+
+                let rendered = String::from_utf8(out).expect("utf8 output");
+                assert!(rendered.contains("Configure embeddings"));
+                assert!(rendered.contains("Configure semantic summaries"));
+            });
+        })
+    });
+}
+
+#[test]
 fn init_status_command_args_remain_repo_scoped() {
     let args = InitArgs {
         command: Some(InitCommand::Status(InitStatusArgs {

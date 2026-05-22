@@ -542,4 +542,58 @@ mod tests {
             assert!(selection.auto_start_daemon);
         });
     }
+
+    #[test]
+    fn final_setup_prompt_keeps_semantic_runtime_lanes_out() {
+        crate::cli::telemetry_consent::with_test_tty_override(true, || {
+            let mut out = Vec::new();
+            let mut input = std::io::Cursor::new(b"\n".to_vec());
+
+            let selection = choose_final_setup_options(
+                None,
+                &mut out,
+                &mut input,
+                None,
+                InitFinalSetupPromptOptions {
+                    show_sync_and_ingest: true,
+                    show_telemetry: false,
+                    show_auto_start_daemon: false,
+                },
+            )
+            .expect("selection should render prompt");
+
+            let rendered = String::from_utf8(out).expect("prompt should be utf8");
+            assert!(rendered.contains("Sync codebase"));
+            assert!(rendered.contains("Import commit history"));
+            assert!(!rendered.contains("Generate code embeddings"));
+            assert!(!rendered.contains("Generate summaries"));
+            assert!(!rendered.contains("Create summary embeddings"));
+            assert!(selection.sync);
+            assert!(selection.ingest);
+        });
+    }
+
+    #[test]
+    fn final_setup_prompt_selects_sync_and_ingest_independently() {
+        crate::cli::telemetry_consent::with_test_tty_override(true, || {
+            let mut out = Vec::new();
+            let mut input = std::io::Cursor::new(b"1\n".to_vec());
+
+            let selection = choose_final_setup_options(
+                None,
+                &mut out,
+                &mut input,
+                None,
+                InitFinalSetupPromptOptions {
+                    show_sync_and_ingest: true,
+                    show_telemetry: false,
+                    show_auto_start_daemon: false,
+                },
+            )
+            .expect("selection should render prompt");
+
+            assert!(selection.sync);
+            assert!(!selection.ingest);
+        });
+    }
 }
