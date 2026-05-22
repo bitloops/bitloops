@@ -19,6 +19,29 @@ pub trait RelationalGateway: Send + Sync {
             "current canonical file loading is not implemented by this relational gateway (repo {repo_id})"
         )
     }
+    fn load_current_canonical_file_batch(
+        &self,
+        repo_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<CurrentCanonicalFileRecord>> {
+        Ok(self
+            .load_current_canonical_files(repo_id)?
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect())
+    }
+    fn visit_current_canonical_files(
+        &self,
+        repo_id: &str,
+        visitor: &mut dyn FnMut(CurrentCanonicalFileRecord) -> Result<()>,
+    ) -> Result<()> {
+        for file in self.load_current_canonical_files(repo_id)? {
+            visitor(file)?;
+        }
+        Ok(())
+    }
     fn load_current_canonical_artefacts(
         &self,
         repo_id: &str,

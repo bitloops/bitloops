@@ -125,6 +125,127 @@ ORDER BY path ASC
         })
     }
 
+    pub fn load_current_canonical_file_batch(
+        &self,
+        repo_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<CurrentCanonicalFileRecord>> {
+        let repo_id = repo_id.to_string();
+        let offset = i64::try_from(offset).unwrap_or_default();
+        let limit = i64::try_from(limit).unwrap_or_default();
+        self.sqlite.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+SELECT
+  repo_id,
+  path,
+  analysis_mode,
+  file_role,
+  language,
+  resolved_language,
+  effective_content_id,
+  parser_version,
+  extractor_version,
+  exists_in_head,
+  exists_in_index,
+  exists_in_worktree
+FROM current_file_state
+WHERE repo_id = ?1
+ORDER BY path ASC
+LIMIT ?2 OFFSET ?3
+"#,
+                )
+                .map_err(|err| map_missing_sync_table(err, "current_file_state"))
+                .context("failed preparing current canonical file batch query")?;
+
+            let rows = stmt
+                .query_map(params![repo_id, limit, offset], |row| {
+                    Ok(CurrentCanonicalFileRecord {
+                        repo_id: row.get(0)?,
+                        path: row.get(1)?,
+                        analysis_mode: row.get(2)?,
+                        file_role: row.get(3)?,
+                        language: row.get(4)?,
+                        resolved_language: row.get(5)?,
+                        effective_content_id: row.get(6)?,
+                        parser_version: row.get(7)?,
+                        extractor_version: row.get(8)?,
+                        exists_in_head: sqlite_bool(row.get::<_, i64>(9)?),
+                        exists_in_index: sqlite_bool(row.get::<_, i64>(10)?),
+                        exists_in_worktree: sqlite_bool(row.get::<_, i64>(11)?),
+                    })
+                })
+                .map_err(|err| map_missing_sync_table(err, "current_file_state"))
+                .context("failed querying current canonical file batch")?;
+
+            let mut files = Vec::new();
+            for row in rows {
+                files.push(row.context("failed decoding current canonical file batch row")?);
+            }
+            Ok(files)
+        })
+    }
+
+    pub fn visit_current_canonical_files(
+        &self,
+        repo_id: &str,
+        visitor: &mut dyn FnMut(CurrentCanonicalFileRecord) -> Result<()>,
+    ) -> Result<()> {
+        let repo_id = repo_id.to_string();
+        self.sqlite.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+SELECT
+  repo_id,
+  path,
+  analysis_mode,
+  file_role,
+  language,
+  resolved_language,
+  effective_content_id,
+  parser_version,
+  extractor_version,
+  exists_in_head,
+  exists_in_index,
+  exists_in_worktree
+FROM current_file_state
+WHERE repo_id = ?1
+ORDER BY path ASC
+"#,
+                )
+                .map_err(|err| map_missing_sync_table(err, "current_file_state"))
+                .context("failed preparing current canonical file visitor query")?;
+
+            let rows = stmt
+                .query_map(params![repo_id], |row| {
+                    Ok(CurrentCanonicalFileRecord {
+                        repo_id: row.get(0)?,
+                        path: row.get(1)?,
+                        analysis_mode: row.get(2)?,
+                        file_role: row.get(3)?,
+                        language: row.get(4)?,
+                        resolved_language: row.get(5)?,
+                        effective_content_id: row.get(6)?,
+                        parser_version: row.get(7)?,
+                        extractor_version: row.get(8)?,
+                        exists_in_head: sqlite_bool(row.get::<_, i64>(9)?),
+                        exists_in_index: sqlite_bool(row.get::<_, i64>(10)?),
+                        exists_in_worktree: sqlite_bool(row.get::<_, i64>(11)?),
+                    })
+                })
+                .map_err(|err| map_missing_sync_table(err, "current_file_state"))
+                .context("failed querying current canonical files for visitor")?;
+
+            for row in rows {
+                visitor(row.context("failed decoding current canonical file row")?)?;
+            }
+            Ok(())
+        })
+    }
+
     pub fn load_current_canonical_artefacts(
         &self,
         repo_id: &str,
@@ -617,6 +738,23 @@ impl RelationalGateway for SqliteRelationalGateway {
         repo_id: &str,
     ) -> Result<Vec<CurrentCanonicalFileRecord>> {
         SqliteRelationalGateway::load_current_canonical_files(self, repo_id)
+    }
+
+    fn visit_current_canonical_files(
+        &self,
+        repo_id: &str,
+        visitor: &mut dyn FnMut(CurrentCanonicalFileRecord) -> Result<()>,
+    ) -> Result<()> {
+        SqliteRelationalGateway::visit_current_canonical_files(self, repo_id, visitor)
+    }
+
+    fn load_current_canonical_file_batch(
+        &self,
+        repo_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<CurrentCanonicalFileRecord>> {
+        SqliteRelationalGateway::load_current_canonical_file_batch(self, repo_id, offset, limit)
     }
 
     fn load_current_canonical_artefacts(

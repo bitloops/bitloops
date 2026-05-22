@@ -644,15 +644,24 @@ async fn execute_sync_inner(
     );
 
     let touched_paths = touched_paths.into_iter().collect::<Vec<_>>();
+    stats.record_sync_finalization(sync_reason(mode), touched_paths.len(), &touch_outcome);
     let reconcile_started = Instant::now();
-    sync::materializer::reconcile_current_local_edges_for_paths(
+    let reconcile_outcome = reconcile_current_local_edges_after_sync_with_progress(
         relational,
         &cfg.repo.repo_id,
         &touched_paths,
+        observer,
+        &counters,
     )
     .await
     .context("reconciling current local dependency edges after sync")?;
     stats.current_edge_reconcile_total = reconcile_started.elapsed();
+    stats.record_current_edge_reconcile(
+        sync_reason(mode),
+        touched_paths.len(),
+        reconcile_outcome.affected_rows,
+        &reconcile_outcome,
+    );
 
     emit_progress(
         observer,
@@ -710,6 +719,74 @@ async fn execute_sync_inner(
     );
     let (file_diff, artefact_diff) = diff_collector.into_diffs();
     Ok((summary, stats, file_diff, artefact_diff))
+}
+
+async fn reconcile_current_local_edges_after_sync_with_progress(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    touched_paths: &[String],
+    observer: Option<&dyn SyncObserver>,
+    counters: &sync::types::SyncCounters,
+) -> Result<sync::materializer::CurrentEdgeReconcileOutcome> {
+    let Some(observer) = observer else {
+        return sync::materializer::reconcile_current_local_edges_for_paths(
+            relational,
+            repo_id,
+            touched_paths,
+        )
+        .await;
+    };
+
+    emit_progress(
+        Some(observer),
+        SyncProgressPhase::ReconcilingEdges,
+        None,
+        counters,
+        0,
+        0,
+    );
+
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+    let reconcile_future =
+        sync::materializer::reconcile_current_local_edges_for_paths_with_progress(
+            relational,
+            repo_id,
+            touched_paths,
+            progress_tx,
+        );
+    tokio::pin!(reconcile_future);
+
+    let reconcile_outcome = loop {
+        tokio::select! {
+            result = &mut reconcile_future => break result,
+            maybe_update = progress_rx.recv() => {
+                let Some(update) = maybe_update else {
+                    continue;
+                };
+                emit_progress(
+                    Some(observer),
+                    SyncProgressPhase::ReconcilingEdges,
+                    update.current_path,
+                    counters,
+                    update.source_paths_total,
+                    update.source_paths_completed,
+                );
+            }
+        }
+    }?;
+
+    while let Ok(update) = progress_rx.try_recv() {
+        emit_progress(
+            Some(observer),
+            SyncProgressPhase::ReconcilingEdges,
+            update.current_path,
+            counters,
+            update.source_paths_total,
+            update.source_paths_completed,
+        );
+    }
+
+    Ok(reconcile_outcome)
 }
 
 async fn replace_project_contexts_current(

@@ -15,7 +15,7 @@ pub use adjudication_attempts::{
     DbRoleAdjudicationAttemptWriter, RoleAdjudicationAttemptRecord,
     list_recent_role_adjudication_attempts,
 };
-pub use assignments::{
+pub(crate) use assignments::{
     AssignmentHistoryWrite, RoleClassificationStateReplacement, RoleClassificationStateWriteCounts,
     list_active_current_assignments_for_role, list_current_assignments_for_role,
     load_active_assignment_paths_not_in, load_assignments_for_path, load_assignments_for_paths,

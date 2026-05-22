@@ -124,6 +124,7 @@ pub(crate) use self::producer_spool::{
 };
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub(crate) use self::sqlite_schema_once::ensure_sqlite_schema_once;
+pub(crate) use self::sqlite_write_actor::SerializedSqliteWriteOutcome;
 pub use self::sync::types::SyncMode;
 pub use self::types::{
     DevqlConfig, RelationalDialect, RelationalPrimaryBackend, RelationalRoleBackend,
@@ -136,6 +137,8 @@ pub mod watch;
 pub(crate) use self::commands_sync::execute_sync;
 #[cfg(test)]
 pub(crate) use self::commands_sync::execute_sync_validation;
+#[cfg(test)]
+pub(crate) use self::commands_sync::execute_sync_with_observer;
 #[allow(unused_imports)]
 pub(crate) use self::commands_sync::execute_sync_with_observer_and_stats_and_diffs;
 #[cfg(test)]

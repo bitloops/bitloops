@@ -234,14 +234,17 @@ async fn serialised_writer_replaces_architecture_graph_atomically() -> Result<()
     drop(conn);
 
     RepoSqliteWriteActor::shared_for_path(&db_path)?
-        .replace_architecture_graph(ArchitectureGraphReplaceRequest {
-            repo_id: "repo-1".to_string(),
-            facts: sample_architecture_facts("repo-1"),
-            generation_seq: 7,
-            warnings: vec!["warning-a".to_string()],
-            metrics: json!({ "nodes": 1, "edges": 1 }),
-            fail_after_writes: None,
-        })
+        .replace_architecture_graph(
+            ArchitectureGraphReplaceRequest {
+                repo_id: "repo-1".to_string(),
+                facts: sample_architecture_facts("repo-1"),
+                generation_seq: 7,
+                warnings: vec!["warning-a".to_string()],
+                metrics: json!({ "nodes": 1, "edges": 1 }),
+                fail_after_writes: None,
+            },
+            None,
+        )
         .await?;
 
     let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite");
@@ -290,17 +293,20 @@ async fn serialised_writer_replaces_large_architecture_graph_across_batches() ->
     );
 
     RepoSqliteWriteActor::shared_for_path(&db_path)?
-        .replace_architecture_graph(ArchitectureGraphReplaceRequest {
-            repo_id: "repo-1".to_string(),
-            generation_seq: 7,
-            warnings: Vec::new(),
-            metrics: json!({
-                "nodes": facts.nodes.len(),
-                "edges": facts.edges.len(),
-            }),
-            facts,
-            fail_after_writes: None,
-        })
+        .replace_architecture_graph(
+            ArchitectureGraphReplaceRequest {
+                repo_id: "repo-1".to_string(),
+                generation_seq: 7,
+                warnings: Vec::new(),
+                metrics: json!({
+                    "nodes": facts.nodes.len(),
+                    "edges": facts.edges.len(),
+                }),
+                facts,
+                fail_after_writes: None,
+            },
+            None,
+        )
         .await?;
 
     let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite");
@@ -346,14 +352,17 @@ async fn serialised_writer_rolls_back_failed_architecture_graph_replacement() ->
     drop(conn);
 
     let err = RepoSqliteWriteActor::shared_for_path(&db_path)?
-        .replace_architecture_graph(ArchitectureGraphReplaceRequest {
-            repo_id: "repo-1".to_string(),
-            facts: sample_architecture_facts("repo-1"),
-            generation_seq: 8,
-            warnings: Vec::new(),
-            metrics: json!({ "nodes": 1 }),
-            fail_after_writes: Some(1),
-        })
+        .replace_architecture_graph(
+            ArchitectureGraphReplaceRequest {
+                repo_id: "repo-1".to_string(),
+                facts: sample_architecture_facts("repo-1"),
+                generation_seq: 8,
+                warnings: Vec::new(),
+                metrics: json!({ "nodes": 1 }),
+                fail_after_writes: Some(1),
+            },
+            None,
+        )
         .await
         .expect_err("replacement should fail");
     assert!(
@@ -405,14 +414,17 @@ async fn serialised_writer_rejects_node_repo_scope_mismatches() -> Result<()> {
     facts.nodes[0].repo_id = "repo-2".to_string();
 
     let err = RepoSqliteWriteActor::shared_for_path(&db_path)?
-        .replace_architecture_graph(ArchitectureGraphReplaceRequest {
-            repo_id: "repo-1".to_string(),
-            facts,
-            generation_seq: 8,
-            warnings: Vec::new(),
-            metrics: json!({ "nodes": 1 }),
-            fail_after_writes: None,
-        })
+        .replace_architecture_graph(
+            ArchitectureGraphReplaceRequest {
+                repo_id: "repo-1".to_string(),
+                facts,
+                generation_seq: 8,
+                warnings: Vec::new(),
+                metrics: json!({ "nodes": 1 }),
+                fail_after_writes: None,
+            },
+            None,
+        )
         .await
         .expect_err("replacement should fail");
     assert!(
@@ -455,14 +467,17 @@ async fn serialised_writer_rejects_edge_repo_scope_mismatches() -> Result<()> {
     facts.edges[0].repo_id = "repo-2".to_string();
 
     let err = RepoSqliteWriteActor::shared_for_path(&db_path)?
-        .replace_architecture_graph(ArchitectureGraphReplaceRequest {
-            repo_id: "repo-1".to_string(),
-            facts,
-            generation_seq: 8,
-            warnings: Vec::new(),
-            metrics: json!({ "edges": 1 }),
-            fail_after_writes: None,
-        })
+        .replace_architecture_graph(
+            ArchitectureGraphReplaceRequest {
+                repo_id: "repo-1".to_string(),
+                facts,
+                generation_seq: 8,
+                warnings: Vec::new(),
+                metrics: json!({ "edges": 1 }),
+                fail_after_writes: None,
+            },
+            None,
+        )
         .await
         .expect_err("replacement should fail");
     assert!(

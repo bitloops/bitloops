@@ -633,14 +633,6 @@ pub(super) fn format_roles_classify_output(
     let mut lines = vec![
         "architecture roles classified".to_string(),
         format!(
-            "roles: full_reconcile={} affected_paths={} refreshed_paths={} removed_paths={} skipped_unchanged_paths={}",
-            output.roles.full_reconcile,
-            output.roles.affected_paths,
-            output.roles.refreshed_paths,
-            output.roles.removed_paths,
-            output.roles.skipped_unchanged_paths,
-        ),
-        format!(
             "facts: written={} deleted={}",
             output.roles.facts_written, output.roles.facts_deleted
         ),
@@ -653,6 +645,14 @@ pub(super) fn format_roles_classify_output(
             output.roles.assignments_written,
             output.roles.assignments_marked_stale,
             output.roles.assignment_history_rows,
+        ),
+        format!(
+            "roles: full_reconcile={} affected_paths={} refreshed_paths={} removed_paths={} skipped_unchanged_paths={}",
+            output.roles.full_reconcile,
+            output.roles.affected_paths,
+            output.roles.refreshed_paths,
+            output.roles.removed_paths,
+            output.roles.skipped_unchanged_paths,
         ),
         format!(
             "architecture embeddings: selected={} enqueued={} deduped={}",

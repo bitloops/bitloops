@@ -447,6 +447,19 @@ async fn active_role_assignment_generation(
     .ok_or_else(|| anyhow::anyhow!("missing active role assignment for `{path}`"))
 }
 
+fn architecture_role_fact_count(
+    sqlite_path: &std::path::Path,
+    repo_id: &str,
+) -> anyhow::Result<u64> {
+    let conn = rusqlite::Connection::open(sqlite_path)?;
+    let count = conn.query_row(
+        "SELECT COUNT(*) FROM architecture_artefact_facts_current WHERE repo_id = ?1",
+        rusqlite::params![repo_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(count.max(0) as u64)
+}
+
 #[tokio::test]
 async fn current_state_reconcile_includes_role_metrics() -> anyhow::Result<()> {
     let temp = tempfile::TempDir::new()?;
@@ -572,6 +585,186 @@ async fn current_state_reconcile_includes_role_metrics() -> anyhow::Result<()> {
             .metrics
             .as_ref()
             .and_then(|metrics| metrics.pointer("/roles/rules_loaded"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.pointer("/roles/phase_name"))
+            .and_then(Value::as_str),
+        Some("architecture_graph.roles.current_state")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_state_reconcile_batches_large_role_full_reconciles() -> anyhow::Result<()> {
+    let repo_id = "repo-role-batching";
+    let test = architecture_consumer_test_context(repo_id).await?;
+    for index in 0..1_001 {
+        insert_current_file(
+            &test.sqlite_path,
+            repo_id,
+            &format!("src/generated_{index}.rs"),
+            "rust",
+        )?;
+    }
+    upsert_test_role(
+        test.storage.as_ref(),
+        repo_id,
+        "role-rust-source",
+        "rust-source",
+    )
+    .await?;
+    upsert_path_suffix_rule(
+        test.storage.as_ref(),
+        repo_id,
+        "role-rust-source",
+        "rule-rust-source",
+        ".rs",
+        0.9,
+    )
+    .await?;
+
+    let request = role_reconcile_request(
+        repo_id,
+        test._temp.path(),
+        44,
+        crate::host::capability_host::ReconcileMode::FullReconcile,
+        Vec::new(),
+    );
+    let result = ArchitectureGraphRoleCurrentStateConsumer
+        .reconcile(&request, &test.context)
+        .await?;
+
+    assert_eq!(
+        active_role_assignment_generation(test.storage.as_ref(), repo_id, "src/generated_0.rs")
+            .await?,
+        44
+    );
+    assert_eq!(
+        active_role_assignment_generation(test.storage.as_ref(), repo_id, "src/generated_1000.rs")
+            .await?,
+        44
+    );
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.pointer("/roles/phase_name"))
+            .and_then(Value::as_str),
+        Some("architecture_graph.roles.current_state")
+    );
+    assert!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.pointer("/roles/transaction_count"))
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+            > 1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_state_reconcile_skips_role_fact_pipeline_when_inactive() -> anyhow::Result<()> {
+    let repo_id = "repo-role-pipeline-inactive";
+    let test = architecture_consumer_test_context(repo_id).await?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/api.rs", "rust")?;
+    insert_current_artefact(
+        &test.sqlite_path,
+        repo_id,
+        "src/api.rs",
+        "artefact-api",
+        "symbol-api",
+    )?;
+
+    let request = role_reconcile_request(
+        repo_id,
+        test._temp.path(),
+        45,
+        crate::host::capability_host::ReconcileMode::FullReconcile,
+        Vec::new(),
+    );
+    let result = ArchitectureGraphRoleCurrentStateConsumer
+        .reconcile(&request, &test.context)
+        .await?;
+
+    assert_eq!(architecture_role_fact_count(&test.sqlite_path, repo_id)?, 0);
+    assert!(test.workplane.jobs().is_empty());
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.pointer("/roles/skipped_inactive"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.pointer("/roles/facts_written"))
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.pointer("/roles/transaction_count"))
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_state_reconcile_keeps_role_pipeline_active_for_architecture_embedding_intent()
+-> anyhow::Result<()> {
+    let repo_id = "repo-role-pipeline-architecture-intent";
+    let test = architecture_consumer_test_context_with_config(
+        repo_id,
+        semantic_clones_config_with_code_embeddings(),
+    )
+    .await?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/api.rs", "rust")?;
+    insert_current_artefact(
+        &test.sqlite_path,
+        repo_id,
+        "src/api.rs",
+        "artefact-api",
+        "symbol-api",
+    )?;
+
+    let request = role_reconcile_request(
+        repo_id,
+        test._temp.path(),
+        46,
+        crate::host::capability_host::ReconcileMode::FullReconcile,
+        Vec::new(),
+    );
+    let result = ArchitectureGraphRoleCurrentStateConsumer
+        .reconcile(&request, &test.context)
+        .await?;
+
+    assert!(architecture_role_fact_count(&test.sqlite_path, repo_id)? > 0);
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.pointer("/roles/skipped_inactive"))
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.get("architecture_embedding_selected"))
             .and_then(Value::as_u64),
         Some(1)
     );

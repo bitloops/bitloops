@@ -19,10 +19,14 @@ use crate::host::devql::sync::materializer::{
 };
 use crate::host::devql::sync::types::DesiredFileState;
 use crate::host::devql::{DecodedFileContent, DevqlConfig};
+use crate::storage::sqlite::SqliteWritePhaseMetrics;
+use crate::utils::process_metrics::current_process_max_rss_kb;
 
 const BATCH_FILE_LIMIT: usize = 32;
 const BATCH_ROW_LIMIT: usize = 4000;
 const BATCH_MAX_AGE: Duration = Duration::from_millis(50);
+const CACHE_TOUCH_FINALIZE_BATCH_SIZE: usize = 1_000;
+const SYNC_FINALIZATION_PHASE_NAME: &str = "sync_finalization";
 
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedRemoval {
@@ -105,6 +109,8 @@ pub(crate) struct WriterCommitOutcome {
     pub(crate) sqlite_rows_written: usize,
     pub(crate) cache_store_operation_estimate: usize,
     pub(crate) materialisation_operation_estimate: usize,
+    pub(crate) sqlite_phase_metrics: SqliteWritePhaseMetrics,
+    pub(crate) max_rss_kb: u64,
 }
 
 #[derive(Clone)]
@@ -310,6 +316,8 @@ impl SqliteSyncWriter {
                     sqlite_rows_written: rows_written,
                     cache_store_operation_estimate,
                     materialisation_operation_estimate,
+                    sqlite_phase_metrics: SqliteWritePhaseMetrics::default(),
+                    max_rss_kb: 0,
                 })
             })
         })
@@ -326,28 +334,50 @@ impl SqliteSyncWriter {
         let connection = Arc::clone(&self.connection);
         let sqlite_path = self.sqlite_path.clone();
         tokio::task::spawn_blocking(move || -> Result<WriterCommitOutcome> {
+            let touch_entries = touches.into_iter().collect::<Vec<_>>();
             let mut connection = connection
                 .lock()
                 .map_err(|_| anyhow!("locking SQLite sync writer connection"))?;
-            crate::storage::sqlite::with_sqlite_write_lock(&sqlite_path, || {
-                let tx = begin_immediate_transaction(
-                    &mut connection,
-                    "starting SQLite sync cache touch transaction",
+            let ((sqlite_commits, rows_written), sqlite_phase_metrics) =
+                crate::storage::sqlite::with_sqlite_write_phase(
+                    SYNC_FINALIZATION_PHASE_NAME,
+                    || {
+                        let mut sqlite_commits = 0usize;
+                        let mut rows_written = 0usize;
+                        for chunk in touch_entries.chunks(CACHE_TOUCH_FINALIZE_BATCH_SIZE) {
+                            let touch_batch = chunk.iter().cloned().collect::<HashMap<_, _>>();
+                            let batch_rows = crate::storage::sqlite::with_sqlite_write_lock(
+                                &sqlite_path,
+                                || {
+                                    let tx = begin_immediate_transaction(
+                                        &mut connection,
+                                        "starting SQLite sync cache touch transaction",
+                                    )?;
+                                    let rows_written = touch_cache_entries_tx(&tx, &touch_batch)
+                                        .context("touching cached sync entries")?;
+                                    tx.commit().context(
+                                        "committing SQLite sync cache touch transaction",
+                                    )?;
+                                    Ok(rows_written)
+                                },
+                            )?;
+                            sqlite_commits += 1;
+                            rows_written += batch_rows;
+                        }
+                        Ok((sqlite_commits, rows_written))
+                    },
                 )?;
-                let rows_written = touch_cache_entries_tx(&tx, &touches)
-                    .context("touching cached sync entries")?;
-                tx.commit()
-                    .context("committing SQLite sync cache touch transaction")?;
-                Ok(WriterCommitOutcome {
-                    materialized_paths: Vec::new(),
-                    removed_paths: Vec::new(),
-                    pre_artefacts: Vec::new(),
-                    post_artefacts: Vec::new(),
-                    sqlite_commits: 1,
-                    sqlite_rows_written: rows_written,
-                    cache_store_operation_estimate: rows_written,
-                    materialisation_operation_estimate: 0,
-                })
+            Ok(WriterCommitOutcome {
+                materialized_paths: Vec::new(),
+                removed_paths: Vec::new(),
+                pre_artefacts: Vec::new(),
+                post_artefacts: Vec::new(),
+                sqlite_commits,
+                sqlite_rows_written: rows_written,
+                cache_store_operation_estimate: rows_written,
+                materialisation_operation_estimate: 0,
+                sqlite_phase_metrics,
+                max_rss_kb: current_process_max_rss_kb(),
             })
         })
         .await
@@ -396,6 +426,8 @@ impl SqliteSyncWriter {
                     sqlite_rows_written: rows_written,
                     cache_store_operation_estimate: 0,
                     materialisation_operation_estimate: rows_written,
+                    sqlite_phase_metrics: SqliteWritePhaseMetrics::default(),
+                    max_rss_kb: 0,
                 })
             })
         })
@@ -429,6 +461,8 @@ impl SqliteSyncWriter {
                     sqlite_rows_written: rows_written,
                     cache_store_operation_estimate: rows_written,
                     materialisation_operation_estimate: 0,
+                    sqlite_phase_metrics: SqliteWritePhaseMetrics::default(),
+                    max_rss_kb: 0,
                 }
             };
             Ok((result, outcome))
@@ -982,5 +1016,64 @@ mod tests {
             .expect("flush should wait for transient write lock");
 
         blocker.join().expect("join blocker thread");
+    }
+
+    #[tokio::test]
+    async fn sqlite_sync_writer_finish_chunks_large_touch_sets() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let sqlite_path = dir.path().join("devql.sqlite");
+        crate::host::devql::init_sqlite_schema(&sqlite_path)
+            .await
+            .expect("initialise sqlite schema");
+        let seed_connection =
+            open_sync_sqlite_connection(&sqlite_path).expect("open seed connection");
+        for index in 0..1_001 {
+            seed_connection
+                .execute(
+                    "INSERT INTO content_cache (
+                        content_id, language, extraction_fingerprint, parser_version,
+                        extractor_version, retention_class, parse_status, parsed_at,
+                        last_accessed_at
+                    ) VALUES (
+                        ?1, 'python', ?2, 'parser-version', 'extractor-version',
+                        'worktree_only', 'ok', datetime('now'), datetime('now')
+                    )",
+                    rusqlite::params![
+                        format!("content::{index}"),
+                        format!("fingerprint::{index}"),
+                    ],
+                )
+                .expect("seed cache entry");
+        }
+
+        let mut writer = SqliteSyncWriter::open(&sqlite_path)
+            .await
+            .expect("open sqlite sync writer");
+        for index in 0..1_001 {
+            let mut item = writer_test_prepared_item(index, &format!("src/generated_{index}.py"));
+            item.cache_touch_key = Some(CacheKey {
+                content_id: format!("content::{index}"),
+                language: "python".to_string(),
+                extraction_fingerprint: format!("fingerprint::{index}"),
+                parser_version: "parser-version".to_string(),
+                extractor_version: "extractor-version".to_string(),
+            });
+            writer.push_item(item);
+        }
+
+        let outcome = writer.finish().await.expect("finish cache touches");
+        assert_eq!(outcome.sqlite_rows_written, 1_001);
+        assert!(
+            outcome.sqlite_commits > 1,
+            "large touch sets should be chunked across multiple transactions"
+        );
+        assert!(
+            outcome.sqlite_phase_metrics.transaction_count > 1,
+            "phase metrics should reflect chunked lock acquisitions"
+        );
+        assert_eq!(
+            outcome.sqlite_phase_metrics.phase_name,
+            Some(SYNC_FINALIZATION_PHASE_NAME)
+        );
     }
 }

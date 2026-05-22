@@ -508,8 +508,13 @@ fn append_devql_task_lines(lines: &mut Vec<String>, status: &daemon::DevqlTaskQu
                 progress.phase.as_str()
             ));
             if progress.paths_total > 0 {
+                let unit = if progress.phase.as_str() == "reconciling_edges" {
+                    "edge paths"
+                } else {
+                    "paths"
+                };
                 lines.push(format!(
-                    "Current repo sync progress: {}/{} paths complete ({} remaining)",
+                    "Current repo sync progress: {}/{} {unit} complete ({} remaining)",
                     progress.paths_completed, progress.paths_total, progress.paths_remaining
                 ));
             }

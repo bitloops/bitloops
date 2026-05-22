@@ -10,6 +10,8 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 use crate::capability_packs::architecture_graph::storage::ArchitectureGraphFacts;
+use crate::storage::sqlite::SqliteWritePhaseMetrics;
+use crate::utils::process_metrics::current_process_max_rss_kb;
 
 const ARCHITECTURE_GRAPH_WRITE_BATCH_SIZE: usize = 250;
 const ARCHITECTURE_GRAPH_NODE_INSERT_WIDTH: usize = 14;
@@ -24,8 +26,9 @@ enum SqliteWriteOperation {
 
 #[derive(Debug)]
 struct SqliteWriteRequest {
+    phase_name: Option<&'static str>,
     operation: SqliteWriteOperation,
-    response: oneshot::Sender<std::result::Result<(), String>>,
+    response: oneshot::Sender<SqliteWriteResponse>,
 }
 
 #[derive(Debug)]
@@ -42,6 +45,18 @@ struct ArchitectureGraphReplaceRequest {
 #[derive(Debug)]
 struct RepoSqliteWriteActor {
     sender: Sender<SqliteWriteRequest>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SerializedSqliteWriteOutcome {
+    pub(crate) sqlite_phase_metrics: SqliteWritePhaseMetrics,
+    pub(crate) max_rss_kb: u64,
+}
+
+#[derive(Debug)]
+struct SqliteWriteResponse {
+    result: std::result::Result<(), String>,
+    outcome: SerializedSqliteWriteOutcome,
 }
 
 impl RepoSqliteWriteActor {
@@ -72,23 +87,33 @@ impl RepoSqliteWriteActor {
         Ok(Self { sender })
     }
 
-    async fn exec(&self, statements: Vec<String>) -> Result<()> {
+    async fn exec(
+        &self,
+        statements: Vec<String>,
+        phase_name: Option<&'static str>,
+    ) -> Result<SerializedSqliteWriteOutcome> {
         if statements
             .iter()
             .all(|statement| statement.trim().is_empty())
         {
-            return Ok(());
+            return Ok(SerializedSqliteWriteOutcome::default());
         }
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
             .send(SqliteWriteRequest {
+                phase_name,
                 operation: SqliteWriteOperation::Statements(statements),
                 response: response_tx,
             })
             .map_err(|_| anyhow!("sending work to SQLite write actor"))?;
         match response_rx.await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(err)) => Err(anyhow!(err)),
+            Ok(SqliteWriteResponse {
+                result: Ok(()),
+                outcome,
+            }) => Ok(outcome),
+            Ok(SqliteWriteResponse {
+                result: Err(err), ..
+            }) => Err(anyhow!(err)),
             Err(_) => Err(anyhow!("SQLite write actor dropped the response channel")),
         }
     }
@@ -96,17 +121,24 @@ impl RepoSqliteWriteActor {
     async fn replace_architecture_graph(
         &self,
         request: ArchitectureGraphReplaceRequest,
-    ) -> Result<()> {
+        phase_name: Option<&'static str>,
+    ) -> Result<SerializedSqliteWriteOutcome> {
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
             .send(SqliteWriteRequest {
+                phase_name,
                 operation: SqliteWriteOperation::ReplaceArchitectureGraph(request),
                 response: response_tx,
             })
             .map_err(|_| anyhow!("sending architecture graph work to SQLite write actor"))?;
         match response_rx.await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(err)) => Err(anyhow!(err)),
+            Ok(SqliteWriteResponse {
+                result: Ok(()),
+                outcome,
+            }) => Ok(outcome),
+            Ok(SqliteWriteResponse {
+                result: Err(err), ..
+            }) => Err(anyhow!(err)),
             Err(_) => Err(anyhow!("SQLite write actor dropped the response channel")),
         }
     }
@@ -114,8 +146,9 @@ impl RepoSqliteWriteActor {
 
 pub(super) async fn sqlite_exec_serialized_path(path: &Path, sql: &str) -> Result<()> {
     RepoSqliteWriteActor::shared_for_path(path)?
-        .exec(vec![sql.to_string()])
+        .exec(vec![sql.to_string()], None)
         .await
+        .map(|_| ())
 }
 
 pub(super) async fn sqlite_exec_serialized_batch_transactional_path(
@@ -123,7 +156,18 @@ pub(super) async fn sqlite_exec_serialized_batch_transactional_path(
     statements: &[String],
 ) -> Result<()> {
     RepoSqliteWriteActor::shared_for_path(path)?
-        .exec(statements.to_vec())
+        .exec(statements.to_vec(), None)
+        .await
+        .map(|_| ())
+}
+
+pub(super) async fn sqlite_exec_serialized_batch_transactional_path_with_phase_outcome(
+    path: &Path,
+    statements: &[String],
+    phase_name: &'static str,
+) -> Result<SerializedSqliteWriteOutcome> {
+    RepoSqliteWriteActor::shared_for_path(path)?
+        .exec(statements.to_vec(), Some(phase_name))
         .await
 }
 
@@ -136,15 +180,44 @@ pub(super) async fn sqlite_replace_architecture_graph_current_path(
     metrics: Value,
 ) -> Result<()> {
     RepoSqliteWriteActor::shared_for_path(path)?
-        .replace_architecture_graph(ArchitectureGraphReplaceRequest {
-            repo_id: repo_id.to_string(),
-            facts,
-            generation_seq,
-            warnings: warnings.to_vec(),
-            metrics,
-            #[cfg(test)]
-            fail_after_writes: None,
-        })
+        .replace_architecture_graph(
+            ArchitectureGraphReplaceRequest {
+                repo_id: repo_id.to_string(),
+                facts,
+                generation_seq,
+                warnings: warnings.to_vec(),
+                metrics,
+                #[cfg(test)]
+                fail_after_writes: None,
+            },
+            None,
+        )
+        .await
+        .map(|_| ())
+}
+
+pub(super) async fn sqlite_replace_architecture_graph_current_path_with_phase_outcome(
+    path: &Path,
+    repo_id: &str,
+    facts: ArchitectureGraphFacts,
+    generation_seq: u64,
+    warnings: &[String],
+    metrics: Value,
+    phase_name: &'static str,
+) -> Result<SerializedSqliteWriteOutcome> {
+    RepoSqliteWriteActor::shared_for_path(path)?
+        .replace_architecture_graph(
+            ArchitectureGraphReplaceRequest {
+                repo_id: repo_id.to_string(),
+                facts,
+                generation_seq,
+                warnings: warnings.to_vec(),
+                metrics,
+                #[cfg(test)]
+                fail_after_writes: None,
+            },
+            Some(phase_name),
+        )
         .await
 }
 
@@ -153,18 +226,55 @@ fn writer_loop(path: PathBuf, receiver: Receiver<SqliteWriteRequest>) {
         .map_err(|err| format!("{err:#}"))
         .ok();
     while let Ok(request) = receiver.recv() {
-        let result = match connection.as_mut() {
-            Some(connection) => crate::storage::sqlite::with_sqlite_write_lock(&path, || {
-                execute_request(connection, &request.operation)
-            })
-            .map_err(|err| format!("serialised SQLite write for `{}`: {err:#}", path.display())),
-            None => Err(format!(
-                "opening serialised SQLite writer connection for `{}` failed",
-                path.display()
-            )),
+        let (result, outcome) = match connection.as_mut() {
+            Some(connection) => {
+                let mut execute = || {
+                    crate::storage::sqlite::with_sqlite_write_lock(&path, || {
+                        execute_request(connection, &request.operation)
+                    })
+                };
+                match request.phase_name {
+                    Some(phase_name) => {
+                        match crate::storage::sqlite::with_sqlite_write_phase(phase_name, execute) {
+                            Ok(((), sqlite_phase_metrics)) => (
+                                Ok(()),
+                                SerializedSqliteWriteOutcome {
+                                    sqlite_phase_metrics,
+                                    max_rss_kb: current_process_max_rss_kb(),
+                                },
+                            ),
+                            Err(err) => (
+                                Err(format!(
+                                    "serialised SQLite write for `{}`: {err:#}",
+                                    path.display()
+                                )),
+                                SerializedSqliteWriteOutcome::default(),
+                            ),
+                        }
+                    }
+                    None => (
+                        execute().map_err(|err| {
+                            format!("serialised SQLite write for `{}`: {err:#}", path.display())
+                        }),
+                        SerializedSqliteWriteOutcome {
+                            max_rss_kb: current_process_max_rss_kb(),
+                            ..SerializedSqliteWriteOutcome::default()
+                        },
+                    ),
+                }
+            }
+            None => (
+                Err(format!(
+                    "opening serialised SQLite writer connection for `{}` failed",
+                    path.display()
+                )),
+                SerializedSqliteWriteOutcome::default(),
+            ),
         };
 
-        let _ = request.response.send(result);
+        let _ = request
+            .response
+            .send(SqliteWriteResponse { result, outcome });
     }
 }
 
