@@ -555,7 +555,24 @@ fn emit_hook_stdout_if_present(
 fn should_spool_lifecycle_stop_hook(agent_name: &str, hook_name: &str) -> bool {
     matches!(
         (agent_name, hook_name),
-        (AGENT_NAME_CODEX, CODEX_HOOK_STOP) | (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_STOP)
+        (AGENT_NAME_CODEX, CODEX_HOOK_STOP)
+            | (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_STOP)
+            | (
+                AGENT_NAME_GEMINI,
+                crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_AGENT,
+            )
+            | (
+                AGENT_NAME_CURSOR,
+                crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP,
+            )
+            | (
+                AGENT_NAME_COPILOT,
+                crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP,
+            )
+            | (
+                AGENT_NAME_OPEN_CODE,
+                crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END,
+            )
     )
 }
 
@@ -584,6 +601,20 @@ fn enqueue_lifecycle_stop_from_hook(
     crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_stop_job_hook_safe_at(
         &db_path, insert,
     )
+}
+
+fn route_or_enqueue_lifecycle_hook(
+    repo_root: &Path,
+    agent_name: &str,
+    hook_name: &str,
+    stdin: &str,
+) -> Result<crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome> {
+    if should_spool_lifecycle_stop_hook(agent_name, hook_name) {
+        enqueue_lifecycle_stop_from_hook(repo_root, agent_name, hook_name, stdin)
+            .map(|_| crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome::default())
+    } else {
+        route_hook_command_to_lifecycle(repo_root, agent_name, hook_name, stdin)
+    }
 }
 
 pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Result<()> {
@@ -622,24 +653,12 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 hook_name,
                 &strategy_name,
                 || {
-                    if should_spool_lifecycle_stop_hook(AGENT_NAME_CLAUDE_CODE, hook_name) {
-                        enqueue_lifecycle_stop_from_hook(
-                            &repo_root,
-                            AGENT_NAME_CLAUDE_CODE,
-                            hook_name,
-                            &stdin,
-                        )
-                        .map(|_| {
-                            crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome::default()
-                        })
-                    } else {
-                        route_hook_command_to_lifecycle(
-                            &repo_root,
-                            AGENT_NAME_CLAUDE_CODE,
-                            hook_name,
-                            &stdin,
-                        )
-                    }
+                    route_or_enqueue_lifecycle_hook(
+                        &repo_root,
+                        AGENT_NAME_CLAUDE_CODE,
+                        hook_name,
+                        &stdin,
+                    )
                 },
             );
             track_hook_action(
@@ -661,26 +680,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 AGENT_NAME_CODEX,
                 hook_name,
                 &strategy_name,
-                || {
-                    if should_spool_lifecycle_stop_hook(AGENT_NAME_CODEX, hook_name) {
-                        enqueue_lifecycle_stop_from_hook(
-                            &repo_root,
-                            AGENT_NAME_CODEX,
-                            hook_name,
-                            &stdin,
-                        )
-                        .map(|_| {
-                            crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome::default()
-                        })
-                    } else {
-                        route_hook_command_to_lifecycle(
-                            &repo_root,
-                            AGENT_NAME_CODEX,
-                            hook_name,
-                            &stdin,
-                        )
-                    }
-                },
+                || route_or_enqueue_lifecycle_hook(&repo_root, AGENT_NAME_CODEX, hook_name, &stdin),
             );
             track_hook_action(
                 &repo_root,
@@ -702,7 +702,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 hook_name,
                 &strategy_name,
                 || {
-                    route_hook_command_to_lifecycle(
+                    route_or_enqueue_lifecycle_hook(
                         &repo_root,
                         AGENT_NAME_GEMINI,
                         hook_name,
@@ -730,7 +730,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 hook_name,
                 &strategy_name,
                 || {
-                    route_hook_command_to_lifecycle(
+                    route_or_enqueue_lifecycle_hook(
                         &repo_root,
                         AGENT_NAME_CURSOR,
                         hook_name,
@@ -758,7 +758,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 hook_name,
                 &strategy_name,
                 || {
-                    route_hook_command_to_lifecycle(
+                    route_or_enqueue_lifecycle_hook(
                         &repo_root,
                         AGENT_NAME_COPILOT,
                         hook_name,
@@ -786,7 +786,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 hook_name,
                 &strategy_name,
                 || {
-                    route_hook_command_to_lifecycle(
+                    route_or_enqueue_lifecycle_hook(
                         &repo_root,
                         AGENT_NAME_OPEN_CODE,
                         hook_name,
@@ -1056,7 +1056,7 @@ mod tests {
     }
 
     #[test]
-    fn only_codex_and_claude_stop_hooks_use_lifecycle_spool() {
+    fn supported_agent_terminal_turn_end_hooks_use_lifecycle_spool() {
         assert!(should_spool_lifecycle_stop_hook(
             AGENT_NAME_CODEX,
             CODEX_HOOK_STOP
@@ -1065,9 +1065,21 @@ mod tests {
             AGENT_NAME_CLAUDE_CODE,
             CLAUDE_HOOK_STOP
         ));
-        assert!(!should_spool_lifecycle_stop_hook(
+        assert!(should_spool_lifecycle_stop_hook(
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_AGENT
+        ));
+        assert!(should_spool_lifecycle_stop_hook(
             AGENT_NAME_CURSOR,
             crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP
+        ));
+        assert!(should_spool_lifecycle_stop_hook(
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP
+        ));
+        assert!(should_spool_lifecycle_stop_hook(
+            AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END
         ));
         assert!(!should_spool_lifecycle_stop_hook(
             AGENT_NAME_CODEX,
@@ -1096,15 +1108,27 @@ mod tests {
             ),
             (
                 AGENT_NAME_CURSOR,
-                crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP,
+                crate::adapters::agents::cursor::lifecycle::HOOK_NAME_AFTER_SHELL_EXECUTION,
             ),
             (
-                AGENT_NAME_COPILOT,
-                crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP,
+                AGENT_NAME_CURSOR,
+                crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SESSION_END,
             ),
             (
                 AGENT_NAME_OPEN_CODE,
-                crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END,
+                crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_COMPACTION,
+            ),
+            (
+                AGENT_NAME_GEMINI,
+                crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_SESSION_END,
+            ),
+            (
+                AGENT_NAME_COPILOT,
+                crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_SESSION_END,
+            ),
+            (
+                AGENT_NAME_CLAUDE_CODE,
+                crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_SESSION_END,
             ),
         ];
 

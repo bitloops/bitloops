@@ -27,7 +27,8 @@ async fn run_all_producer_spool_jobs(
 }
 
 #[test]
-fn daemon_lifecycle_spool_worker_processes_stop_job_and_deletes_it() -> anyhow::Result<()> {
+fn daemon_lifecycle_spool_worker_processes_supported_terminal_jobs_and_deletes_them()
+-> anyhow::Result<()> {
     let dir = TempDir::new().expect("temp dir");
     let config_root = dir.path().join("config");
     let repo_root = dir.path().join("repo");
@@ -62,49 +63,112 @@ enabled = true
     let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
     let sqlite = crate::host::runtime_store::open_runtime_sqlite_for_config_root(&config_root)
         .expect("open repo runtime sqlite");
-    let transcript_path = repo_root.join("codex-transcript.jsonl");
-    std::fs::write(
-        &transcript_path,
-        serde_json::json!({
-            "type": "response_item",
-            "payload": {
-                "type": "message",
-                "role": "assistant",
-                "content": [{
-                    "type": "output_text",
-                    "text": "No file changes"
-                }]
-            }
-        })
-        .to_string(),
-    )
-    .expect("write transcript");
-
-    crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_stop_job_sqlite(
-        &sqlite,
-        crate::host::checkpoints::lifecycle::spool::LifecycleStopJobInsert {
-            repo_id: repo.repo_id,
-            repo_root: repo_root.clone(),
-            config_root: config_root.clone(),
-            agent_name: crate::adapters::agents::AGENT_NAME_CODEX.to_string(),
-            hook_name: crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP.to_string(),
-            raw_stdin: serde_json::json!({
-                "sessionId": "codex-spooled-stop",
-                "transcriptPath": transcript_path.to_string_lossy(),
+    let write_transcript = |session_id: &str| {
+        let transcript_path = repo_root.join(format!("{session_id}.jsonl"));
+        std::fs::write(
+            &transcript_path,
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "No file changes"
+                    }]
+                }
             })
             .to_string(),
-            cwd: repo_root.clone(),
-            received_at_unix: 1_778_800_000,
-        },
-    )
-    .expect("enqueue lifecycle stop job");
+        )
+        .expect("write transcript");
+        transcript_path
+    };
+
+    let cases = [
+        (
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_STOP,
+            "claude-spooled-stop",
+            serde_json::json!({
+                "session_id": "claude-spooled-stop",
+                "transcript_path": write_transcript("claude-spooled-stop").to_string_lossy(),
+                "model": "claude-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP,
+            "codex-spooled-stop",
+            serde_json::json!({
+                "sessionId": "codex-spooled-stop",
+                "transcriptPath": write_transcript("codex-spooled-stop").to_string_lossy(),
+                "model": "codex-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_AGENT,
+            "gemini-spooled-stop",
+            serde_json::json!({
+                "session_id": "gemini-spooled-stop",
+                "transcript_path": write_transcript("gemini-spooled-stop").to_string_lossy(),
+                "model": "gemini-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP,
+            "cursor-spooled-stop",
+            serde_json::json!({
+                "conversation_id": "cursor-spooled-stop",
+                "transcript_path": write_transcript("cursor-spooled-stop").to_string_lossy(),
+                "model": "cursor-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP,
+            "copilot-spooled-stop",
+            serde_json::json!({
+                "sessionId": "copilot-spooled-stop",
+                "transcriptPath": write_transcript("copilot-spooled-stop").to_string_lossy(),
+                "model": "copilot-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END,
+            "opencode-spooled-stop",
+            serde_json::json!({
+                "session_id": "opencode-spooled-stop",
+                "transcript_path": write_transcript("opencode-spooled-stop").to_string_lossy(),
+            }),
+        ),
+    ];
+
+    for (index, (agent_name, hook_name, _session_id, raw_stdin)) in cases.iter().enumerate() {
+        crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_stop_job_sqlite(
+            &sqlite,
+            crate::host::checkpoints::lifecycle::spool::LifecycleStopJobInsert {
+                repo_id: repo.repo_id.clone(),
+                repo_root: repo_root.clone(),
+                config_root: config_root.clone(),
+                agent_name: (*agent_name).to_string(),
+                hook_name: (*hook_name).to_string(),
+                raw_stdin: raw_stdin.to_string(),
+                cwd: repo_root.clone(),
+                received_at_unix: 1_778_800_000 + u64::try_from(index).unwrap_or_default(),
+            },
+        )
+        .expect("enqueue lifecycle stop job");
+    }
 
     let processed =
         crate::test_support::process_state::with_process_state(Some(&repo_root), &[], || {
             super::worker::process_lifecycle_stop_spool_once_for_tests(&sqlite)
         })?;
 
-    assert_eq!(processed, 1);
+    assert_eq!(processed, cases.len() as u64);
     let remaining =
         crate::host::checkpoints::lifecycle::spool::list_lifecycle_stop_jobs_for_tests(&sqlite)
             .expect("list lifecycle stop jobs");

@@ -26,9 +26,9 @@ sequenceDiagram
     Strategy->>Runtime: persist checkpoint metadata
     Lifecycle->>Repo: append interaction events
 
-    Note over Agent,Repo: Only Codex stop and Claude Code stop use the durable handoff; all other hooks stay synchronous.
+    Note over Agent,Repo: Supported terminal turn-end hooks use the durable handoff; all other hooks stay synchronous.
 
-    Agent->>Hooks: Codex stop / Claude Code stop
+    Agent->>Hooks: stop / after-agent / agent-stop / turn-end
     Hooks->>Runtime: enqueue tiny raw Stop lifecycle spool job
     alt SQLite enqueue accepted within bounded timeout
         Runtime-->>Hooks: job accepted
@@ -43,7 +43,7 @@ sequenceDiagram
     Daemon->>Runtime: claim lifecycle Stop jobs
     Runtime-->>Daemon: raw Stop payload plus repo root
     Daemon->>Adapters: replay raw payload with explicit repo-root context
-    Adapters->>Lifecycle: normalize Codex or Claude Stop payload
+    Adapters->>Lifecycle: normalize agent-specific terminal payload
     Lifecycle->>Runtime: persist live session state
     Lifecycle->>Strategy: save step or task step
     Strategy->>Git: snapshot temporary checkpoint state
@@ -63,12 +63,12 @@ sequenceDiagram
 
 - Capture is about provenance and checkpoint formation.
 - The strategy decides how session turns map to temporary or committed checkpoints.
-- Codex and Claude Code Stop hooks record only a tiny raw Stop payload as a lifecycle spool job in repo runtime SQLite, then return quickly.
+- Supported terminal turn-end hooks record only a tiny raw payload as a lifecycle spool job in repo runtime SQLite, then return quickly. This currently covers Claude Code `stop`, Codex `stop`, Gemini `after-agent`, Cursor `stop`, Copilot `agent-stop`, and OpenCode `turn-end`.
 - Stop hook enqueue is SQLite-only. If runtime SQLite cannot accept the tiny enqueue within the bounded timeout, the hook fails quickly and logs or surfaces the enqueue error.
 - Stop hook-side code must not read transcripts, update interaction projections, flush canonical interaction storage, or create checkpoint steps.
 - The daemon claims lifecycle Stop jobs from runtime SQLite and replays raw payloads through the existing lifecycle adapters using explicit repo-root context.
-- Agent-specific parsing stays in the Codex and Claude Code adapter layer.
-- Only Codex `stop` and Claude Code `stop` use this handoff; all other hooks remain synchronous.
+- Agent-specific parsing stays in each agent adapter layer.
+- Only terminal turn-end hooks use this handoff; session-start, session-end, prompt, tool, compaction, subagent, and Git hooks remain synchronous.
 - Git lifecycle callbacks can queue repo-local DevQL follow-up work, but that does not make sync part of the capture flow.
 
 ## Glossary
