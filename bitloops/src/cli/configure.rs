@@ -53,6 +53,10 @@ pub struct ConfigureArgs {
     /// Install the default daemon config.toml file.
     #[arg(long = "default-config", default_value_t = false)]
     pub default_config: bool,
+
+    /// Install the daemon config without starting or restarting the daemon.
+    #[arg(long = "no-start", default_value_t = false, conflicts_with = "web")]
+    pub no_start: bool,
 }
 
 pub async fn run(args: ConfigureArgs) -> Result<()> {
@@ -67,13 +71,13 @@ pub(crate) async fn run_with_io(args: ConfigureArgs, out: &mut dyn Write) -> Res
     }
 
     if args.default_config {
-        return run_default_config(out).await;
+        return run_default_config(args.no_start, out).await;
     }
 
     let Some(path) = args.file.as_deref() else {
         bail!("missing configure mode; pass `--web`, `--file <path>`, or `--default-config`");
     };
-    run_file(path, out).await
+    run_file(path, args.no_start, out).await
 }
 
 async fn run_web(out: &mut dyn Write) -> Result<()> {
@@ -109,7 +113,7 @@ fn configure_web_start_mode(existing_daemon_url: Option<&str>) -> ConfigureWebSt
     }
 }
 
-async fn run_default_config(out: &mut dyn Write) -> Result<()> {
+async fn run_default_config(no_start: bool, out: &mut dyn Write) -> Result<()> {
     log::info!("cli configure default-config: installing generated default daemon config");
     let runtime = crate::daemon::runtime_state()?;
     if runtime
@@ -120,7 +124,11 @@ async fn run_default_config(out: &mut dyn Write) -> Result<()> {
             "cannot apply daemon config while a foreground daemon is running; stop it and rerun `bitloops configure --default-config`"
         );
     }
-    let service = crate::daemon::service_metadata()?;
+    let service = if no_start {
+        None
+    } else {
+        crate::daemon::service_metadata()?
+    };
 
     let target = crate::config::default_daemon_config_path()?;
     let raw = crate::config::default_daemon_config_toml()?;
@@ -129,6 +137,19 @@ async fn run_default_config(out: &mut dyn Write) -> Result<()> {
 
     install_config_atomically(&target, raw.as_bytes())?;
     let daemon_config = crate::daemon::resolve_daemon_config(Some(target.as_path()))?;
+    if no_start {
+        writeln!(
+            out,
+            "Installed Bitloops default daemon config at {}",
+            target.display()
+        )?;
+        writeln!(
+            out,
+            "Bitloops daemon was not started or restarted (--no-start)"
+        )?;
+        return Ok(());
+    }
+
     let state =
         start_configured_daemon_after_install(&daemon_config, runtime.as_ref(), service.as_ref())
             .await?;
@@ -142,7 +163,7 @@ async fn run_default_config(out: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
-async fn run_file(path: &Path, out: &mut dyn Write) -> Result<()> {
+async fn run_file(path: &Path, no_start: bool, out: &mut dyn Write) -> Result<()> {
     log::info!("cli configure file: source={}", path.display());
     let runtime = crate::daemon::runtime_state()?;
     if runtime
@@ -154,7 +175,11 @@ async fn run_file(path: &Path, out: &mut dyn Write) -> Result<()> {
             path.display()
         );
     }
-    let service = crate::daemon::service_metadata()?;
+    let service = if no_start {
+        None
+    } else {
+        crate::daemon::service_metadata()?
+    };
 
     let raw = fs::read_to_string(path)
         .with_context(|| format!("reading daemon config {}", path.display()))?;
@@ -165,6 +190,19 @@ async fn run_file(path: &Path, out: &mut dyn Write) -> Result<()> {
     install_config_atomically(&target, raw.as_bytes())?;
 
     let daemon_config = crate::daemon::resolve_daemon_config(Some(target.as_path()))?;
+    if no_start {
+        writeln!(
+            out,
+            "Installed Bitloops daemon config at {}",
+            target.display()
+        )?;
+        writeln!(
+            out,
+            "Bitloops daemon was not started or restarted (--no-start)"
+        )?;
+        return Ok(());
+    }
+
     let state =
         start_configured_daemon_after_install(&daemon_config, runtime.as_ref(), service.as_ref())
             .await?;
@@ -387,6 +425,7 @@ mod tests {
                         web: false,
                         file: Some(invalid.clone()),
                         default_config: false,
+                        no_start: false,
                     },
                     &mut out,
                 ));
@@ -425,6 +464,7 @@ mod tests {
                                 web: false,
                                 file: None,
                                 default_config: true,
+                                no_start: false,
                             },
                             &mut out,
                         ))
@@ -538,6 +578,119 @@ mod tests {
                         "default config should contain {expected:?}"
                     );
                 }
+            })
+        });
+    }
+
+    #[test]
+    fn configure_default_config_no_start_writes_config_without_starting_daemon() {
+        let temp = TempDir::new().expect("temp dir");
+
+        with_process_state(None, &[], || {
+            with_test_platform_dir_overrides(app_dir_overrides(&temp), || {
+                let start_actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<
+                    ConfigureDaemonStartAction,
+                >::new(
+                )));
+                let start_actions_for_hook = std::rc::Rc::clone(&start_actions);
+                let mut out = Vec::new();
+                let result = with_configure_daemon_start_hook(
+                    move |action, daemon_config| {
+                        start_actions_for_hook.borrow_mut().push(action);
+                        Ok(fake_daemon_state(
+                            daemon_config,
+                            crate::daemon::DaemonMode::Detached,
+                        ))
+                    },
+                    || {
+                        runtime().block_on(run_with_io(
+                            ConfigureArgs {
+                                web: false,
+                                file: None,
+                                default_config: true,
+                                no_start: true,
+                            },
+                            &mut out,
+                        ))
+                    },
+                );
+
+                result.expect("configure --default-config --no-start should write default config");
+                let output = String::from_utf8(out).expect("output should be utf-8");
+                let default_path =
+                    crate::config::default_daemon_config_path().expect("default config path");
+                assert!(
+                    output.contains(default_path.to_string_lossy().as_ref()),
+                    "output should mention installed config path"
+                );
+                assert!(
+                    !output.contains("Bitloops daemon is running"),
+                    "output should not claim the daemon is running"
+                );
+                assert!(
+                    start_actions.borrow().is_empty(),
+                    "configure --no-start should not start or restart the daemon"
+                );
+                assert!(default_path.exists(), "default config should exist");
+            })
+        });
+    }
+
+    #[test]
+    fn configure_file_no_start_writes_config_without_starting_daemon() {
+        let temp = TempDir::new().expect("temp dir");
+
+        with_process_state(None, &[], || {
+            with_test_platform_dir_overrides(app_dir_overrides(&temp), || {
+                let source = temp.path().join("source-config.toml");
+                let raw = crate::config::default_daemon_config_toml()
+                    .expect("default daemon config should render");
+                fs::write(&source, raw).expect("write source config");
+
+                let start_actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<
+                    ConfigureDaemonStartAction,
+                >::new(
+                )));
+                let start_actions_for_hook = std::rc::Rc::clone(&start_actions);
+                let mut out = Vec::new();
+                let result = with_configure_daemon_start_hook(
+                    move |action, daemon_config| {
+                        start_actions_for_hook.borrow_mut().push(action);
+                        Ok(fake_daemon_state(
+                            daemon_config,
+                            crate::daemon::DaemonMode::Detached,
+                        ))
+                    },
+                    || {
+                        runtime().block_on(run_with_io(
+                            ConfigureArgs {
+                                web: false,
+                                file: Some(source.clone()),
+                                default_config: false,
+                                no_start: true,
+                            },
+                            &mut out,
+                        ))
+                    },
+                );
+
+                result.expect("configure --file --no-start should write config");
+                let output = String::from_utf8(out).expect("output should be utf-8");
+                let default_path =
+                    crate::config::default_daemon_config_path().expect("default config path");
+                assert!(
+                    output.contains(default_path.to_string_lossy().as_ref()),
+                    "output should mention installed config path"
+                );
+                assert!(
+                    !output.contains("Bitloops daemon is running"),
+                    "output should not claim the daemon is running"
+                );
+                assert!(
+                    start_actions.borrow().is_empty(),
+                    "configure --no-start should not start or restart the daemon"
+                );
+                assert!(default_path.exists(), "installed config should exist");
             })
         });
     }

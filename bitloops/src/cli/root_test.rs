@@ -162,6 +162,33 @@ fn TestRootCommand_ConfigureParsesDefaultConfigMode() {
     assert!(args.default_config);
     assert!(!args.web);
     assert!(args.file.is_none());
+    assert!(!args.no_start);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_ConfigureParsesNoStartWithDefaultConfigMode() {
+    let parsed = Cli::try_parse_from(["bitloops", "configure", "--default-config", "--no-start"])
+        .expect("configure --default-config --no-start should parse");
+
+    let Some(Commands::Configure(args)) = parsed.command else {
+        panic!("expected configure command");
+    };
+
+    assert!(args.default_config);
+    assert!(!args.web);
+    assert!(args.file.is_none());
+    assert!(args.no_start);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_ConfigureNoStartConflictsWithWebMode() {
+    let err = Cli::try_parse_from(["bitloops", "configure", "--web", "--no-start"])
+        .err()
+        .expect("configure --web --no-start should conflict");
+
+    assert!(err.to_string().contains("--no-start"));
 }
 
 #[test]

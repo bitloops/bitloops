@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **Configure can install daemon config without starting the daemon**: `bitloops configure --file <path> --no-start` and `bitloops configure --default-config --no-start` now validate and install daemon configuration without explicitly starting or restarting the daemon.
+
 ### Fixed
 
 - **Dashboard config saves now apply safe daemon changes without a manual restart**: daemon `config.toml` saves now validate, atomically write, and immediately hot-reload reloadable fields such as inference profiles and capability bindings for future work. Structural changes still schedule a deduplicated delayed daemon restart, and the daemon watches the config directory so manual TOML edits go through the same reload-or-restart decision path.

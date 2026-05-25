@@ -24,6 +24,7 @@ Bitloops stores daemon configuration at:
 - `bitloops configure --web` creates the default file and local stores when needed, starts or reuses the daemon, and opens the dashboard configuration page.
 - `bitloops configure --file <path>` validates a complete daemon `config.toml`, installs it at the default daemon config path, ensures local stores exist, then restarts or starts the daemon.
 - `bitloops configure --default-config` installs the generated default daemon config directly and starts or reuses the daemon.
+- Add `--no-start` to `bitloops configure --file <path>` or `bitloops configure --default-config` when you want to install the daemon config without starting or restarting the daemon. `--no-start` is not valid with `--web`.
 - Installers support a default-config flag for scripted setup. On macOS, Linux, and WSL pass `--default-config` to `install.sh`; on Windows PowerShell pass `-DefaultConfig`; on Windows CMD pass `--default-config` or `/default-config`. The installers write the generated default daemon TOML and run `bitloops configure --file`.
 - The manual alternative is to install without the default-config flag, run `bitloops configure --web`, then run `bitloops init` inside each repo.
 - In interactive mode, plain `bitloops start` prompts to create the default file when it is missing.

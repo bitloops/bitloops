@@ -203,6 +203,12 @@ fn configure_action(
     if args.file.is_some() {
         flags.push("file");
     }
+    if args.default_config {
+        flags.push("default_config");
+    }
+    if args.no_start {
+        flags.push("no_start");
+    }
     insert_flags(&mut props, flags);
     new_action("bitloops configure", props)
 }
