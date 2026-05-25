@@ -26,9 +26,9 @@ sequenceDiagram
     Strategy->>Runtime: persist checkpoint metadata
     Lifecycle->>Repo: append interaction events
 
-    Note over Agent,Repo: Terminal turn-end hooks and selected tail hooks use the durable handoff; state-establishing hooks stay synchronous.
+    Note over Agent,Repo: Terminal turn-end hooks, selected tail hooks, and selected observation hooks use the durable handoff; state-establishing hooks stay synchronous.
 
-    Agent->>Hooks: stop / session-end / compaction-style tail hook
+    Agent->>Hooks: stop / session-end / compaction-style tail hook / observation hook
     Hooks->>Runtime: enqueue tiny raw lifecycle spool job
     alt SQLite enqueue accepted within bounded timeout
         Runtime-->>Hooks: job accepted
@@ -63,12 +63,12 @@ sequenceDiagram
 
 - Capture is about provenance and checkpoint formation.
 - The strategy decides how session turns map to temporary or committed checkpoints.
-- Supported terminal turn-end hooks and selected SessionEnd/Compaction hooks record only a tiny raw payload as a lifecycle spool job in repo runtime SQLite, then return quickly. Terminal turn-end hooks currently cover Claude Code `stop`, Codex `stop`, Gemini `after-agent`, Cursor `stop`, Copilot `agent-stop`, and OpenCode `turn-end`; selected tail hooks cover Claude Code `session-end`, Gemini `session-end` / `pre-compress`, Cursor `session-end` / `pre-compact`, Copilot `session-end`, and OpenCode `session-end` / `compaction`.
+- Supported terminal turn-end hooks, selected SessionEnd/Compaction hooks, and selected observation hooks record only a tiny raw payload as a lifecycle spool job in repo runtime SQLite, then return quickly. Terminal turn-end hooks currently cover Claude Code `stop`, Codex `stop`, Gemini `after-agent`, Cursor `stop`, Copilot `agent-stop`, and OpenCode `turn-end`; selected tail hooks cover Claude Code `session-end`, Gemini `session-end` / `pre-compress`, Cursor `session-end` / `pre-compact`, Copilot `session-end`, and OpenCode `session-end` / `compaction`; selected observation hooks cover Claude Code `pre-tool-use` / `post-tool-use`.
 - Lifecycle hook enqueue is SQLite-only. If runtime SQLite cannot accept the tiny enqueue within the bounded timeout, the hook fails quickly and logs or surfaces the enqueue error.
 - Spooled hook-side code must not read transcripts, update interaction projections, flush canonical interaction storage, or create checkpoint steps.
 - The daemon claims lifecycle spool jobs from runtime SQLite in strict FIFO order and replays raw payloads through the existing lifecycle adapters using explicit repo-root context.
 - Agent-specific parsing stays in each agent adapter layer.
-- State-establishing session-start, prompt, tool, subagent, and Git hooks remain synchronous.
+- State-establishing session-start, prompt, checkpoint-producing task/subagent/todo, Codex tool, pass-through tool/model, and Git hooks remain synchronous.
 - Git lifecycle callbacks can queue repo-local DevQL follow-up work, but that does not make sync part of the capture flow.
 
 ## Glossary

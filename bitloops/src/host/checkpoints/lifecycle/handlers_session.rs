@@ -93,7 +93,7 @@ pub fn handle_lifecycle_session_start_for_repo(
     }
     state.last_interaction_time = Some(now.clone());
     state.worktree_path = repo_root.to_string_lossy().into_owned();
-    state.worktree_id = crate::utils::paths::get_worktree_id(&repo_root)?;
+    state.worktree_id = crate::utils::paths::get_worktree_id(repo_root)?;
     if state.agent_type.trim().is_empty() {
         state.agent_type = canonical_request.agent.agent_key.clone();
     }
@@ -106,7 +106,7 @@ pub fn handle_lifecycle_session_start_for_repo(
 
     backend.save_session(&state)?;
 
-    if let Some(spool) = resolve_interaction_spool(&repo_root) {
+    if let Some(spool) = resolve_interaction_spool(repo_root) {
         let model = resolve_interaction_model(&event.model, &state.transcript_path);
         let session = InteractionSession {
             session_id: session_id.clone(),
@@ -147,7 +147,7 @@ pub fn handle_lifecycle_session_start_for_repo(
             eprintln!("[bitloops] Warning: failed to spool session_start event: {err}");
         }
     }
-    flush_interaction_spool_best_effort(&repo_root);
+    flush_interaction_spool_best_effort(repo_root);
 
     Ok(())
 }
@@ -179,7 +179,7 @@ pub fn handle_lifecycle_turn_start_for_repo(
         return Ok(());
     }
 
-    let _ = ensure_hook_setup(&repo_root, agent.agent_name());
+    let _ = ensure_hook_setup(repo_root, agent.agent_name());
 
     let transcript_offset = agent
         .as_transcript_analyzer()
@@ -198,13 +198,13 @@ pub fn handle_lifecycle_turn_start_for_repo(
             .session_ref
             .clone()
             .unwrap_or_else(|| event.session_ref.clone()),
-        untracked_files: collect_untracked_files_for_lifecycle(&repo_root),
+        untracked_files: collect_untracked_files_for_lifecycle(repo_root),
         transcript_offset: transcript_offset as i64,
         ..crate::host::checkpoints::session::state::PrePromptState::default()
     };
     backend.save_pre_prompt(&pre_prompt)?;
 
-    let strategy = super::resolve_configured_strategy(&repo_root)?;
+    let strategy = super::resolve_configured_strategy(repo_root)?;
     if let Err(err) = strategy.initialize_session(
         &session_id,
         agent.agent_name(),
@@ -260,7 +260,7 @@ pub fn handle_lifecycle_turn_start_for_repo(
     let prompt_text =
         truncate_prompt_for_storage(canonical_request.prompt.as_deref().unwrap_or(&event.prompt));
     let turn_number = state.pending.step_count + 1;
-    if let Some(spool) = resolve_interaction_spool(&repo_root) {
+    if let Some(spool) = resolve_interaction_spool(repo_root) {
         let model = resolve_interaction_model(&event.model, &state.transcript_path);
         let session = InteractionSession {
             session_id: session_id.clone(),
@@ -315,7 +315,7 @@ pub fn handle_lifecycle_turn_start_for_repo(
             eprintln!("[bitloops] Warning: failed to spool turn_start event: {err}");
         }
     }
-    flush_interaction_spool_best_effort(&repo_root);
+    flush_interaction_spool_best_effort(repo_root);
 
     Ok(())
 }

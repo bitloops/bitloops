@@ -94,7 +94,7 @@ pub fn handle_lifecycle_compaction_for_repo(
                 );
             }
             let model = resolve_interaction_model(&event.model, &state.transcript_path);
-            if let Some(spool) = resolve_interaction_spool(&repo_root)
+            if let Some(spool) = resolve_interaction_spool(repo_root)
                 && let Err(err) = spool.record_event(&InteractionEvent {
                     event_id: generate_interaction_event_id(),
                     session_id: session_id.clone(),
@@ -110,7 +110,7 @@ pub fn handle_lifecycle_compaction_for_repo(
             {
                 eprintln!("[bitloops] Warning: failed to spool compaction event: {err}");
             }
-            flush_interaction_spool_best_effort(&repo_root);
+            flush_interaction_spool_best_effort(repo_root);
             eprintln!("Context compaction: transcript offset reset");
             return Ok(());
         }
@@ -121,7 +121,7 @@ pub fn handle_lifecycle_compaction_for_repo(
     }
 
     // ── interaction event persistence ────────────────────────────────────────
-    if let Some(spool) = resolve_interaction_spool(&repo_root)
+    if let Some(spool) = resolve_interaction_spool(repo_root)
         && let Err(err) = spool.record_event(&InteractionEvent {
             event_id: generate_interaction_event_id(),
             session_id: session_id.clone(),
@@ -137,7 +137,7 @@ pub fn handle_lifecycle_compaction_for_repo(
     {
         eprintln!("[bitloops] Warning: failed to spool compaction event: {err}");
     }
-    flush_interaction_spool_best_effort(&repo_root);
+    flush_interaction_spool_best_effort(repo_root);
 
     eprintln!("Context compaction: transcript offset reset");
     Ok(())
@@ -206,7 +206,7 @@ pub fn handle_lifecycle_session_end_for_repo(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(event.session_ref.as_str());
     let model = resolve_interaction_model(&event.model, transcript_path);
-    if let Some(spool) = resolve_interaction_spool(&repo_root) {
+    if let Some(spool) = resolve_interaction_spool(repo_root) {
         let session = maybe_state
             .map(|state| InteractionSession {
                 session_id: session_id.clone(),
@@ -252,7 +252,7 @@ pub fn handle_lifecycle_session_end_for_repo(
             eprintln!("[bitloops] Warning: failed to spool session_end event: {err}");
         }
     }
-    flush_interaction_spool_best_effort(&repo_root);
+    flush_interaction_spool_best_effort(repo_root);
     Ok(())
 }
 

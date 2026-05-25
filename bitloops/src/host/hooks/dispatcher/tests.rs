@@ -322,6 +322,112 @@ fn session_end_and_compaction_hooks_use_lifecycle_spool() {
 }
 
 #[test]
+fn observation_hooks_use_lifecycle_spool() {
+    let cases = [
+        (
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_PRE_TOOL_USE,
+        ),
+        (
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_POST_TOOL_USE,
+        ),
+    ];
+
+    for (agent, hook) in cases {
+        assert!(
+            should_spool_lifecycle_hook(agent, hook),
+            "expected lifecycle spooling for observation hook agent={agent} hook={hook}"
+        );
+    }
+}
+
+#[test]
+fn checkpointing_and_pass_through_hooks_remain_synchronous() {
+    let cases = [
+        (
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_PRE_TASK,
+        ),
+        (
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_POST_TASK,
+        ),
+        (
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_POST_TODO,
+        ),
+        (
+            AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_PRE_TOOL_USE,
+        ),
+        (
+            AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_POST_TOOL_USE,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SUBAGENT_START,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SUBAGENT_STOP,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::adapters::agents::cursor::lifecycle::HOOK_NAME_AFTER_SHELL_EXECUTION,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_SUBAGENT_STOP,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_PRE_TOOL_USE,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_POST_TOOL_USE,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_ERROR_OCCURRED,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_BEFORE_TOOL,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_TOOL,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_BEFORE_MODEL,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_MODEL,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_BEFORE_TOOL_SELECTION,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_NOTIFICATION,
+        ),
+    ];
+
+    for (agent, hook) in cases {
+        assert!(
+            !should_spool_lifecycle_hook(agent, hook),
+            "unexpected lifecycle spooling for checkpointing/pass-through agent={agent} hook={hook}"
+        );
+    }
+}
+
+#[test]
 fn state_establishing_hooks_remain_synchronous() {
     let cases = [
         (
@@ -443,6 +549,38 @@ fn pilot_non_turn_end_hook_enqueue_omits_workspace_snapshot() -> Result<()> {
         AGENT_NAME_GEMINI,
         crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_PRE_COMPRESS,
         r#"{"session_id":"session-1","transcript_path":"/tmp/session.jsonl"}"#,
+    )?;
+
+    let conn = rusqlite::Connection::open(
+        crate::config::resolve_bound_repo_runtime_db_path_for_repo(repo.path())?,
+    )?;
+    let (lifecycle_jobs, snapshots): (i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COUNT(workspace_snapshot) FROM agent_lifecycle_spool_jobs",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+
+    assert_eq!(lifecycle_jobs, 1);
+    assert_eq!(snapshots, 0);
+    Ok(())
+}
+
+#[test]
+fn observation_hook_enqueue_omits_workspace_snapshot() -> Result<()> {
+    let repo = tempfile::tempdir()?;
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops@example.com",
+    );
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+
+    enqueue_lifecycle_hook_from_hook(
+        repo.path(),
+        AGENT_NAME_CLAUDE_CODE,
+        crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_PRE_TOOL_USE,
+        r#"{"session_id":"session-1","transcript_path":"/tmp/session.jsonl","tool_use_id":"toolu_1","tool_name":"Bash","tool_input":{"command":"cargo check"}}"#,
     )?;
 
     let conn = rusqlite::Connection::open(

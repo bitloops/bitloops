@@ -540,7 +540,9 @@ fn should_spool_lifecycle_hook(agent_name: &str, hook_name: &str) -> bool {
             | (
                 AGENT_NAME_CLAUDE_CODE,
                 CLAUDE_HOOK_STOP
-                    | crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_SESSION_END,
+                    | crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_SESSION_END
+                    | crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_PRE_TOOL_USE
+                    | crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_POST_TOOL_USE,
             )
             | (
                 AGENT_NAME_GEMINI,

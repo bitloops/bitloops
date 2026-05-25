@@ -386,6 +386,74 @@ fn daemon_lifecycle_spool_processes_session_end_and_compaction_pilot_jobs() -> a
 }
 
 #[test]
+fn daemon_lifecycle_spool_processes_observation_hook_jobs() -> anyhow::Result<()> {
+    let harness = LifecycleSpoolTestRepo::new()?;
+    let transcript_path = harness.write_transcript("claude-observation-session");
+
+    let cases = [
+        (
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_PRE_TOOL_USE,
+            serde_json::json!({
+                "session_id": "claude-observation-session",
+                "transcript_path": transcript_path.to_string_lossy(),
+                "tool_use_id": "toolu_observe_1",
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "cargo check"
+                },
+                "model": "claude-test",
+            }),
+        ),
+        (
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_POST_TOOL_USE,
+            serde_json::json!({
+                "session_id": "claude-observation-session",
+                "transcript_path": transcript_path.to_string_lossy(),
+                "tool_use_id": "toolu_observe_1",
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "cargo check"
+                },
+                "tool_response": {
+                    "content": "finished"
+                },
+                "model": "claude-test",
+            }),
+        ),
+    ];
+
+    for (index, (hook_name, raw_stdin)) in cases.iter().enumerate() {
+        harness.enqueue_lifecycle_job(
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+            hook_name,
+            raw_stdin.to_string(),
+            None,
+            1_778_800_000 + u64::try_from(index).unwrap_or_default(),
+        )?;
+    }
+
+    let mut processed = 0;
+    loop {
+        let processed_once = harness.process_once()?;
+        if processed_once == 0 {
+            break;
+        }
+        processed += processed_once;
+    }
+
+    assert_eq!(processed, cases.len() as u64);
+    let remaining =
+        crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(&harness.sqlite)
+            .expect("list lifecycle jobs");
+    assert!(
+        remaining.is_empty(),
+        "processed observation jobs should be deleted"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn daemon_lifecycle_spool_processes_one_generic_job_and_deletes_it() -> anyhow::Result<()> {
     let harness = LifecycleSpoolTestRepo::new()?;
     harness.enqueue_codex_lifecycle_job(

@@ -51,13 +51,22 @@ No daemon RPC and no file-inbox fallback are used.
 | OpenCode | `session-end` | `SessionEnd` | Tail recording only. |
 | Cursor | `session-end` | `SessionEnd` | Safe only with strict FIFO plus explicit failure logging/dead-letter visibility because it may finalize an open turn. |
 
+### Observation Hooks Async
+
+| Agent | Hook | Event | Reason |
+| --- | --- | --- | --- |
+| Claude Code | `pre-tool-use` | `ToolInvocationObserved` | Records ordinary tool observation events only. |
+| Claude Code | `post-tool-use` | `ToolResultObserved` | Records ordinary tool result observation events only. |
+
 ### Keep Synchronous
 
 Session-start and turn-start/prompt hooks stay synchronous in this phase because they establish state used by later hooks.
 
+Checkpoint-producing hooks also stay synchronous until their file-change boundary can be captured safely in the hook process.
+
 ### Later Ordered Candidates
 
-Subagent/task/todo and tool-observation hooks can move after the generic queue proves ordered and repo-root-safe.
+Subagent/task/todo hooks can move after hook-time file-change snapshots exist for their checkpoint boundaries. Codex tool hooks remain synchronous for now because the same hook names also carry `Task` subagent lifecycle events.
 
 ### Pass-Through Hooks
 

@@ -8,7 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- **Agent lifecycle hook spooling now uses a generic FIFO queue (`CLI-1698`)**: Terminal TurnEnd hooks plus selected SessionEnd and Compaction hooks now enqueue through one strict FIFO daemon-backed lifecycle spool. Terminal TurnEnd hooks still capture workspace snapshots in the hook process, while selected SessionEnd/Compaction hooks enqueue raw payloads without snapshot capture; state-establishing session-start, prompt, tool, subagent, and Git hooks remain synchronous.
+- **Agent lifecycle hook spooling now uses a generic FIFO queue (`CLI-1698`)**: Terminal TurnEnd hooks plus selected SessionEnd and Compaction hooks now enqueue through one strict FIFO daemon-backed lifecycle spool. Terminal TurnEnd hooks still capture workspace snapshots in the hook process, while selected SessionEnd/Compaction hooks enqueue raw payloads without snapshot capture; state-establishing session-start/prompt hooks, checkpoint-producing task/subagent/todo hooks, mixed/pass-through tool hooks, and Git hooks remain synchronous.
+- **Claude Code tool observation hooks now use the lifecycle spool (`CLI-1909`)**: Claude Code `pre-tool-use` and `post-tool-use` hooks now enqueue tiny raw lifecycle jobs for daemon replay instead of doing interaction observation work in the hook process. Checkpoint-producing task/todo hooks and mixed Codex tool hooks remain synchronous until their file-change boundaries can be captured safely.
 - **Current coverage ingest now maps LCOV reports to current DevQL artefacts**: `bitloops devql test-harness ingest-coverage` now defaults to current-workspace mode when `--commit` is omitted, maps LCOV and LLVM JSON line hits against `artefacts_current`, replaces stale coverage rows on re-ingest, and keeps historical commit-scoped ingest behind explicit `--commit` usage.
 
 ## [0.0.30] - 2026-05-21
