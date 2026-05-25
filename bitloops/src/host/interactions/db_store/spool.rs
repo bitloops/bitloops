@@ -34,6 +34,42 @@ impl SqliteInteractionSpool {
         Ok(())
     }
 
+    /// Resolve the canonical `agent_type` for a turn or event row.
+    fn canonical_agent_type_for_session(
+        &self,
+        conn: &rusqlite::Connection,
+        session_id: &str,
+        inbound_agent_type: &str,
+        row_id: &str,
+        kind: &str,
+    ) -> Result<String> {
+        let session_agent_type: Option<String> = conn
+            .query_row(
+                "SELECT agent_type FROM interaction_sessions
+                 WHERE repo_id = ?1 AND session_id = ?2",
+                rusqlite::params![self.repo_id, session_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .filter(|value| !value.trim().is_empty());
+
+        if let Some(session_value) = session_agent_type.as_deref()
+            && !inbound_agent_type.is_empty()
+            && inbound_agent_type != session_value
+        {
+            log::debug!(
+                "agent_type mismatch on interaction {kind} {row_id}: inbound={inbound:?}, \
+                 session={session:?} — using session value",
+                kind = kind,
+                row_id = row_id,
+                inbound = inbound_agent_type,
+                session = session_value,
+            );
+        }
+
+        Ok(session_agent_type.unwrap_or_else(|| inbound_agent_type.to_string()))
+    }
+
     fn upsert_local_session(
         &self,
         conn: &rusqlite::Connection,
@@ -145,32 +181,13 @@ impl SqliteInteractionSpool {
         super::ensure_repo_id(&self.repo_id, &turn.repo_id, "interaction turn")?;
 
         // Invariant: turn.agent_type must equal its parent session's agent_type.
-        let session_agent_type: Option<String> = conn
-            .query_row(
-                "SELECT agent_type FROM interaction_sessions
-                 WHERE repo_id = ?1 AND session_id = ?2",
-                rusqlite::params![self.repo_id, turn.session_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .filter(|value| !value.trim().is_empty());
-
-        let canonical_agent_type = session_agent_type
-            .clone()
-            .unwrap_or_else(|| turn.agent_type.clone());
-
-        if let Some(session_value) = session_agent_type.as_deref()
-            && !turn.agent_type.is_empty()
-            && turn.agent_type != session_value
-        {
-            log::warn!(
-                "agent_type mismatch on interaction turn {turn_id}: inbound={inbound:?}, \
-                 session={session:?} — using session value",
-                turn_id = turn.turn_id,
-                inbound = turn.agent_type,
-                session = session_value,
-            );
-        }
+        let canonical_agent_type = self.canonical_agent_type_for_session(
+            conn,
+            &turn.session_id,
+            &turn.agent_type,
+            &turn.turn_id,
+            "turn",
+        )?;
 
         let usage = turn.token_usage.clone().unwrap_or_default();
         let has_token_usage = i64::from(turn.token_usage.is_some());
@@ -336,32 +353,13 @@ impl SqliteInteractionSpool {
         super::ensure_repo_id(&self.repo_id, &event.repo_id, "interaction event")?;
 
         // Invariant: event.agent_type must equal its parent session's agent_type.
-        let session_agent_type: Option<String> = conn
-            .query_row(
-                "SELECT agent_type FROM interaction_sessions
-                 WHERE repo_id = ?1 AND session_id = ?2",
-                rusqlite::params![self.repo_id, event.session_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .filter(|value| !value.trim().is_empty());
-
-        let canonical_agent_type = session_agent_type
-            .clone()
-            .unwrap_or_else(|| event.agent_type.clone());
-
-        if let Some(session_value) = session_agent_type.as_deref()
-            && !event.agent_type.is_empty()
-            && event.agent_type != session_value
-        {
-            log::warn!(
-                "agent_type mismatch on interaction event {event_id}: inbound={inbound:?}, \
-                 session={session:?} — using session value",
-                event_id = event.event_id,
-                inbound = event.agent_type,
-                session = session_value,
-            );
-        }
+        let canonical_agent_type = self.canonical_agent_type_for_session(
+            conn,
+            &event.session_id,
+            &event.agent_type,
+            &event.event_id,
+            "event",
+        )?;
 
         let payload = serde_json::to_string(&event.payload).context("serialising event payload")?;
         conn.execute(
