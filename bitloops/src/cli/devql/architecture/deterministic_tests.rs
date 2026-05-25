@@ -77,7 +77,8 @@ fn seeded_taxonomy(role_key: &str) -> SeededArchitectureTaxonomy {
             negative_conditions: vec![],
             score: RoleRuleScore {
                 base_confidence: Some(0.9),
-                weight: Some(1.0),
+                priority_hint: Some(100),
+                min_positive_ratio: Some(1.0),
             },
             evidence: json!(["path prefix"]),
             metadata: json!({"source": "test"}),
@@ -279,6 +280,17 @@ fn roles_classify_formats_human_metrics_without_json() -> Result<()> {
             assignments_marked_stale: 0,
             assignment_history_rows: 6,
             adjudication_candidates: 1,
+            target_count: 10,
+            deterministic_active_targets: 6,
+            deterministic_needs_review_targets: 2,
+            deterministic_conflict_targets: 1,
+            deterministic_unassigned_targets: 2,
+            deterministic_coverage_ratio: 0.6,
+            unknown_adjudication_candidates: 1,
+            high_impact_adjudication_candidates: 0,
+            low_confidence_adjudication_candidates: 1,
+            conflict_adjudication_candidates: 1,
+            repeated_adjudication_suppressed: 3,
             ..ArchitectureRoleReconcileMetrics::default()
         },
         architecture_embedding_selected: 2,
@@ -309,6 +321,12 @@ fn roles_classify_formats_human_metrics_without_json() -> Result<()> {
     assert!(signals_index < assignments_index);
     assert!(assignments_index < roles_index);
     assert!(rendered.contains("assignments: written=6"));
+    assert!(rendered.contains(
+        "coverage: targets=10 active=6 review=2 conflict=1 unknown=2 deterministic_ratio=0.600"
+    ));
+    assert!(rendered.contains(
+        "adjudication reasons: unknown=1 high_impact=0 low_confidence=1 conflict=1 repeated_suppressed=3"
+    ));
     assert!(rendered.contains("architecture embeddings: selected=2 enqueued=1 deduped=1"));
     assert!(rendered.contains("warning: classification warning"));
     Ok(())
@@ -664,6 +682,7 @@ async fn seeded_rule_candidate_persists_loads_compiles_and_evaluates_over_facts(
     taxonomy.rule_candidates[0].positive_conditions = vec![RoleRuleCondition {
         kind: "path_contains".to_string(),
         value: json!("commands"),
+        ..Default::default()
     }];
 
     persist_seeded_taxonomy(&relational, "repo-1", "local_agent", taxonomy).await?;
@@ -1015,11 +1034,13 @@ async fn seed_activation_enables_full_classification() -> Result<()> {
     };
     taxonomy.rule_candidates[0].score = RoleRuleScore {
         base_confidence: Some(0.95),
-        weight: Some(1.0),
+        priority_hint: Some(100),
+        min_positive_ratio: Some(1.0),
     };
     taxonomy.rule_candidates[0].positive_conditions = vec![RoleRuleCondition {
         kind: "path_contains".to_string(),
         value: json!("commands"),
+        ..Default::default()
     }];
 
     persist_seeded_taxonomy(&relational, "repo-1", "local_agent", taxonomy).await?;

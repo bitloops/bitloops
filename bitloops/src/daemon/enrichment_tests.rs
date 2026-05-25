@@ -3956,6 +3956,10 @@ fn insert_architecture_role_adjudication_workplane_job(
     let request = crate::capability_packs::architecture_graph::roles::RoleAdjudicationRequest {
         repo_id: repo_id.to_string(),
         generation,
+        stable_request_key: format!("file:src/blocked-{generation}.rs"),
+        facts_hash: "facts".to_string(),
+        rules_hash: "rules".to_string(),
+        cluster_key: None,
         target_kind: Some("file".to_string()),
         artefact_id: None,
         symbol_id: None,

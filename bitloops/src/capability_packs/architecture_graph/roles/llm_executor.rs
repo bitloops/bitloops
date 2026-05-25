@@ -104,11 +104,16 @@ fn adjudication_response_schema() -> Value {
                 "items": {
                     "type": "object",
                     "properties": {
+                        "target_role_id": { "type": "string", "minLength": 1 },
                         "title": { "type": "string", "minLength": 1 },
                         "summary": { "type": "string", "minLength": 1 },
-                        "rationale": { "type": ["string", "null"] }
+                        "rule_candidate": {
+                            "type": "object",
+                            "additionalProperties": true
+                        },
+                        "source_cluster_key": { "type": ["string", "null"] }
                     },
-                    "required": ["title", "summary", "rationale"],
+                    "required": ["target_role_id", "title", "summary", "rule_candidate", "source_cluster_key"],
                     "additionalProperties": false
                 }
             }

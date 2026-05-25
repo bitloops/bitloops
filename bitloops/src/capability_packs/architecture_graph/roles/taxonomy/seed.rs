@@ -6,7 +6,9 @@ use serde_json::{Value, json};
 
 use crate::capability_packs::architecture_graph::roles::storage::normalize_role_key;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+use super::{RoleFactCondition, RoleFactConditionOp, TargetKind};
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeededArchitectureTaxonomy {
     pub roles: Vec<SeededArchitectureRole>,
@@ -14,7 +16,7 @@ pub struct SeededArchitectureTaxonomy {
     pub rule_candidates: Vec<SeededArchitectureRuleCandidate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeededArchitectureRoleDiscovery {
     pub roles: Vec<SeededArchitectureRole>,
@@ -62,9 +64,11 @@ pub struct SeededArchitectureRuleCandidate {
     pub metadata: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoleRuleCandidateSelector {
+    #[serde(default)]
+    pub target_kinds: Vec<TargetKind>,
     #[serde(default)]
     pub path_prefixes: Vec<String>,
     #[serde(default)]
@@ -77,13 +81,23 @@ pub struct RoleRuleCandidateSelector {
     pub canonical_kinds: Vec<String>,
     #[serde(default)]
     pub symbol_fqn_contains: Vec<String>,
+    #[serde(default)]
+    pub required_facts: Vec<RoleRuleCondition>,
+    #[serde(default)]
+    pub required_fact_any_groups: Vec<Vec<RoleRuleCondition>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoleRuleCondition {
     pub kind: String,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub op: Option<RoleFactConditionOp>,
     pub value: Value,
+    #[serde(default)]
+    pub score: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -92,7 +106,9 @@ pub struct RoleRuleScore {
     #[serde(default)]
     pub base_confidence: Option<f64>,
     #[serde(default)]
-    pub weight: Option<f64>,
+    pub priority_hint: Option<i64>,
+    #[serde(default)]
+    pub min_positive_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -146,6 +162,29 @@ pub const SUPPORTED_RULE_CONDITION_KINDS: [&str; 7] = [
 
 pub fn allowed_rule_condition_kinds() -> &'static [&'static str] {
     &SUPPORTED_RULE_CONDITION_KINDS
+}
+
+pub fn supported_rule_fact_catalog() -> Value {
+    json!([
+        {"kind": "path", "key": "full", "ops": ["eq", "contains", "prefix", "suffix"]},
+        {"kind": "path", "key": "segment", "ops": ["eq"]},
+        {"kind": "path", "key": "extension", "ops": ["eq"]},
+        {"kind": "language", "key": "resolved", "ops": ["eq"]},
+        {"kind": "file", "key": "analysis_mode", "ops": ["eq"]},
+        {"kind": "file", "key": "role", "ops": ["eq"]},
+        {"kind": "artefact", "key": "canonical_kind", "ops": ["eq"]},
+        {"kind": "artefact", "key": "language_kind", "ops": ["eq", "contains"]},
+        {"kind": "artefact", "key": "has_parent_artefact", "ops": ["eq"]},
+        {"kind": "symbol", "key": "fqn", "ops": ["contains", "prefix", "suffix", "eq"]},
+        {"kind": "symbol", "key": "name", "ops": ["eq", "contains", "prefix", "suffix"]},
+        {"kind": "symbol", "key": "name_suffix", "ops": ["eq"]},
+        {"kind": "symbol", "key": "has_signature", "ops": ["eq"]},
+        {"kind": "signature", "key": "contains", "ops": ["eq"]},
+        {"kind": "dependency", "key": "incoming_kind", "ops": ["eq"]},
+        {"kind": "dependency", "key": "outgoing_kind", "ops": ["eq"]},
+        {"kind": "dependency", "key": "incoming_count", "ops": ["gte", "lte", "eq"]},
+        {"kind": "dependency", "key": "outgoing_count", "ops": ["gte", "lte", "eq"]}
+    ])
 }
 
 pub fn validate_seeded_taxonomy(taxonomy: &SeededArchitectureTaxonomy) -> Result<()> {
@@ -350,24 +389,30 @@ pub fn role_rule_candidate_examples() -> Value {
         {
             "target_role_key": "cli_command_surface",
             "candidate_selector": {
+                "target_kinds": ["artefact"],
                 "path_prefixes": ["src/cli"],
                 "path_suffixes": [".rs"],
                 "path_contains": ["commands"],
                 "languages": ["rust"],
                 "canonical_kinds": ["function"],
-                "symbol_fqn_contains": []
+                "symbol_fqn_contains": [],
+                "required_facts": [
+                    { "kind": "language", "key": "resolved", "op": "eq", "value": "rust", "score": 1.0 }
+                ],
+                "required_fact_any_groups": []
             },
             "positive_conditions": [
-                { "kind": "path_prefix", "value": "src/cli" },
-                { "kind": "path_contains", "value": "commands" },
-                { "kind": "language_is", "value": "rust" }
+                { "kind": "path", "key": "full", "op": "prefix", "value": "src/cli", "score": 0.35 },
+                { "kind": "path", "key": "full", "op": "contains", "value": "commands", "score": 0.35 },
+                { "kind": "language", "key": "resolved", "op": "eq", "value": "rust", "score": 0.30 }
             ],
             "negative_conditions": [
-                { "kind": "path_suffix", "value": "_test.rs" }
+                { "kind": "path", "key": "full", "op": "suffix", "value": "_test.rs", "score": 1.0 }
             ],
             "score": {
                 "base_confidence": 0.82,
-                "weight": 1.0
+                "priority_hint": 100,
+                "min_positive_ratio": 1.0
             },
             "evidence": {
                 "inspected_paths": ["src/cli/commands/run.rs"],
@@ -397,21 +442,27 @@ pub fn role_rule_candidate_examples() -> Value {
         {
             "target_role_key": "domain_policy",
             "candidate_selector": {
+                "target_kinds": ["artefact"],
                 "path_prefixes": ["src/domain"],
                 "path_suffixes": [],
                 "path_contains": [],
                 "languages": ["rust"],
                 "canonical_kinds": ["struct", "enum", "function"],
-                "symbol_fqn_contains": ["policy"]
+                "symbol_fqn_contains": ["policy"],
+                "required_facts": [
+                    { "kind": "language", "key": "resolved", "op": "eq", "value": "rust", "score": 1.0 }
+                ],
+                "required_fact_any_groups": []
             },
             "positive_conditions": [
-                { "kind": "canonical_kind_is", "value": "function" },
-                { "kind": "symbol_fqn_contains", "value": "policy" }
+                { "kind": "artefact", "key": "canonical_kind", "op": "eq", "value": "function", "score": 0.50 },
+                { "kind": "symbol", "key": "fqn", "op": "contains", "value": "policy", "score": 0.50 }
             ],
             "negative_conditions": [],
             "score": {
                 "base_confidence": 0.74,
-                "weight": 1.0
+                "priority_hint": 100,
+                "min_positive_ratio": 1.0
             },
             "evidence": {
                 "inspected_paths": ["src/domain/policy.rs"],
@@ -524,13 +575,13 @@ fn role_condition_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["kind", "value"],
+        "required": ["kind", "key", "op", "value", "score"],
         "properties": {
-            "kind": {
-                "type": "string",
-                "enum": SUPPORTED_RULE_CONDITION_KINDS
-            },
-            "value": { "type": "string", "minLength": 1 }
+            "kind": { "type": "string", "minLength": 1 },
+            "key": { "type": "string", "minLength": 1 },
+            "op": { "type": "string", "enum": ["eq", "contains", "prefix", "suffix", "gte", "lte"] },
+            "value": { "type": "string", "minLength": 1 },
+            "score": { "type": "number", "minimum": 0, "maximum": 1 }
         }
     })
 }
@@ -580,20 +631,38 @@ fn seeded_rule_candidate_schema() -> Value {
                 "type": "object",
                 "additionalProperties": false,
                 "required": [
+                    "target_kinds",
                     "path_prefixes",
                     "path_suffixes",
                     "path_contains",
                     "languages",
                     "canonical_kinds",
-                    "symbol_fqn_contains"
+                    "symbol_fqn_contains",
+                    "required_facts",
+                    "required_fact_any_groups"
                 ],
                 "properties": {
+                    "target_kinds": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": ["file", "artefact", "symbol"] }
+                    },
                     "path_prefixes": { "type": "array", "items": { "type": "string" } },
                     "path_suffixes": { "type": "array", "items": { "type": "string" } },
                     "path_contains": { "type": "array", "items": { "type": "string" } },
                     "languages": { "type": "array", "items": { "type": "string" } },
                     "canonical_kinds": { "type": "array", "items": { "type": "string" } },
-                    "symbol_fqn_contains": { "type": "array", "items": { "type": "string" } }
+                    "symbol_fqn_contains": { "type": "array", "items": { "type": "string" } },
+                    "required_facts": {
+                        "type": "array",
+                        "items": condition_schema.clone()
+                    },
+                    "required_fact_any_groups": {
+                        "type": "array",
+                        "items": {
+                            "type": "array",
+                            "items": condition_schema.clone()
+                        }
+                    }
                 }
             },
             "positive_conditions": {
@@ -607,10 +676,11 @@ fn seeded_rule_candidate_schema() -> Value {
             "score": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["base_confidence", "weight"],
+                "required": ["base_confidence", "priority_hint", "min_positive_ratio"],
                 "properties": {
                     "base_confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-                    "weight": { "type": ["number", "null"] }
+                    "priority_hint": { "type": ["integer", "null"] },
+                    "min_positive_ratio": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
                 }
             },
             "evidence": seeded_rule_evidence_schema(),
@@ -715,16 +785,46 @@ fn validate_rule_shape(
         &format!("{prefix}.candidate_selector.symbol_fqn_contains"),
         &selector.symbol_fqn_contains,
     )?;
+    for condition in &selector.required_facts {
+        validate_condition(
+            &format!("{prefix}.candidate_selector.required_facts"),
+            condition,
+        )?;
+    }
+    for group in &selector.required_fact_any_groups {
+        for condition in group {
+            validate_condition(
+                &format!("{prefix}.candidate_selector.required_fact_any_groups"),
+                condition,
+            )?;
+        }
+    }
     for condition in positive_conditions {
         validate_condition(&format!("{prefix}.positive_conditions"), condition)?;
     }
     for condition in negative_conditions {
         validate_condition(&format!("{prefix}.negative_conditions"), condition)?;
     }
-    if let Some(base_confidence) = score.base_confidence
-        && !(0.0..=1.0).contains(&base_confidence)
+    reject_signature_only_positive_conditions(
+        &format!("{prefix}.positive_conditions"),
+        positive_conditions,
+    )?;
+    validate_optional_unit_interval(
+        &format!("{prefix}.score.base_confidence"),
+        score.base_confidence,
+    )?;
+    validate_optional_unit_interval(
+        &format!("{prefix}.score.min_positive_ratio"),
+        score.min_positive_ratio,
+    )?;
+    Ok(())
+}
+
+fn validate_optional_unit_interval(field_name: &str, value: Option<f64>) -> Result<()> {
+    if let Some(value) = value
+        && !(0.0..=1.0).contains(&value)
     {
-        bail!("{prefix}.score.base_confidence must be between 0 and 1");
+        bail!("{field_name} must be between 0 and 1");
     }
     Ok(())
 }
@@ -737,6 +837,11 @@ fn validate_string_list(field_name: &str, values: &[String]) -> Result<()> {
 }
 
 fn validate_condition(field_name: &str, condition: &RoleRuleCondition) -> Result<()> {
+    if condition.key.is_some() || condition.op.is_some() || condition.score.is_some() {
+        let fact_condition = fact_condition_from_rule_condition(field_name, condition)?;
+        return validate_supported_fact_condition(field_name, &fact_condition);
+    }
+
     let kind = condition.kind.trim();
     if kind.is_empty() {
         bail!("{field_name}.kind must not be empty");
@@ -748,4 +853,127 @@ fn validate_condition(field_name: &str, condition: &RoleRuleCondition) -> Result
         bail!("{field_name}.{kind} must use a string value");
     }
     Ok(())
+}
+
+fn reject_signature_only_positive_conditions(
+    field_name: &str,
+    conditions: &[RoleRuleCondition],
+) -> Result<()> {
+    let mut saw_fact_condition = false;
+    let mut saw_non_signature_condition = false;
+    for condition in conditions {
+        if condition.key.is_none() && condition.op.is_none() && condition.score.is_none() {
+            saw_non_signature_condition = true;
+            continue;
+        }
+        let fact_condition = fact_condition_from_rule_condition(field_name, condition)?;
+        saw_fact_condition = true;
+        if fact_condition.kind != "signature" || fact_condition.key != "contains" {
+            saw_non_signature_condition = true;
+        }
+    }
+    if saw_fact_condition && !saw_non_signature_condition {
+        bail!("{field_name} must include at least one non-signature condition");
+    }
+    Ok(())
+}
+
+fn fact_condition_from_rule_condition(
+    field_name: &str,
+    condition: &RoleRuleCondition,
+) -> Result<RoleFactCondition> {
+    let key = condition
+        .key
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("{field_name}.key must not be empty"))?;
+    let op = condition
+        .op
+        .ok_or_else(|| anyhow!("{field_name}.op must not be empty"))?;
+    let value = condition
+        .value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("{field_name}.value must not be empty"))?;
+    Ok(RoleFactCondition {
+        kind: condition.kind.trim().to_string(),
+        key: key.to_string(),
+        op,
+        value: value.to_string(),
+        score: condition
+            .score
+            .unwrap_or_else(super::default_condition_score),
+    })
+}
+
+pub fn validate_supported_fact_condition(
+    prefix: &str,
+    condition: &RoleFactCondition,
+) -> Result<()> {
+    let Some(ops) = supported_fact_ops(&condition.kind, &condition.key) else {
+        bail!(
+            "{prefix} uses unsupported fact condition {}.{}",
+            condition.kind,
+            condition.key
+        );
+    };
+    let op = fact_condition_op_name(condition.op);
+    if !ops.contains(&op) {
+        bail!(
+            "{prefix} uses unsupported op {op} for fact {}.{}",
+            condition.kind,
+            condition.key
+        );
+    }
+    if condition.value.trim().is_empty() {
+        bail!("{prefix}.value must not be empty");
+    }
+    if matches!(
+        condition.op,
+        RoleFactConditionOp::Gte | RoleFactConditionOp::Lte
+    ) {
+        condition.value.parse::<f64>().map_err(|_| {
+            anyhow!(
+                "{prefix}.value must be numeric for {}.{} {op}",
+                condition.kind,
+                condition.key
+            )
+        })?;
+    }
+    if !(0.0..=1.0).contains(&condition.score) {
+        bail!("{prefix}.score must be between 0 and 1");
+    }
+    Ok(())
+}
+
+fn supported_fact_ops(kind: &str, key: &str) -> Option<&'static [&'static str]> {
+    match (kind, key) {
+        ("path", "full") => Some(&["eq", "contains", "prefix", "suffix"]),
+        ("path", "segment" | "extension") => Some(&["eq"]),
+        ("language", "resolved") => Some(&["eq"]),
+        ("file", "analysis_mode" | "role") => Some(&["eq"]),
+        ("artefact", "canonical_kind") => Some(&["eq"]),
+        ("artefact", "language_kind") => Some(&["eq", "contains"]),
+        ("artefact", "has_parent_artefact") => Some(&["eq"]),
+        ("symbol", "fqn") => Some(&["contains", "prefix", "suffix", "eq"]),
+        ("symbol", "name") => Some(&["eq", "contains", "prefix", "suffix"]),
+        ("symbol", "name_suffix" | "has_signature") => Some(&["eq"]),
+        ("signature", "contains") => Some(&["eq"]),
+        ("dependency", "incoming_kind" | "outgoing_kind") => Some(&["eq"]),
+        ("dependency", "incoming_count" | "outgoing_count") => Some(&["gte", "lte", "eq"]),
+        _ => None,
+    }
+}
+
+fn fact_condition_op_name(op: RoleFactConditionOp) -> &'static str {
+    match op {
+        RoleFactConditionOp::Eq => "eq",
+        RoleFactConditionOp::Contains => "contains",
+        RoleFactConditionOp::Prefix => "prefix",
+        RoleFactConditionOp::Suffix => "suffix",
+        RoleFactConditionOp::Gte => "gte",
+        RoleFactConditionOp::Lte => "lte",
+    }
 }

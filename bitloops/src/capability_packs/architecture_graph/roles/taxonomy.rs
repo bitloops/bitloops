@@ -12,9 +12,9 @@ pub use seed::{
     allowed_rule_condition_kinds, architecture_roles_seed_roles_schema,
     architecture_roles_seed_rule_candidates_schema, architecture_roles_seed_schema,
     generic_role_family_examples, role_rule_candidate_examples, role_rule_condition_catalog,
-    role_rule_fact_to_condition_mapping, seeded_role_lifecycle_status,
+    role_rule_fact_to_condition_mapping, seeded_role_lifecycle_status, supported_rule_fact_catalog,
     unsupported_role_rule_signals, validate_role_split_spec, validate_rule_spec_file,
-    validate_seeded_roles, validate_seeded_taxonomy,
+    validate_seeded_roles, validate_seeded_taxonomy, validate_supported_fact_condition,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -231,6 +231,7 @@ pub struct ArchitectureRoleDetectionRule {
     pub lifecycle: RoleRuleLifecycle,
     pub priority: i64,
     pub score: f64,
+    pub min_positive_ratio: f64,
     pub candidate_selector: Value,
     pub positive_conditions: Value,
     pub negative_conditions: Value,
@@ -352,7 +353,7 @@ pub fn default_condition_score() -> f64 {
     0.10
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ArchitectureRoleReconcileMetrics {
     #[serde(default)]
     pub phase_name: Option<String>,
@@ -374,6 +375,34 @@ pub struct ArchitectureRoleReconcileMetrics {
     pub assignments_marked_stale: usize,
     pub assignment_history_rows: usize,
     pub adjudication_candidates: usize,
+    #[serde(default)]
+    pub target_count: usize,
+    #[serde(default)]
+    pub deterministic_active_targets: usize,
+    #[serde(default)]
+    pub deterministic_needs_review_targets: usize,
+    #[serde(default)]
+    pub deterministic_conflict_targets: usize,
+    #[serde(default)]
+    pub deterministic_unassigned_targets: usize,
+    #[serde(default)]
+    pub unknown_adjudication_candidates: usize,
+    #[serde(default)]
+    pub high_impact_adjudication_candidates: usize,
+    #[serde(default)]
+    pub low_confidence_adjudication_candidates: usize,
+    #[serde(default)]
+    pub conflict_adjudication_candidates: usize,
+    #[serde(default)]
+    pub repeated_adjudication_suppressed: usize,
+    #[serde(default)]
+    pub deterministic_guard_skipped: usize,
+    #[serde(default)]
+    pub deterministic_coverage_ratio: f64,
+    #[serde(default)]
+    pub needs_review_ratio: f64,
+    #[serde(default)]
+    pub unknown_ratio: f64,
     #[serde(default)]
     pub transaction_count: usize,
     #[serde(default)]
@@ -588,8 +617,22 @@ pub fn role_rule_contract_matches(
 pub fn role_rule_candidate_selector_contract(
     selector: &RoleRuleCandidateSelector,
 ) -> RoleCandidateSelector {
-    let mut required_facts = Vec::new();
-    let mut required_fact_any_groups = Vec::new();
+    let mut required_facts = selector
+        .required_facts
+        .iter()
+        .filter_map(|condition| role_rule_condition_contract(condition).ok())
+        .collect::<Vec<_>>();
+    let mut required_fact_any_groups = selector
+        .required_fact_any_groups
+        .iter()
+        .map(|group| {
+            group
+                .iter()
+                .filter_map(|condition| role_rule_condition_contract(condition).ok())
+                .collect::<Vec<_>>()
+        })
+        .filter(|group| !group.is_empty())
+        .collect::<Vec<_>>();
     push_required_fact_group(
         &mut required_facts,
         &mut required_fact_any_groups,
@@ -652,7 +695,7 @@ pub fn role_rule_candidate_selector_contract(
     );
 
     RoleCandidateSelector {
-        target_kinds: Vec::new(),
+        target_kinds: selector.target_kinds.clone(),
         path_prefixes: selector.path_prefixes.clone(),
         path_suffixes: selector.path_suffixes.clone(),
         required_facts,
@@ -692,6 +735,15 @@ pub fn role_rule_condition_contract(condition: &RoleRuleCondition) -> Result<Rol
             )
         })?
         .to_string();
+    if let (Some(key), Some(op)) = (condition.key.as_ref(), condition.op) {
+        return Ok(RoleFactCondition {
+            kind: condition.kind.trim().to_string(),
+            key: key.trim().to_string(),
+            op,
+            value,
+            score: condition.score.unwrap_or_else(default_condition_score),
+        });
+    }
     let (kind, key, op) = match condition.kind.trim() {
         "path_contains" => ("path", "full", RoleFactConditionOp::Contains),
         "path_equals" => ("path", "full", RoleFactConditionOp::Eq),

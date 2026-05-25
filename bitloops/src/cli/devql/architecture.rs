@@ -655,6 +655,15 @@ pub(super) fn format_roles_classify_output(
             output.roles.skipped_unchanged_paths,
         ),
         format!(
+            "coverage: targets={} active={} review={} conflict={} unknown={} deterministic_ratio={:.3}",
+            output.roles.target_count,
+            output.roles.deterministic_active_targets,
+            output.roles.deterministic_needs_review_targets,
+            output.roles.deterministic_conflict_targets,
+            output.roles.deterministic_unassigned_targets,
+            output.roles.deterministic_coverage_ratio,
+        ),
+        format!(
             "architecture embeddings: selected={} enqueued={} deduped={}",
             output.architecture_embedding_selected,
             output.architecture_embedding_enqueued,
@@ -666,6 +675,14 @@ pub(super) fn format_roles_classify_output(
             output.role_adjudication_selected,
             output.role_adjudication_enqueued,
             output.role_adjudication_deduped,
+        ),
+        format!(
+            "adjudication reasons: unknown={} high_impact={} low_confidence={} conflict={} repeated_suppressed={}",
+            output.roles.unknown_adjudication_candidates,
+            output.roles.high_impact_adjudication_candidates,
+            output.roles.low_confidence_adjudication_candidates,
+            output.roles.conflict_adjudication_candidates,
+            output.roles.repeated_adjudication_suppressed,
         ),
     ];
     lines.extend(

@@ -11,11 +11,10 @@ use crate::host::inference::StructuredGenerationService;
 use super::taxonomy::architecture_roles_seed_schema;
 use super::taxonomy::{
     SeededArchitectureRole, SeededArchitectureRoleDiscovery, SeededArchitectureRuleCandidate,
-    SeededArchitectureRuleCandidates, SeededArchitectureTaxonomy, allowed_rule_condition_kinds,
+    SeededArchitectureRuleCandidates, SeededArchitectureTaxonomy,
     architecture_roles_seed_roles_schema, architecture_roles_seed_rule_candidates_schema,
-    generic_role_family_examples, role_rule_candidate_examples, role_rule_condition_catalog,
-    role_rule_fact_to_condition_mapping, unsupported_role_rule_signals, validate_seeded_roles,
-    validate_seeded_taxonomy,
+    generic_role_family_examples, role_rule_candidate_examples, supported_rule_fact_catalog,
+    validate_seeded_roles, validate_seeded_taxonomy,
 };
 
 const MAX_FILE_EVIDENCE: usize = 120;
@@ -122,7 +121,7 @@ pub(crate) async fn collect_seed_evidence(
 pub(crate) fn architecture_roles_seed_system_prompt() -> &'static str {
     "You infer repository-specific architectural role taxonomies. Return JSON only that matches the supplied schema. \
 Do not hardcode Bitloops-specific roles. Use the supplied repository evidence to propose role identities and reviewable deterministic rule candidates for this repository. \
-Rule candidates must use only condition kinds listed in rule_authoring_contract.allowed_condition_kinds."
+Rule candidates must use only facts and operators listed in rule_authoring_contract.supported_facts."
 }
 
 pub(crate) fn architecture_roles_seed_roles_system_prompt() -> &'static str {
@@ -220,9 +219,10 @@ pub(crate) fn architecture_roles_seed_user_prompt(
             "Return only durable role identities that are justified by the repository evidence.",
             "Do not include lifecycle state; newly inferred roles are activated by Bitloops after validation.",
             "Detection rules must be reviewable and safe for deterministic use.",
-            "Use only rule condition kinds from rule_authoring_contract.allowed_condition_kinds.",
-            "Do not invent additional condition kind names or aliases.",
+            "Use only fact-backed conditions from rule_authoring_contract.supported_facts.",
+            "Do not invent additional fact keys, operators, aliases, or candidate_selector fields.",
             "Use rule_authoring_contract.rule_candidate_examples as shape examples only; adapt role keys, paths, languages, kinds, and symbols to the repository evidence.",
+            "Prefer multi-signal rules over path-only rules and include target kinds whenever possible.",
             "Prefer fewer strong roles over many weak or redundant roles."
         ],
         "repository_identity": {
@@ -234,8 +234,15 @@ pub(crate) fn architecture_roles_seed_user_prompt(
             "branch_name": scope.branch_name,
         },
         "rule_authoring_contract": {
-            "allowed_condition_kinds": allowed_rule_condition_kinds(),
-            "condition_catalog": role_rule_condition_catalog(),
+            "contract_version": "fact-backed-rule-v2",
+            "supported_facts": supported_rule_fact_catalog(),
+            "target_kinds": ["file", "artefact", "symbol"],
+            "ops": ["eq", "contains", "prefix", "suffix", "gte", "lte"],
+            "scoring": {
+                "base_confidence": "Maximum confidence for this rule when positive evidence is fully satisfied.",
+                "condition_score": "Relative contribution within the rule; normalized at evaluation time.",
+                "min_positive_ratio": "Minimum normalized positive evidence required before emitting a signal."
+            },
             "rule_candidate_examples": role_rule_candidate_examples(),
         },
         "evidence": evidence,
@@ -288,10 +295,11 @@ pub(crate) fn architecture_roles_seed_rules_user_prompt(
             "Inspect source code through workspace_path before finalizing rules. Use the supplied DB evidence as an index for where to look first.",
             "Detection rules must be reviewable and safe for deterministic use.",
             "A good rule should match a reusable architectural pattern, not only one currently visible artefact.",
-            "Use only rule condition kinds from rule_authoring_contract.allowed_condition_kinds.",
-            "Do not invent additional condition kind names, aliases, operators, or candidate_selector fields.",
-            "Use rule_authoring_contract.fact_to_condition_mapping to translate evidence fields into supported conditions.",
-            "Use rule_authoring_contract.unsupported_today to avoid proposing rules based on signals the deterministic classifier cannot apply.",
+            "Use only fact-backed conditions from rule_authoring_contract.supported_facts.",
+            "Do not invent additional fact keys, operators, aliases, or candidate_selector fields.",
+            "Prefer multi-signal rules over path-only rules.",
+            "Include target kinds whenever possible.",
+            "Use dependency conditions only when dependency facts are present in evidence.",
             "Use rule_authoring_contract.rule_candidate_examples as shape examples only. Adapt paths, languages, kinds, and symbols to repository evidence and inspected source code.",
             "Populate each rule evidence object with inspected paths, positive examples, negative examples when known, DB sections used, a concise reasoning summary, confidence reason, and uncertainty.",
             "Return zero rule candidates for a role when evidence does not support a stable deterministic rule."
@@ -309,10 +317,15 @@ pub(crate) fn architecture_roles_seed_rules_user_prompt(
         "agentic_code_exploration": agentic_code_exploration_contract(),
         "db_evidence_guide": db_evidence_guide(),
         "rule_authoring_contract": {
-            "allowed_condition_kinds": allowed_rule_condition_kinds(),
-            "condition_catalog": role_rule_condition_catalog(),
-            "fact_to_condition_mapping": role_rule_fact_to_condition_mapping(),
-            "unsupported_today": unsupported_role_rule_signals(),
+            "contract_version": "fact-backed-rule-v2",
+            "supported_facts": supported_rule_fact_catalog(),
+            "target_kinds": ["file", "artefact", "symbol"],
+            "ops": ["eq", "contains", "prefix", "suffix", "gte", "lte"],
+            "scoring": {
+                "base_confidence": "Maximum confidence for this rule when positive evidence is fully satisfied.",
+                "condition_score": "Relative contribution within the rule; normalized at evaluation time.",
+                "min_positive_ratio": "Minimum normalized positive evidence required before emitting a signal."
+            },
             "rule_candidate_examples": role_rule_candidate_examples(),
         },
         "evidence": evidence,
@@ -750,8 +763,10 @@ mod tests {
 
     #[test]
     fn role_discovery_prompt_explains_fact_synthesis_and_workspace_use() {
-        let prompt =
-            architecture_roles_seed_roles_user_prompt(&test_scope(), &json!({"canonical_files": []}));
+        let prompt = architecture_roles_seed_roles_user_prompt(
+            &test_scope(),
+            &json!({"canonical_files": []}),
+        );
         let value: Value = serde_json::from_str(&prompt).expect("prompt is JSON");
 
         assert_eq!(
@@ -802,8 +817,7 @@ mod tests {
         assert!(mapping.iter().any(|entry| {
             entry.get("evidence_field").and_then(Value::as_str)
                 == Some("canonical_artefacts.canonical_kind")
-                && entry.get("condition_kind").and_then(Value::as_str)
-                    == Some("canonical_kind_is")
+                && entry.get("condition_kind").and_then(Value::as_str) == Some("canonical_kind_is")
         }));
 
         let unsupported = value
@@ -817,8 +831,10 @@ mod tests {
 
     #[test]
     fn role_discovery_prompt_requires_generic_durable_roles_with_evidence() {
-        let prompt =
-            architecture_roles_seed_roles_user_prompt(&test_scope(), &json!({"canonical_files": []}));
+        let prompt = architecture_roles_seed_roles_user_prompt(
+            &test_scope(),
+            &json!({"canonical_files": []}),
+        );
         let value: Value = serde_json::from_str(&prompt).expect("prompt is JSON");
         let rules = value.get("rules").and_then(Value::as_array).expect("rules");
         let rendered_rules = rules
@@ -933,7 +949,8 @@ mod tests {
                         "negative_conditions": [],
                         "score": {
                             "base_confidence": 0.8,
-                            "weight": 1.0
+                            "priority_hint": 100,
+                            "min_positive_ratio": 1.0
                         },
                         "evidence": {
                             "inspected_paths": ["bitloops/src/cli/commands/run.rs"],

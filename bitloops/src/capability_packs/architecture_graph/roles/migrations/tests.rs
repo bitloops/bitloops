@@ -324,7 +324,8 @@ mod deterministic_tests {
             negative_conditions: vec![],
             score: super::super::taxonomy::RoleRuleScore {
                 base_confidence: Some(0.8),
-                weight: None,
+                priority_hint: None,
+                min_positive_ratio: None,
             },
             evidence: json!([]),
             metadata: json!({}),
@@ -486,7 +487,8 @@ mod deterministic_tests {
                 negative_conditions: vec![],
                 score: super::super::taxonomy::RoleRuleScore {
                     base_confidence: Some(0.8),
-                    weight: None,
+                    priority_hint: None,
+                    min_positive_ratio: None,
                 },
                 evidence: json!([]),
                 metadata: json!({}),
@@ -523,11 +525,13 @@ mod deterministic_tests {
                 positive_conditions: vec![taxonomy::RoleRuleCondition {
                     kind: "path_contains".to_string(),
                     value: json!("commands"),
+                    ..Default::default()
                 }],
                 negative_conditions: vec![],
                 score: taxonomy::RoleRuleScore {
                     base_confidence: Some(0.8),
-                    weight: None,
+                    priority_hint: None,
+                    min_positive_ratio: None,
                 },
                 evidence: json!([]),
                 metadata: json!({}),
@@ -568,6 +572,53 @@ mod deterministic_tests {
             json!([
                 { "kind": "path", "key": "full", "op": "contains", "value": "commands", "score": 1.0 }
             ])
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rule_preview_flags_broad_path_only_rule() -> Result<()> {
+        let relational = relational().await?;
+        let role = seed_role(&relational).await?;
+        let proposal = create_rule_draft_proposal(
+            &relational,
+            &gateway(),
+            "repo-1",
+            RuleSpecFile {
+                role_ref: role.canonical_key.clone(),
+                candidate_selector: RoleRuleCandidateSelector {
+                    path_prefixes: vec!["src".to_string()],
+                    ..Default::default()
+                },
+                positive_conditions: vec![taxonomy::RoleRuleCondition {
+                    kind: "path".to_string(),
+                    key: Some("full".to_string()),
+                    op: Some(taxonomy::RoleFactConditionOp::Prefix),
+                    value: json!("src"),
+                    score: Some(1.0),
+                }],
+                negative_conditions: vec![],
+                score: taxonomy::RoleRuleScore {
+                    base_confidence: Some(0.8),
+                    priority_hint: Some(100),
+                    min_positive_ratio: Some(1.0),
+                },
+                evidence: json!([]),
+                metadata: json!({}),
+            },
+            json!({"source": "test"}),
+        )
+        .await?;
+
+        assert_eq!(
+            proposal.preview_payload["safety"]["status"],
+            json!("blocked")
+        );
+        assert!(
+            proposal.preview_payload["safety"]["blocking_reasons"]
+                .as_array()
+                .expect("blocking reasons")
+                .contains(&json!("broad_match_ratio"))
         );
         Ok(())
     }
@@ -769,11 +820,13 @@ mod deterministic_tests {
                 positive_conditions: vec![taxonomy::RoleRuleCondition {
                     kind: "path_contains".to_string(),
                     value: json!("commands"),
+                    ..Default::default()
                 }],
                 negative_conditions: vec![],
                 score: taxonomy::RoleRuleScore {
                     base_confidence: Some(0.6),
-                    weight: None,
+                    priority_hint: None,
+                    min_positive_ratio: None,
                 },
                 evidence: json!([]),
                 metadata: json!({}),

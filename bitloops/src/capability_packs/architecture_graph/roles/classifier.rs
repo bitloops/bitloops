@@ -10,6 +10,7 @@ use crate::models::CurrentCanonicalFileRecord;
 use super::adjudication_selector::{DeterministicRoleOutcomeInput, select_adjudication_reason};
 use super::contracts::{
     AdjudicationReason, RoleAdjudicationRequest, RoleCurrentAssignmentSnapshot,
+    placeholder_request_hash, role_adjudication_stable_request_key,
 };
 use super::fact_extraction::{
     ArchitectureRoleCurrentStateSource, ArchitectureRoleFactExtractionInput,
@@ -120,8 +121,8 @@ pub fn aggregate_role_assignments(
         let key = (signal.target.clone(), signal.role_id.clone());
         let entry = scores.entry(key).or_default();
         match signal.polarity {
-            RoleSignalPolarity::Positive => entry.score += signal.score,
-            RoleSignalPolarity::Negative => entry.score -= signal.score,
+            RoleSignalPolarity::Positive => entry.positive_scores.push(signal.score),
+            RoleSignalPolarity::Negative => entry.negative_scores.push(signal.score),
         }
         entry.generation_seq = entry.generation_seq.max(signal.generation_seq);
         entry.evidence.push(json!({
@@ -136,9 +137,8 @@ pub fn aggregate_role_assignments(
 
     let mut by_target: BTreeMap<RoleTarget, Vec<(String, f64, AggregatedSignals)>> =
         BTreeMap::new();
-    for ((target, role_id), mut aggregated) in scores {
-        let confidence = aggregated.score.clamp(0.0, 1.0);
-        aggregated.score = confidence;
+    for ((target, role_id), aggregated) in scores {
+        let confidence = aggregated.confidence();
         by_target
             .entry(target)
             .or_default()
@@ -217,6 +217,83 @@ fn assignment_meaningfully_changed(
         || previous.status != next.status
         || (previous.confidence - next.confidence).abs() >= 0.05
         || previous.source != next.source
+}
+
+fn expanded_reconcile_metrics(
+    target_summaries: &BTreeMap<RoleTarget, RoleTargetSummary>,
+    assignments: &[ArchitectureRoleAssignment],
+    adjudication_requests: &[RoleAdjudicationRequest],
+    repeated_adjudication_suppressed: usize,
+    deterministic_guard_skipped: usize,
+) -> ArchitectureRoleReconcileMetrics {
+    let target_count = target_summaries.len();
+    let active_targets = assignments
+        .iter()
+        .filter(|assignment| assignment.status == AssignmentStatus::Active)
+        .map(|assignment| assignment.target.clone())
+        .collect::<BTreeSet<_>>();
+    let review_targets = assignments
+        .iter()
+        .filter(|assignment| assignment.status == AssignmentStatus::NeedsReview)
+        .map(|assignment| assignment.target.clone())
+        .collect::<BTreeSet<_>>();
+    let conflict_targets = assignments
+        .iter()
+        .filter(|assignment| assignment.status == AssignmentStatus::NeedsReview)
+        .filter(|assignment| {
+            adjudication_requests.iter().any(|request| {
+                request.reason == AdjudicationReason::Conflict
+                    && request.path.as_deref() == Some(assignment.target.path.as_str())
+            })
+        })
+        .map(|assignment| assignment.target.clone())
+        .collect::<BTreeSet<_>>();
+    let assigned_paths = assignments
+        .iter()
+        .filter(|assignment| assignment.status != AssignmentStatus::Stale)
+        .map(|assignment| assignment.target.path.clone())
+        .collect::<BTreeSet<_>>();
+    let deterministic_unassigned_targets = target_summaries
+        .values()
+        .filter(|summary| !assigned_paths.contains(&summary.target.path))
+        .count();
+
+    let mut metrics = ArchitectureRoleReconcileMetrics {
+        target_count,
+        deterministic_active_targets: active_targets.len(),
+        deterministic_needs_review_targets: review_targets.len(),
+        deterministic_conflict_targets: conflict_targets.len(),
+        deterministic_unassigned_targets,
+        repeated_adjudication_suppressed,
+        deterministic_guard_skipped,
+        ..Default::default()
+    };
+    for request in adjudication_requests {
+        match request.reason {
+            AdjudicationReason::Unknown => metrics.unknown_adjudication_candidates += 1,
+            AdjudicationReason::HighImpact => {
+                metrics.high_impact_adjudication_candidates += 1;
+            }
+            AdjudicationReason::LowConfidence => {
+                metrics.low_confidence_adjudication_candidates += 1;
+            }
+            AdjudicationReason::Conflict => metrics.conflict_adjudication_candidates += 1,
+            AdjudicationReason::NovelPattern | AdjudicationReason::ManualReview => {}
+        }
+    }
+    metrics.deterministic_coverage_ratio =
+        ratio(metrics.deterministic_active_targets, target_count);
+    metrics.needs_review_ratio = ratio(metrics.deterministic_needs_review_targets, target_count);
+    metrics.unknown_ratio = ratio(metrics.deterministic_unassigned_targets, target_count);
+    metrics
+}
+
+fn ratio(numerator: usize, denominator: usize) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator as f64 / denominator as f64
+    }
 }
 
 fn authoritative_current_assignment(assignment: &ArchitectureRoleAssignment) -> bool {
@@ -373,7 +450,7 @@ pub async fn classify_architecture_roles_for_current_state(
     for request in unknown_or_high_impact_requests(
         input.repo_id,
         input.generation_seq,
-        target_summaries,
+        target_summaries.clone(),
         &assignments,
         &adjudicated_targets,
         unknown_request_paths,
@@ -401,6 +478,13 @@ pub async fn classify_architecture_roles_for_current_state(
     .await
     .context("replacing architecture role classification state for current state")?;
     let write_counts = apply_outcome.write_counts;
+    let expanded_metrics = expanded_reconcile_metrics(
+        &target_summaries,
+        &current_assignments,
+        &adjudication_requests,
+        0,
+        0,
+    );
 
     Ok(ArchitectureRoleReconcileOutcome {
         metrics: ArchitectureRoleReconcileMetrics {
@@ -428,6 +512,23 @@ pub async fn classify_architecture_roles_for_current_state(
             assignment_history_rows: write_counts.assignment_history_rows,
             adjudication_candidates: adjudication_candidates.len()
                 + unknown_or_high_impact_candidates,
+            target_count: expanded_metrics.target_count,
+            deterministic_active_targets: expanded_metrics.deterministic_active_targets,
+            deterministic_needs_review_targets: expanded_metrics
+                .deterministic_needs_review_targets,
+            deterministic_conflict_targets: expanded_metrics.deterministic_conflict_targets,
+            deterministic_unassigned_targets: expanded_metrics.deterministic_unassigned_targets,
+            unknown_adjudication_candidates: expanded_metrics.unknown_adjudication_candidates,
+            high_impact_adjudication_candidates: expanded_metrics
+                .high_impact_adjudication_candidates,
+            low_confidence_adjudication_candidates: expanded_metrics
+                .low_confidence_adjudication_candidates,
+            conflict_adjudication_candidates: expanded_metrics.conflict_adjudication_candidates,
+            repeated_adjudication_suppressed: expanded_metrics.repeated_adjudication_suppressed,
+            deterministic_guard_skipped: expanded_metrics.deterministic_guard_skipped,
+            deterministic_coverage_ratio: expanded_metrics.deterministic_coverage_ratio,
+            needs_review_ratio: expanded_metrics.needs_review_ratio,
+            unknown_ratio: expanded_metrics.unknown_ratio,
             transaction_count: apply_outcome.sqlite_phase_metrics.transaction_count,
             max_rss_kb: apply_outcome.max_rss_kb,
             max_sqlite_lock_wait_ms: apply_outcome.sqlite_phase_metrics.max_wait_ms,
@@ -520,9 +621,19 @@ fn unknown_or_high_impact_requests(
             .unwrap_or(AdjudicationReason::Unknown);
             let target = summary.target;
             let (target_kind, artefact_id, symbol_id) = request_target_fields(&target);
+            let stable_request_key = role_adjudication_stable_request_key(
+                target_kind.as_deref(),
+                artefact_id.as_deref(),
+                symbol_id.as_deref(),
+                Some(&target.path),
+            );
             RoleAdjudicationRequest {
                 repo_id: repo_id.to_string(),
                 generation: generation_seq,
+                stable_request_key,
+                facts_hash: placeholder_request_hash(),
+                rules_hash: placeholder_request_hash(),
+                cluster_key: None,
                 target_kind,
                 artefact_id,
                 symbol_id,
@@ -578,9 +689,19 @@ pub fn adjudication_requests_from_assignments(
                 .map(|assignment| assignment.role_id.clone())
                 .collect::<Vec<_>>();
             let (target_kind, artefact_id, symbol_id) = request_target_fields(&target);
+            let stable_request_key = role_adjudication_stable_request_key(
+                target_kind.as_deref(),
+                artefact_id.as_deref(),
+                symbol_id.as_deref(),
+                Some(&target.path),
+            );
             Some(RoleAdjudicationRequest {
                 repo_id: primary.repo_id.clone(),
                 generation: primary.generation_seq,
+                stable_request_key,
+                facts_hash: placeholder_request_hash(),
+                rules_hash: placeholder_request_hash(),
+                cluster_key: None,
                 target_kind,
                 artefact_id,
                 symbol_id,
@@ -634,18 +755,32 @@ fn assignment_refresh_paths(
 
 #[derive(Debug, Default)]
 struct AggregatedSignals {
-    score: f64,
+    positive_scores: Vec<f64>,
+    negative_scores: Vec<f64>,
     generation_seq: u64,
     evidence: Vec<serde_json::Value>,
 }
 
 impl AggregatedSignals {
+    fn confidence(&self) -> f64 {
+        let positive_confidence = noisy_or(&self.positive_scores);
+        let negative_confidence = noisy_or(&self.negative_scores);
+        positive_confidence * (1.0 - negative_confidence)
+    }
+
     fn evidence_json(self) -> serde_json::Value {
         let mut evidence = Vec::with_capacity(self.evidence.len() + 1);
         evidence.push(json!({ "source": "rule_signal_aggregation" }));
         evidence.extend(self.evidence);
         json!(evidence)
     }
+}
+
+fn noisy_or(scores: &[f64]) -> f64 {
+    1.0 - scores
+        .iter()
+        .map(|score| 1.0 - score.clamp(0.0, 1.0))
+        .product::<f64>()
 }
 
 #[cfg(test)]

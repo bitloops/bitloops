@@ -333,6 +333,7 @@ pub(super) async fn preview_rule_spec(
         .union(&new_matches)
         .cloned()
         .collect::<Vec<_>>();
+    let safety = rule_preview_safety(&artefacts, &new_matches, spec);
     Ok(json!({
         "operation": if existing_rule.is_some() { "edit_rule" } else { "draft_rule" },
         "affected_role_ids": [role_id],
@@ -349,10 +350,98 @@ pub(super) async fn preview_rule_spec(
         "removed_matches": removed_matches,
         "affected_assignments": current_matches.len() + added_matches.len(),
         "affected_artefacts": affected_artefact_ids.len(),
+        "safety": safety,
         "downstream_review_work": {
             "reclassification_required": !removed_matches.is_empty() || !added_matches.is_empty(),
         }
     }))
+}
+
+fn rule_preview_safety(
+    artefacts: &[MatchableArtefact],
+    new_matches: &BTreeSet<String>,
+    spec: &RuleSpecFile,
+) -> Value {
+    let total_targets = artefacts.len();
+    let matched_targets = new_matches.len();
+    let match_ratio = if total_targets == 0 {
+        0.0
+    } else {
+        matched_targets as f64 / total_targets as f64
+    };
+    let max_match_ratio_without_override = 0.20;
+    let uses_target_kinds = !spec.candidate_selector.target_kinds.is_empty();
+    let positive_condition_count = spec.positive_conditions.len();
+    let negative_condition_count = spec.negative_conditions.len();
+    let path_only = positive_condition_count > 0
+        && spec
+            .positive_conditions
+            .iter()
+            .all(rule_condition_is_path_only);
+    let narrow_path_prefix = spec
+        .candidate_selector
+        .path_prefixes
+        .iter()
+        .any(|prefix| prefix.split('/').filter(|part| !part.is_empty()).count() >= 2);
+    let matches_test_generated_or_vendor = negative_condition_count == 0
+        && artefacts.iter().any(|artefact| {
+            new_matches.contains(&artefact.artefact_id)
+                && path_has_test_generated_or_vendor_segment(&artefact.path)
+        });
+
+    let mut blocking_reasons = Vec::new();
+    let mut warnings = Vec::new();
+    if match_ratio > max_match_ratio_without_override && !narrow_path_prefix {
+        blocking_reasons.push("broad_match_ratio");
+    }
+    if !uses_target_kinds {
+        blocking_reasons.push("missing_target_kinds");
+    }
+    if path_only && matched_targets > 1 {
+        blocking_reasons.push("path_only_multiple_matches");
+    }
+    if matches_test_generated_or_vendor {
+        blocking_reasons.push("unbounded_test_generated_or_vendor_matches");
+    }
+    if path_only {
+        warnings.push("path_only_rule");
+    }
+
+    json!({
+        "status": if blocking_reasons.is_empty() { "safe" } else { "blocked" },
+        "blocking_reasons": blocking_reasons,
+        "warnings": warnings,
+        "matched_targets": matched_targets,
+        "total_targets": total_targets,
+        "match_ratio": match_ratio,
+        "max_match_ratio_without_override": max_match_ratio_without_override,
+        "path_only": path_only,
+        "uses_target_kinds": uses_target_kinds,
+        "positive_condition_count": positive_condition_count,
+        "negative_condition_count": negative_condition_count,
+        "conflicting_active_assignments": 0,
+        "conflicting_roles": [],
+        "protected_authoritative_collisions": 0
+    })
+}
+
+fn rule_condition_is_path_only(condition: &RoleRuleCondition) -> bool {
+    if let Some(key) = condition.key.as_deref() {
+        return condition.kind == "path" && matches!(key, "full" | "segment" | "extension");
+    }
+    matches!(
+        condition.kind.as_str(),
+        "path_contains" | "path_equals" | "path_prefix" | "path_suffix"
+    )
+}
+
+fn path_has_test_generated_or_vendor_segment(path: &str) -> bool {
+    path.split('/').any(|segment| {
+        matches!(
+            segment,
+            "test" | "tests" | "__tests__" | "generated" | "vendor" | "vendors"
+        )
+    })
 }
 
 pub(super) async fn preview_rule_lifecycle_change(

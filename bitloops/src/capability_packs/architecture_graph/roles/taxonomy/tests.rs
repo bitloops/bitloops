@@ -219,6 +219,54 @@ mod seeded_tests {
     }
 
     #[test]
+    fn seeded_rule_score_schema_exposes_only_used_runtime_fields() {
+        let schema = architecture_roles_seed_rule_candidates_schema();
+        let score = schema
+            .pointer("/properties/rule_candidates/items/properties/score/properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("score properties");
+
+        assert!(score.contains_key("base_confidence"));
+        assert!(score.contains_key("priority_hint"));
+        assert!(score.contains_key("min_positive_ratio"));
+        assert!(!score.contains_key("weight"));
+    }
+
+    #[test]
+    fn seed_rule_schema_exposes_fact_backed_conditions() {
+        let schema = architecture_roles_seed_rule_candidates_schema();
+        let selector = schema
+            .pointer("/properties/rule_candidates/items/properties/candidate_selector/properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("selector properties");
+
+        assert!(selector.contains_key("target_kinds"));
+        assert!(selector.contains_key("required_facts"));
+        assert!(selector.contains_key("required_fact_any_groups"));
+
+        let condition = schema
+            .pointer(
+                "/properties/rule_candidates/items/properties/positive_conditions/items/properties",
+            )
+            .and_then(serde_json::Value::as_object)
+            .expect("condition properties");
+        for key in ["kind", "key", "op", "value", "score"] {
+            assert!(condition.contains_key(key), "missing condition key {key}");
+        }
+
+        let ops = schema
+            .pointer("/properties/rule_candidates/items/properties/positive_conditions/items/properties/op/enum")
+            .and_then(serde_json::Value::as_array)
+            .expect("condition op enum")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(ops.contains("gte"));
+        assert!(ops.contains("lte"));
+    }
+
+    #[test]
     fn rule_condition_catalog_documents_all_supported_condition_kinds() {
         let allowed: std::collections::BTreeSet<_> =
             allowed_rule_condition_kinds().iter().copied().collect();
@@ -291,8 +339,7 @@ mod seeded_tests {
         let unsupported = unsupported_role_rule_signals();
         let unsupported = unsupported.as_array().expect("unsupported is an array");
         assert!(unsupported.iter().any(|entry| {
-            entry.get("signal").and_then(serde_json::Value::as_str)
-                == Some("signature_contains")
+            entry.get("signal").and_then(serde_json::Value::as_str) == Some("signature_contains")
         }));
         assert!(unsupported.iter().any(|entry| {
             entry.get("signal").and_then(serde_json::Value::as_str) == Some("file_role")
@@ -431,7 +478,8 @@ mod seeded_tests {
                 negative_conditions: vec![],
                 score: RoleRuleScore {
                     base_confidence: Some(0.8),
-                    weight: None,
+                    priority_hint: None,
+                    min_positive_ratio: None,
                 },
                 evidence: json!([]),
                 metadata: json!({}),
@@ -465,6 +513,7 @@ mod seeded_tests {
                 positive_conditions: vec![RoleRuleCondition {
                     kind: "unsupported".to_string(),
                     value: json!("x"),
+                    ..Default::default()
                 }],
                 negative_conditions: vec![],
                 score: RoleRuleScore::default(),
@@ -538,6 +587,7 @@ mod seeded_tests {
         let positive = vec![RoleRuleCondition {
             kind: "path_contains".to_string(),
             value: json!("commands"),
+            ..Default::default()
         }];
 
         assert!(role_rule_matches(&selector, &positive, &[], &artefact));
@@ -545,6 +595,7 @@ mod seeded_tests {
         let negative = vec![RoleRuleCondition {
             kind: "path_suffix".to_string(),
             value: json!(".ts"),
+            ..Default::default()
         }];
         assert!(role_rule_matches(
             &selector, &positive, &negative, &artefact
@@ -569,6 +620,7 @@ mod seeded_tests {
                 positive_conditions: vec![RoleRuleCondition {
                     kind: "path_equals".to_string(),
                     value: json!("src/cli/commands/run.rs"),
+                    ..Default::default()
                 }],
                 negative_conditions: vec![],
                 score: RoleRuleScore::default(),
@@ -627,14 +679,17 @@ mod seeded_tests {
             positive_conditions: vec![RoleRuleCondition {
                 kind: "path_contains".to_string(),
                 value: json!("commands"),
+                ..Default::default()
             }],
             negative_conditions: vec![RoleRuleCondition {
                 kind: "canonical_kind_is".to_string(),
                 value: json!("test"),
+                ..Default::default()
             }],
             score: RoleRuleScore {
                 base_confidence: Some(0.8),
-                weight: Some(1.0),
+                priority_hint: Some(100),
+                min_positive_ratio: Some(1.0),
             },
             evidence: json!([]),
             metadata: json!({}),
