@@ -2,60 +2,65 @@ use anyhow::{Context, Result};
 
 use crate::storage::SqliteConnectionPool;
 
-const LIFECYCLE_STOP_CLAIM_LIMIT: usize = 8;
-
-pub(crate) fn recover_lifecycle_stop_spool_jobs(sqlite: &SqliteConnectionPool) -> Result<u64> {
-    crate::host::checkpoints::lifecycle::spool::recover_running_lifecycle_stop_jobs(sqlite)
+pub(crate) fn recover_lifecycle_spool_jobs(sqlite: &SqliteConnectionPool) -> Result<u64> {
+    crate::host::checkpoints::lifecycle::spool::recover_running_lifecycle_jobs(sqlite)
 }
 
-pub(crate) fn process_lifecycle_stop_spool_once(sqlite: &SqliteConnectionPool) -> Result<u64> {
-    let jobs = crate::host::checkpoints::lifecycle::spool::claim_next_lifecycle_stop_jobs(
-        sqlite,
-        LIFECYCLE_STOP_CLAIM_LIMIT,
-    )?;
-    let mut processed = 0u64;
-    for job in jobs {
-        match process_lifecycle_stop_job(&job) {
-            Ok(()) => {
-                crate::host::checkpoints::lifecycle::spool::delete_lifecycle_stop_job(
-                    sqlite,
-                    &job.job_id,
-                )?;
-                processed += 1;
-            }
-            Err(err) => {
-                log::warn!(
-                    "failed to process lifecycle stop spool job {} for agent={} repo={}: {err:#}",
-                    job.job_id,
-                    job.agent_name,
-                    job.repo_root.display()
-                );
-                crate::host::checkpoints::lifecycle::spool::requeue_lifecycle_stop_job(
-                    sqlite,
-                    &job.job_id,
-                    &format!("{err:#}"),
-                )?;
-            }
+#[allow(dead_code)]
+pub(crate) fn recover_lifecycle_stop_spool_jobs(sqlite: &SqliteConnectionPool) -> Result<u64> {
+    recover_lifecycle_spool_jobs(sqlite)
+}
+
+pub(crate) fn process_lifecycle_spool_once(sqlite: &SqliteConnectionPool) -> Result<u64> {
+    let Some(job) = crate::host::checkpoints::lifecycle::spool::claim_next_lifecycle_job(sqlite)?
+    else {
+        return Ok(0);
+    };
+
+    match process_lifecycle_job(&job) {
+        Ok(()) => {
+            crate::host::checkpoints::lifecycle::spool::delete_lifecycle_job(sqlite, &job.job_id)?;
+            Ok(1)
+        }
+        Err(err) => {
+            log::warn!(
+                "failed to process lifecycle spool job {} for agent={} hook={} repo={}: {err:#}",
+                job.job_id,
+                job.agent_name,
+                job.hook_name,
+                job.repo_root.display()
+            );
+            crate::host::checkpoints::lifecycle::spool::fail_or_requeue_lifecycle_job(
+                sqlite,
+                &job,
+                &format!("{err:#}"),
+            )?;
+            Ok(0)
         }
     }
-    Ok(processed)
 }
 
-fn process_lifecycle_stop_job(
-    job: &crate::host::checkpoints::lifecycle::spool::LifecycleStopJobRecord,
+#[allow(dead_code)]
+pub(crate) fn process_lifecycle_stop_spool_once(sqlite: &SqliteConnectionPool) -> Result<u64> {
+    process_lifecycle_spool_once(sqlite)
+}
+
+fn process_lifecycle_job(
+    job: &crate::host::checkpoints::lifecycle::spool::LifecycleJobRecord,
 ) -> Result<()> {
     crate::host::checkpoints::lifecycle::adapters::route_hook_command_to_lifecycle_for_repo_with_workspace_snapshot(
         &job.repo_root,
         &job.agent_name,
         &job.hook_name,
         &job.raw_stdin,
-        Some(job.workspace_snapshot.clone()),
+        job.workspace_snapshot.clone(),
     )
     .with_context(|| {
         format!(
-            "processing lifecycle stop spool job `{}` for agent={} repo={}",
+            "processing lifecycle spool job `{}` for agent={} hook={} repo={}",
             job.job_id,
             job.agent_name,
+            job.hook_name,
             job.repo_root.display()
         )
     })?;
@@ -63,8 +68,14 @@ fn process_lifecycle_stop_job(
 }
 
 #[cfg(test)]
+pub(crate) fn process_lifecycle_spool_once_for_tests(sqlite: &SqliteConnectionPool) -> Result<u64> {
+    process_lifecycle_spool_once(sqlite)
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn process_lifecycle_stop_spool_once_for_tests(
     sqlite: &SqliteConnectionPool,
 ) -> Result<u64> {
-    process_lifecycle_stop_spool_once(sqlite)
+    process_lifecycle_spool_once(sqlite)
 }

@@ -1,7 +1,7 @@
 use super::helpers::{PROGRESS_PERSIST_INTERVAL, should_persist_embeddings_bootstrap_progress};
 use super::*;
 use crate::test_support::log_capture::capture_logs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -26,45 +26,62 @@ async fn run_all_producer_spool_jobs(
     }
 }
 
-#[test]
-fn daemon_lifecycle_spool_worker_processes_supported_terminal_jobs_one_at_a_time_and_deletes_them()
--> anyhow::Result<()> {
-    let dir = TempDir::new().expect("temp dir");
-    let config_root = dir.path().join("config");
-    let repo_root = dir.path().join("repo");
-    std::fs::create_dir_all(&config_root).expect("create config root");
-    std::fs::create_dir_all(&repo_root).expect("create repo root");
+struct LifecycleSpoolTestRepo {
+    _dir: TempDir,
+    config_root: PathBuf,
+    repo_root: PathBuf,
+    repo_id: String,
+    sqlite: crate::storage::SqliteConnectionPool,
+}
 
-    crate::test_support::git_fixtures::init_test_repo(
-        &repo_root,
-        "main",
-        "Bitloops Test",
-        "bitloops-test@example.com",
-    );
-    std::fs::write(
-        repo_root.join(crate::config::REPO_POLICY_FILE_NAME),
-        r#"
+impl LifecycleSpoolTestRepo {
+    fn new() -> anyhow::Result<Self> {
+        let dir = TempDir::new().expect("temp dir");
+        let config_root = dir.path().join("config");
+        let repo_root = dir.path().join("repo");
+        std::fs::create_dir_all(&config_root).expect("create config root");
+        std::fs::create_dir_all(&repo_root).expect("create repo root");
+
+        crate::test_support::git_fixtures::init_test_repo(
+            &repo_root,
+            "main",
+            "Bitloops Test",
+            "bitloops-test@example.com",
+        );
+        std::fs::write(
+            repo_root.join(crate::config::REPO_POLICY_FILE_NAME),
+            r#"
 [capture]
 enabled = true
 "#,
-    )
-    .expect("write repo policy");
-    std::fs::write(repo_root.join("tracked.txt"), "one\n").expect("write tracked file");
-    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
-    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "initial"]);
+        )
+        .expect("write repo policy");
+        std::fs::write(repo_root.join("tracked.txt"), "one\n").expect("write tracked file");
+        crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+        crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "initial"]);
 
-    let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
-    crate::config::settings::write_repo_daemon_binding(
-        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
-        &config_path,
-    )
-    .expect("write repo daemon binding");
+        let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+        crate::config::settings::write_repo_daemon_binding(
+            &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+            &config_path,
+        )
+        .expect("write repo daemon binding");
 
-    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
-    let sqlite = crate::host::runtime_store::open_runtime_sqlite_for_config_root(&config_root)
-        .expect("open repo runtime sqlite");
-    let write_transcript = |session_id: &str| {
-        let transcript_path = repo_root.join(format!("{session_id}.jsonl"));
+        let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+        let sqlite = crate::host::runtime_store::open_runtime_sqlite_for_config_root(&config_root)
+            .expect("open repo runtime sqlite");
+
+        Ok(Self {
+            _dir: dir,
+            config_root,
+            repo_root,
+            repo_id: repo.repo_id,
+            sqlite,
+        })
+    }
+
+    fn write_transcript(&self, session_id: &str) -> PathBuf {
+        let transcript_path = self.repo_root.join(format!("{session_id}.jsonl"));
         std::fs::write(
             &transcript_path,
             serde_json::json!({
@@ -82,7 +99,53 @@ enabled = true
         )
         .expect("write transcript");
         transcript_path
-    };
+    }
+
+    fn valid_codex_stop_stdin(&self, session_id: &str) -> String {
+        serde_json::json!({
+            "sessionId": session_id,
+            "transcriptPath": self.write_transcript(session_id).to_string_lossy(),
+            "model": "codex-test",
+        })
+        .to_string()
+    }
+
+    fn enqueue_codex_lifecycle_job(
+        &self,
+        raw_stdin: String,
+        received_at_unix: u64,
+    ) -> anyhow::Result<()> {
+        crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_job_sqlite(
+            &self.sqlite,
+            crate::host::checkpoints::lifecycle::spool::LifecycleJobInsert {
+                repo_id: self.repo_id.clone(),
+                repo_root: self.repo_root.clone(),
+                config_root: self.config_root.clone(),
+                agent_name: crate::adapters::agents::AGENT_NAME_CODEX.to_string(),
+                hook_name: crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP
+                    .to_string(),
+                raw_stdin,
+                workspace_snapshot: Some(
+                    crate::host::checkpoints::lifecycle::spool::LifecycleStopWorkspaceSnapshot::default(),
+                ),
+                cwd: self.repo_root.clone(),
+                received_at_unix,
+            },
+        )?;
+        Ok(())
+    }
+
+    fn process_once(&self) -> anyhow::Result<u64> {
+        crate::test_support::process_state::with_process_state(Some(&self.repo_root), &[], || {
+            super::worker::lifecycle_spool::process_lifecycle_spool_once_for_tests(&self.sqlite)
+        })
+    }
+}
+
+#[test]
+fn daemon_lifecycle_spool_worker_processes_supported_terminal_jobs_one_at_a_time_and_deletes_them()
+-> anyhow::Result<()> {
+    let harness = LifecycleSpoolTestRepo::new()?;
 
     let cases = [
         (
@@ -91,7 +154,7 @@ enabled = true
             "claude-spooled-stop",
             serde_json::json!({
                 "session_id": "claude-spooled-stop",
-                "transcript_path": write_transcript("claude-spooled-stop").to_string_lossy(),
+                "transcript_path": harness.write_transcript("claude-spooled-stop").to_string_lossy(),
                 "model": "claude-test",
             }),
         ),
@@ -101,7 +164,7 @@ enabled = true
             "codex-spooled-stop",
             serde_json::json!({
                 "sessionId": "codex-spooled-stop",
-                "transcriptPath": write_transcript("codex-spooled-stop").to_string_lossy(),
+                "transcriptPath": harness.write_transcript("codex-spooled-stop").to_string_lossy(),
                 "model": "codex-test",
             }),
         ),
@@ -111,7 +174,7 @@ enabled = true
             "gemini-spooled-stop",
             serde_json::json!({
                 "session_id": "gemini-spooled-stop",
-                "transcript_path": write_transcript("gemini-spooled-stop").to_string_lossy(),
+                "transcript_path": harness.write_transcript("gemini-spooled-stop").to_string_lossy(),
                 "model": "gemini-test",
             }),
         ),
@@ -121,7 +184,7 @@ enabled = true
             "cursor-spooled-stop",
             serde_json::json!({
                 "conversation_id": "cursor-spooled-stop",
-                "transcript_path": write_transcript("cursor-spooled-stop").to_string_lossy(),
+                "transcript_path": harness.write_transcript("cursor-spooled-stop").to_string_lossy(),
                 "model": "cursor-test",
             }),
         ),
@@ -131,7 +194,7 @@ enabled = true
             "copilot-spooled-stop",
             serde_json::json!({
                 "sessionId": "copilot-spooled-stop",
-                "transcriptPath": write_transcript("copilot-spooled-stop").to_string_lossy(),
+                "transcriptPath": harness.write_transcript("copilot-spooled-stop").to_string_lossy(),
                 "model": "copilot-test",
             }),
         ),
@@ -141,48 +204,162 @@ enabled = true
             "opencode-spooled-stop",
             serde_json::json!({
                 "session_id": "opencode-spooled-stop",
-                "transcript_path": write_transcript("opencode-spooled-stop").to_string_lossy(),
+                "transcript_path": harness.write_transcript("opencode-spooled-stop").to_string_lossy(),
             }),
         ),
     ];
 
     for (index, (agent_name, hook_name, _session_id, raw_stdin)) in cases.iter().enumerate() {
-        crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_stop_job_sqlite(
-            &sqlite,
-            crate::host::checkpoints::lifecycle::spool::LifecycleStopJobInsert {
-                repo_id: repo.repo_id.clone(),
-                repo_root: repo_root.clone(),
-                config_root: config_root.clone(),
+        crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_job_sqlite(
+            &harness.sqlite,
+            crate::host::checkpoints::lifecycle::spool::LifecycleJobInsert {
+                repo_id: harness.repo_id.clone(),
+                repo_root: harness.repo_root.clone(),
+                config_root: harness.config_root.clone(),
                 agent_name: (*agent_name).to_string(),
                 hook_name: (*hook_name).to_string(),
                 raw_stdin: raw_stdin.to_string(),
-                workspace_snapshot: crate::host::checkpoints::lifecycle::spool::LifecycleStopWorkspaceSnapshot::default(),
-                cwd: repo_root.clone(),
+                workspace_snapshot: Some(
+                    crate::host::checkpoints::lifecycle::spool::LifecycleStopWorkspaceSnapshot::default(),
+                ),
+                cwd: harness.repo_root.clone(),
                 received_at_unix: 1_778_800_000 + u64::try_from(index).unwrap_or_default(),
             },
         )
-        .expect("enqueue lifecycle stop job");
+        .expect("enqueue lifecycle job");
     }
 
     let mut processed = 0u64;
     for _ in &cases {
-        let processed_once =
-            crate::test_support::process_state::with_process_state(Some(&repo_root), &[], || {
-                super::worker::process_lifecycle_stop_spool_once_for_tests(&sqlite)
-            })?;
+        let processed_once = harness.process_once()?;
         assert_eq!(processed_once, 1);
         processed += processed_once;
     }
 
     assert_eq!(processed, cases.len() as u64);
     let remaining =
-        crate::host::checkpoints::lifecycle::spool::list_lifecycle_stop_jobs_for_tests(&sqlite)
-            .expect("list lifecycle stop jobs");
+        crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(&harness.sqlite)
+            .expect("list lifecycle jobs");
     assert!(
         remaining.is_empty(),
-        "processed lifecycle stop job should be deleted"
+        "processed lifecycle jobs should be deleted"
     );
 
+    Ok(())
+}
+
+#[test]
+fn daemon_lifecycle_spool_processes_one_generic_job_and_deletes_it() -> anyhow::Result<()> {
+    let harness = LifecycleSpoolTestRepo::new()?;
+    harness.enqueue_codex_lifecycle_job(
+        harness.valid_codex_stop_stdin("one-generic-job"),
+        1_778_800_000,
+    )?;
+
+    assert_eq!(harness.process_once()?, 1);
+
+    let remaining =
+        crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(&harness.sqlite)?;
+    assert!(remaining.is_empty());
+    Ok(())
+}
+
+#[test]
+fn daemon_lifecycle_spool_does_not_process_later_job_when_head_retries() -> anyhow::Result<()> {
+    let harness = LifecycleSpoolTestRepo::new()?;
+    harness.enqueue_codex_lifecycle_job("{not-json".to_string(), 1_778_800_000)?;
+    harness.enqueue_codex_lifecycle_job(
+        harness.valid_codex_stop_stdin("blocked-valid-job"),
+        1_778_800_001,
+    )?;
+
+    assert_eq!(harness.process_once()?, 0);
+
+    let rows =
+        crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(&harness.sqlite)?;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[0].status,
+        crate::host::checkpoints::lifecycle::spool::LifecycleJobStatus::Pending
+    );
+    assert_eq!(rows[0].attempts, 1);
+    assert!(
+        rows[0]
+            .last_error
+            .as_deref()
+            .is_some_and(|err| err.contains("failed to parse codex hook input")),
+        "first job should keep parse failure as last_error: {:?}",
+        rows[0].last_error
+    );
+    assert_eq!(
+        rows[1].status,
+        crate::host::checkpoints::lifecycle::spool::LifecycleJobStatus::Pending
+    );
+    assert_eq!(rows[1].attempts, 0);
+    assert!(rows[1].last_error.is_none());
+
+    assert_eq!(harness.process_once()?, 0);
+
+    let rows =
+        crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(&harness.sqlite)?;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].attempts, 1);
+    assert_eq!(rows[1].attempts, 0);
+    assert_eq!(
+        rows[1].status,
+        crate::host::checkpoints::lifecycle::spool::LifecycleJobStatus::Pending
+    );
+    Ok(())
+}
+
+#[test]
+fn daemon_lifecycle_spool_failed_head_unblocks_later_job_at_max_attempts() -> anyhow::Result<()> {
+    let harness = LifecycleSpoolTestRepo::new()?;
+    harness.enqueue_codex_lifecycle_job("{not-json".to_string(), 1_778_800_000)?;
+    harness.enqueue_codex_lifecycle_job(
+        harness.valid_codex_stop_stdin("unblocked-valid-job"),
+        1_778_800_001,
+    )?;
+
+    let mut head_job_id = None;
+    for _ in 0..crate::host::checkpoints::lifecycle::spool::MAX_LIFECYCLE_JOB_ATTEMPTS {
+        if let Some(job_id) = head_job_id.as_deref() {
+            crate::host::checkpoints::lifecycle::spool::force_pending_job_available_for_tests(
+                &harness.sqlite,
+                job_id,
+            )?;
+        }
+
+        assert_eq!(harness.process_once()?, 0);
+
+        let rows = crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(
+            &harness.sqlite,
+        )?;
+        head_job_id = Some(rows[0].job_id.clone());
+    }
+
+    let rows =
+        crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(&harness.sqlite)?;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[0].status,
+        crate::host::checkpoints::lifecycle::spool::LifecycleJobStatus::Failed
+    );
+    assert_eq!(
+        rows[0].attempts,
+        crate::host::checkpoints::lifecycle::spool::MAX_LIFECYCLE_JOB_ATTEMPTS
+    );
+    assert_eq!(rows[1].attempts, 0);
+
+    assert_eq!(harness.process_once()?, 1);
+
+    let rows =
+        crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(&harness.sqlite)?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].status,
+        crate::host::checkpoints::lifecycle::spool::LifecycleJobStatus::Failed
+    );
     Ok(())
 }
 
