@@ -252,6 +252,7 @@ pub(crate) fn test_assume_daemon_running_override() -> Option<bool> {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn with_test_tty_override<T>(value: bool, f: impl FnOnce() -> T) -> T {
     TEST_TTY_OVERRIDE.with(|cell| {
         assert!(

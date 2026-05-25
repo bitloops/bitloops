@@ -1048,9 +1048,6 @@ done
     std::fs::write(
         &local_config_path,
         r#"
-[semantic_clones.inference]
-summary_generation = "local_summary"
-
 [inference.profiles.local_summary]
 task = "text_generation"
 driver = "openai"
@@ -1066,9 +1063,6 @@ max_output_tokens = 200
         &bound_config_path,
         format!(
             r#"
-[semantic_clones.inference]
-summary_generation = "summary_local"
-
 [inference.runtimes.bitloops_inference]
 command = "/bin/sh"
 args = ["{}", "{}"]
@@ -1095,6 +1089,12 @@ max_output_tokens = 200
             r#"
 [daemon]
 config_path = "{}"
+
+[semantic_clones]
+summary_mode = "auto"
+
+[semantic_clones.inference]
+summary_generation = "summary_local"
 "#,
             bound_config_path.display(),
         ),

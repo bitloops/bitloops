@@ -4,22 +4,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use toml_edit::{DocumentMut, Item};
 
-use super::toml::{ensure_child_table, ensure_table};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DaemonEmbeddingsInstallMode {
-    Bootstrap,
-    WarmExisting,
-    SkipHosted,
-}
+use super::toml::{ensure_child_table, ensure_table, strip_semantic_enablement};
 
 #[derive(Debug, Clone)]
 pub(crate) struct DaemonEmbeddingsInstallPlan {
     pub config_path: PathBuf,
     pub profile_name: String,
     pub runtime_name: String,
-    pub profile_driver: Option<String>,
-    pub mode: DaemonEmbeddingsInstallMode,
     pub config_modified: bool,
     pub(crate) original_contents: Option<String>,
     pub(crate) prepared_contents: Option<String>,
@@ -111,6 +102,7 @@ impl DaemonEmbeddingsInstallPlan {
             let profiles = ensure_child_table(inference, "profiles");
             profiles[&self.profile_name] = desired_profile;
         }
+        strip_semantic_enablement(&mut current_doc);
 
         let updated_contents = current_doc.to_string();
         if current_contents == updated_contents {

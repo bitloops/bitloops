@@ -6,7 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **Configure can install daemon config without starting the daemon**: `bitloops configure --file <path> --no-start` and `bitloops configure --default-config --no-start` now validate and install daemon configuration without explicitly starting or restarting the daemon.
+
 ### Fixed
+
+- **Dashboard config saves now apply safe daemon changes without a manual restart**: daemon `config.toml` saves now validate, atomically write, and immediately hot-reload reloadable fields such as inference profiles and capability bindings for future work. Structural changes still schedule a deduplicated delayed daemon restart, and the daemon watches the config directory so manual TOML edits go through the same reload-or-restart decision path.
+
+- **Init and configure semantic setup now match the repo-local config split**: `bitloops configure` writes the default daemon config, starts or restarts the always-on daemon by default, and avoids opening store databases during configuration so DuckDB event-store locks from a running daemon do not block setup. `bitloops init` now keeps final setup focused on sync/ingest while restoring separate interactive setup choices for code embeddings, semantic summaries, and summary embeddings. Summary embeddings can be configured and run independently of code embeddings, so skipping code embeddings no longer hides the summary-embeddings prompt or lane.
 
 - **Supported terminal turn-end hooks now use a durable SQLite handoff (`CLI-1698`)**: Claude Code `stop`, Codex `stop`, Gemini `after-agent`, Cursor `stop`, Copilot `agent-stop`, and OpenCode `turn-end` now record only a tiny raw terminal hook payload as a lifecycle spool job in repo runtime SQLite and return quickly. Hook-side terminal handling does not read transcripts, update interaction projections, flush canonical interaction storage, or create checkpoint steps; the daemon claims lifecycle Stop jobs from runtime SQLite and replays raw payloads through the existing lifecycle adapters with explicit repo-root context, keeping agent-specific parsing in each adapter layer. Session-start, session-end, prompt, tool, compaction, subagent, and Git hooks remain synchronous. If runtime SQLite cannot accept the tiny enqueue within the bounded timeout, the hook fails quickly and logs or surfaces the enqueue error.
 - **Dashboard interaction turns no longer inherit a second agent when Cursor runs bridged Claude hooks** (`CLI-1860`): The interaction spool now keeps the session `agent_type` sticky and normalizes turn and event rows to the parent session’s agent, so the dashboard shows the correct agent icon.

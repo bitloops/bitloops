@@ -56,6 +56,7 @@ fn write_scenario_repo_semantic_clone_policy(world: &QatWorld) -> Result<()> {
     let policy_path = settings_local_path(world.repo_dir());
     let policy = RepoSemanticEmbeddingPolicy {
         present: true,
+        summary_mode: None,
         embedding_mode: Some(SemanticCloneEmbeddingMode::Deterministic),
         inference: SemanticClonesInferenceBindings {
             summary_generation: None,
