@@ -203,7 +203,29 @@ pub fn is_semantic_enrichment_candidate(input: &SemanticFeatureInput) -> bool {
     if input.canonical_kind.eq_ignore_ascii_case("import") {
         return false;
     }
+    if is_typescript_output_javascript_artefact(input) {
+        return false;
+    }
     true
+}
+
+fn is_typescript_output_javascript_artefact(input: &SemanticFeatureInput) -> bool {
+    if !input.language.eq_ignore_ascii_case("javascript") {
+        return false;
+    }
+
+    Path::new(&input.path).components().any(|component| {
+        let std::path::Component::Normal(segment) = component else {
+            return false;
+        };
+        segment
+            .to_str()
+            .is_some_and(|value| matches_output_directory_segment(value))
+    })
+}
+
+fn matches_output_directory_segment(segment: &str) -> bool {
+    matches!(segment, "dist" | "out" | "build")
 }
 
 fn build_semantic_feature_input_from_artefact(
@@ -716,6 +738,174 @@ mod tests {
 
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].artefact_id, "artefact-1");
+    }
+
+    #[test]
+    fn semantic_features_exclude_javascript_inside_dist_output_folder() {
+        let input = SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "packages/web/dist/index.js".to_string(),
+            language: "javascript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function_declaration".to_string(),
+            symbol_fqn: "packages/web/dist/index.js::render".to_string(),
+            name: "render".to_string(),
+            signature: Some("function render() {".to_string()),
+            modifiers: vec!["export".to_string()],
+            body: "return view;".to_string(),
+            docstring: None,
+            parent_kind: Some("file".to_string()),
+            dependency_signals: vec![],
+            content_hash: Some("hash-1".to_string()),
+        };
+
+        assert!(
+            !is_semantic_enrichment_candidate(&input),
+            "javascript artefacts inside dist should be excluded"
+        );
+    }
+
+    #[test]
+    fn semantic_features_exclude_javascript_inside_out_output_folder() {
+        let input = SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "packages/web/out/index.js".to_string(),
+            language: "javascript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function_declaration".to_string(),
+            symbol_fqn: "packages/web/out/index.js::render".to_string(),
+            name: "render".to_string(),
+            signature: Some("function render() {".to_string()),
+            modifiers: vec!["export".to_string()],
+            body: "return view;".to_string(),
+            docstring: None,
+            parent_kind: Some("file".to_string()),
+            dependency_signals: vec![],
+            content_hash: Some("hash-1".to_string()),
+        };
+
+        assert!(
+            !is_semantic_enrichment_candidate(&input),
+            "javascript artefacts inside out should be excluded"
+        );
+    }
+
+    #[test]
+    fn semantic_features_exclude_javascript_inside_build_output_folder() {
+        let input = SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "packages/web/build/index.js".to_string(),
+            language: "javascript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function_declaration".to_string(),
+            symbol_fqn: "packages/web/build/index.js::render".to_string(),
+            name: "render".to_string(),
+            signature: Some("function render() {".to_string()),
+            modifiers: vec!["export".to_string()],
+            body: "return view;".to_string(),
+            docstring: None,
+            parent_kind: Some("file".to_string()),
+            dependency_signals: vec![],
+            content_hash: Some("hash-1".to_string()),
+        };
+
+        assert!(
+            !is_semantic_enrichment_candidate(&input),
+            "javascript artefacts inside build should be excluded"
+        );
+    }
+
+    #[test]
+    fn semantic_features_keep_typescript_inside_dist_output_folder() {
+        let input = SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "packages/web/dist/index.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function_declaration".to_string(),
+            symbol_fqn: "packages/web/dist/index.ts::render".to_string(),
+            name: "render".to_string(),
+            signature: Some("function render() {".to_string()),
+            modifiers: vec!["export".to_string()],
+            body: "return view;".to_string(),
+            docstring: None,
+            parent_kind: Some("file".to_string()),
+            dependency_signals: vec![],
+            content_hash: Some("hash-1".to_string()),
+        };
+
+        assert!(
+            is_semantic_enrichment_candidate(&input),
+            "typescript artefacts should not be excluded by the javascript output-folder heuristic"
+        );
+    }
+
+    #[test]
+    fn semantic_features_keep_javascript_outside_output_folders() {
+        let input = SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "packages/web/src/index.js".to_string(),
+            language: "javascript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function_declaration".to_string(),
+            symbol_fqn: "packages/web/src/index.js::render".to_string(),
+            name: "render".to_string(),
+            signature: Some("function render() {".to_string()),
+            modifiers: vec!["export".to_string()],
+            body: "return view;".to_string(),
+            docstring: None,
+            parent_kind: Some("file".to_string()),
+            dependency_signals: vec![],
+            content_hash: Some("hash-1".to_string()),
+        };
+
+        assert!(
+            is_semantic_enrichment_candidate(&input),
+            "javascript artefacts in normal source folders should remain eligible"
+        );
+    }
+
+    #[test]
+    fn semantic_features_keep_paths_with_output_substrings_but_no_matching_segment() {
+        let input = SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "packages/web/src/building-blocks/index.js".to_string(),
+            language: "javascript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function_declaration".to_string(),
+            symbol_fqn: "packages/web/src/building-blocks/index.js::render".to_string(),
+            name: "render".to_string(),
+            signature: Some("function render() {".to_string()),
+            modifiers: vec!["export".to_string()],
+            body: "return view;".to_string(),
+            docstring: None,
+            parent_kind: Some("file".to_string()),
+            dependency_signals: vec![],
+            content_hash: Some("hash-1".to_string()),
+        };
+
+        assert!(
+            is_semantic_enrichment_candidate(&input),
+            "only full path segments should trigger the output-folder heuristic"
+        );
     }
 
     #[test]

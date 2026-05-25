@@ -397,9 +397,12 @@ pub(crate) fn extract_js_ts_docstring(node: tree_sitter::Node, content: &str) ->
             if start < 0 {
                 break;
             }
-            blocks.push(normalize_js_ts_block_comment_block(
-                &lines[start as usize..=line_idx as usize],
-            ));
+            let Some(block) =
+                normalize_js_ts_block_comment_block(&lines[start as usize..=line_idx as usize])
+            else {
+                return None;
+            };
+            blocks.push(block);
             line_idx = start - 1;
             continue;
         }
@@ -463,29 +466,37 @@ pub(crate) fn normalize_js_ts_line_comment_block(lines: &[&str]) -> String {
         .to_string()
 }
 
-pub(crate) fn normalize_js_ts_block_comment_block(lines: &[&str]) -> String {
-    let mut normalized = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        let mut text = line.trim().to_string();
-        if index == 0 {
-            text = text
-                .trim_start_matches('/')
-                .trim_start_matches('*')
-                .trim_start_matches('*')
-                .trim()
-                .to_string();
-        }
-        if index + 1 == lines.len() {
-            text = text
-                .trim_end_matches('/')
-                .trim_end_matches('*')
-                .trim()
-                .to_string();
-        }
-        text = text.trim_start_matches('*').trim().to_string();
-        normalized.push(text);
+pub(crate) fn normalize_js_ts_block_comment_block(lines: &[&str]) -> Option<String> {
+    let first = lines.first()?.trim();
+    let last = lines.last()?.trim();
+
+    let opening_index = first.find("/*")?;
+    if !first[..opening_index].trim().is_empty() {
+        return None;
     }
-    normalized.join("\n").trim().to_string()
+
+    let closing_index = last.rfind("*/")?;
+    if !last[closing_index + 2..].trim().is_empty() {
+        return None;
+    }
+
+    let joined = lines.join("\n");
+    let start = joined.find("/*")? + 2;
+    let end = joined.rfind("*/")?;
+    if end < start {
+        return None;
+    }
+
+    let inner = &joined[start..end];
+    Some(
+        inner
+            .lines()
+            .map(|line| line.trim().trim_start_matches('*').trim().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string(),
+    )
 }
 
 pub(crate) fn is_js_ts_top_level_variable(node: tree_sitter::Node) -> bool {
@@ -506,4 +517,85 @@ pub(crate) fn is_js_ts_top_level_variable(node: tree_sitter::Node) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_js_ts_artefacts;
+
+    fn docstring_for_first_artefact(source: &str) -> Option<String> {
+        extract_js_ts_artefacts(source, "src/example.js")
+            .expect("ts/js extraction should succeed")
+            .into_iter()
+            .next()
+            .and_then(|artefact| artefact.docstring)
+    }
+
+    #[test]
+    fn extract_js_ts_docstring_keeps_standalone_jsdoc_block() {
+        let source = r#"/**
+ * Normalizes email text.
+ * Keeps trailing spaces out.
+ */
+function normalizeEmail(email) {
+  return email.trim().toLowerCase();
+}"#;
+
+        let docstring =
+            docstring_for_first_artefact(source).expect("expected docstring for standalone jsdoc");
+
+        assert!(docstring.contains("Normalizes email text."));
+        assert!(docstring.contains("Keeps trailing spaces out."));
+    }
+
+    #[test]
+    fn extract_js_ts_docstring_keeps_single_line_jsdoc_block() {
+        let source = r#"/** Normalizes email text. */
+function normalizeEmail(email) {
+  return email.trim().toLowerCase();
+}"#;
+
+        assert_eq!(
+            docstring_for_first_artefact(source).as_deref(),
+            Some("Normalizes email text.")
+        );
+    }
+
+    #[test]
+    fn extract_js_ts_docstring_rejects_block_comment_with_trailing_code_on_closing_line() {
+        let source = r#"/**
+ * helper text
+ */function normalizeEmail(email) {
+  return email.trim().toLowerCase();
+}"#;
+
+        assert_eq!(docstring_for_first_artefact(source), None);
+    }
+
+    #[test]
+    fn extract_js_ts_docstring_rejects_block_comment_with_leading_code_on_opening_line() {
+        let source = r#"const marker = 1; /**
+ * helper text
+ */
+function normalizeEmail(email) {
+  return email.trim().toLowerCase();
+}"#;
+
+        assert_eq!(docstring_for_first_artefact(source), None);
+    }
+
+    #[test]
+    fn extract_js_ts_docstring_keeps_contiguous_line_comments() {
+        let source = r#"// Normalizes email text.
+// Keeps trailing spaces out.
+function normalizeEmail(email) {
+  return email.trim().toLowerCase();
+}"#;
+
+        let docstring = docstring_for_first_artefact(source)
+            .expect("expected docstring for contiguous line comments");
+
+        assert!(docstring.contains("Normalizes email text."));
+        assert!(docstring.contains("Keeps trailing spaces out."));
+    }
 }
