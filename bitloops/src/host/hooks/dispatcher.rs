@@ -537,6 +537,44 @@ fn should_spool_lifecycle_hook(agent_name: &str, hook_name: &str) -> bool {
     matches!(
         (agent_name, hook_name),
         (AGENT_NAME_CODEX, CODEX_HOOK_STOP)
+            | (
+                AGENT_NAME_CLAUDE_CODE,
+                CLAUDE_HOOK_STOP
+                    | crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_SESSION_END,
+            )
+            | (
+                AGENT_NAME_GEMINI,
+                crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_AGENT
+                    | crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_SESSION_END
+                    | crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_PRE_COMPRESS,
+            )
+            | (
+                AGENT_NAME_CURSOR,
+                crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP
+                    | crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_PRE_COMPACT
+                    | crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SESSION_END,
+            )
+            | (
+                AGENT_NAME_COPILOT,
+                crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP
+                    | crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_SESSION_END,
+            )
+            | (
+                AGENT_NAME_OPEN_CODE,
+                crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END
+                    | crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_COMPACTION
+                    | crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_SESSION_END,
+            )
+    )
+}
+
+fn should_capture_workspace_snapshot_for_lifecycle_spool(
+    agent_name: &str,
+    hook_name: &str,
+) -> bool {
+    matches!(
+        (agent_name, hook_name),
+        (AGENT_NAME_CODEX, CODEX_HOOK_STOP)
             | (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_STOP)
             | (
                 AGENT_NAME_GEMINI,
@@ -570,9 +608,11 @@ fn enqueue_lifecycle_hook_from_hook(
     let db_path = crate::config::resolve_repo_runtime_db_path_for_config_root(&config_root);
     let cwd = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
     let workspace_snapshot =
-        crate::host::checkpoints::lifecycle::capture_workspace_snapshot_for_lifecycle_stop(
-            repo_root,
-        );
+        should_capture_workspace_snapshot_for_lifecycle_spool(agent_name, hook_name).then(|| {
+            crate::host::checkpoints::lifecycle::capture_workspace_snapshot_for_lifecycle_stop(
+                repo_root,
+            )
+        });
     let insert = crate::host::checkpoints::lifecycle::spool::LifecycleJobInsert {
         repo_id: repo.repo_id,
         repo_root: repo_root.to_path_buf(),
@@ -580,7 +620,7 @@ fn enqueue_lifecycle_hook_from_hook(
         agent_name: agent_name.to_string(),
         hook_name: hook_name.to_string(),
         raw_stdin: stdin.to_string(),
-        workspace_snapshot: Some(workspace_snapshot),
+        workspace_snapshot,
         cwd,
         received_at_unix: crate::host::checkpoints::lifecycle::spool::unix_timestamp_now(),
     };

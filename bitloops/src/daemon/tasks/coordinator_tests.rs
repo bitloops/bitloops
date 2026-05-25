@@ -115,19 +115,38 @@ enabled = true
         raw_stdin: String,
         received_at_unix: u64,
     ) -> anyhow::Result<()> {
+        self.enqueue_lifecycle_job(
+            crate::adapters::agents::AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP,
+            raw_stdin,
+            Some(
+                crate::host::checkpoints::lifecycle::spool::LifecycleStopWorkspaceSnapshot::default(
+                ),
+            ),
+            received_at_unix,
+        )
+    }
+
+    fn enqueue_lifecycle_job(
+        &self,
+        agent_name: &str,
+        hook_name: &str,
+        raw_stdin: String,
+        workspace_snapshot: Option<
+            crate::host::checkpoints::lifecycle::spool::LifecycleStopWorkspaceSnapshot,
+        >,
+        received_at_unix: u64,
+    ) -> anyhow::Result<()> {
         crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_job_sqlite(
             &self.sqlite,
             crate::host::checkpoints::lifecycle::spool::LifecycleJobInsert {
                 repo_id: self.repo_id.clone(),
                 repo_root: self.repo_root.clone(),
                 config_root: self.config_root.clone(),
-                agent_name: crate::adapters::agents::AGENT_NAME_CODEX.to_string(),
-                hook_name: crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP
-                    .to_string(),
+                agent_name: agent_name.to_string(),
+                hook_name: hook_name.to_string(),
                 raw_stdin,
-                workspace_snapshot: Some(
-                    crate::host::checkpoints::lifecycle::spool::LifecycleStopWorkspaceSnapshot::default(),
-                ),
+                workspace_snapshot,
                 cwd: self.repo_root.clone(),
                 received_at_unix,
             },
@@ -243,6 +262,126 @@ fn daemon_lifecycle_spool_worker_processes_supported_terminal_jobs_one_at_a_time
     assert!(
         remaining.is_empty(),
         "processed lifecycle jobs should be deleted"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn daemon_lifecycle_spool_processes_session_end_and_compaction_pilot_jobs() -> anyhow::Result<()> {
+    let harness = LifecycleSpoolTestRepo::new()?;
+
+    let cases = [
+        (
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_SESSION_END,
+            "claude-pilot-session-end",
+            serde_json::json!({
+                "session_id": "claude-pilot-session-end",
+                "transcript_path": harness.write_transcript("claude-pilot-session-end").to_string_lossy(),
+                "model": "claude-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_SESSION_END,
+            "gemini-pilot-session-end",
+            serde_json::json!({
+                "session_id": "gemini-pilot-session-end",
+                "transcript_path": harness.write_transcript("gemini-pilot-session-end").to_string_lossy(),
+                "model": "gemini-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_PRE_COMPRESS,
+            "gemini-pilot-pre-compress",
+            serde_json::json!({
+                "session_id": "gemini-pilot-pre-compress",
+                "transcript_path": harness.write_transcript("gemini-pilot-pre-compress").to_string_lossy(),
+                "model": "gemini-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_PRE_COMPACT,
+            "cursor-pilot-pre-compact",
+            serde_json::json!({
+                "conversation_id": "cursor-pilot-pre-compact",
+                "transcript_path": harness.write_transcript("cursor-pilot-pre-compact").to_string_lossy(),
+                "model": "cursor-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SESSION_END,
+            "cursor-pilot-session-end",
+            serde_json::json!({
+                "conversation_id": "cursor-pilot-session-end",
+                "transcript_path": harness.write_transcript("cursor-pilot-session-end").to_string_lossy(),
+                "model": "cursor-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_SESSION_END,
+            "copilot-pilot-session-end",
+            serde_json::json!({
+                "sessionId": "copilot-pilot-session-end",
+                "model": "copilot-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_COMPACTION,
+            "opencode-pilot-compaction",
+            serde_json::json!({
+                "session_id": "opencode-pilot-compaction",
+                "transcript_path": harness.write_transcript("opencode-pilot-compaction").to_string_lossy(),
+                "model": "opencode-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_SESSION_END,
+            "opencode-pilot-session-end",
+            serde_json::json!({
+                "session_id": "opencode-pilot-session-end",
+                "transcript_path": harness.write_transcript("opencode-pilot-session-end").to_string_lossy(),
+                "model": "opencode-test",
+            }),
+        ),
+    ];
+
+    for (index, (agent_name, hook_name, _session_id, raw_stdin)) in cases.iter().enumerate() {
+        harness.enqueue_lifecycle_job(
+            agent_name,
+            hook_name,
+            raw_stdin.to_string(),
+            None,
+            1_778_800_000 + u64::try_from(index).unwrap_or_default(),
+        )?;
+    }
+
+    let mut processed = 0;
+    loop {
+        let processed_once = harness.process_once()?;
+        if processed_once == 0 {
+            break;
+        }
+        processed += processed_once;
+    }
+
+    assert_eq!(processed, cases.len() as u64);
+    let remaining =
+        crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(&harness.sqlite)
+            .expect("list lifecycle jobs");
+    assert!(
+        remaining.iter().all(|job| matches!(
+            job.status,
+            crate::host::checkpoints::lifecycle::spool::LifecycleJobStatus::Failed
+        )),
+        "no pending or running pilot lifecycle jobs should remain: {remaining:#?}"
     );
 
     Ok(())

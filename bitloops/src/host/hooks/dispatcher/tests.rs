@@ -277,7 +277,52 @@ fn terminal_turn_end_hooks_use_lifecycle_spool() {
 }
 
 #[test]
-fn non_terminal_hooks_remain_synchronous() {
+fn session_end_and_compaction_hooks_use_lifecycle_spool() {
+    let cases = [
+        (
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_SESSION_END,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_SESSION_END,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_PRE_COMPRESS,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_PRE_COMPACT,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SESSION_END,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_SESSION_END,
+        ),
+        (
+            AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_COMPACTION,
+        ),
+        (
+            AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_SESSION_END,
+        ),
+    ];
+
+    for (agent, hook) in cases {
+        assert!(
+            should_spool_lifecycle_hook(agent, hook),
+            "expected lifecycle spooling for pilot agent={agent} hook={hook}"
+        );
+    }
+}
+
+#[test]
+fn state_establishing_hooks_remain_synchronous() {
     let cases = [
         (
             AGENT_NAME_CODEX,
@@ -288,36 +333,44 @@ fn non_terminal_hooks_remain_synchronous() {
             crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_USER_PROMPT_SUBMIT,
         ),
         (
-            AGENT_NAME_CODEX,
-            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_PRE_TOOL_USE,
-        ),
-        (
-            AGENT_NAME_CODEX,
-            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_POST_TOOL_USE,
-        ),
-        (
-            AGENT_NAME_CURSOR,
-            crate::adapters::agents::cursor::lifecycle::HOOK_NAME_AFTER_SHELL_EXECUTION,
-        ),
-        (
-            AGENT_NAME_CURSOR,
-            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SESSION_END,
-        ),
-        (
-            AGENT_NAME_OPEN_CODE,
-            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_COMPACTION,
-        ),
-        (
-            AGENT_NAME_GEMINI,
-            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_SESSION_END,
-        ),
-        (
-            AGENT_NAME_COPILOT,
-            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_SESSION_END,
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_SESSION_START,
         ),
         (
             AGENT_NAME_CLAUDE_CODE,
-            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_SESSION_END,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_USER_PROMPT_SUBMIT,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_SESSION_START,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_BEFORE_AGENT,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SESSION_START,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_BEFORE_SUBMIT_PROMPT,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_SESSION_START,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_USER_PROMPT_SUBMITTED,
+        ),
+        (
+            AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_SESSION_START,
+        ),
+        (
+            AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_START,
         ),
     ];
 
@@ -371,5 +424,37 @@ fn codex_stop_hook_enqueue_creates_spool_without_inline_turn() -> Result<()> {
     assert_eq!(lifecycle_jobs, 1);
     assert_eq!(snapshots, 1);
     assert_eq!(turns, 0, "hook enqueue must not run turn-end inline");
+    Ok(())
+}
+
+#[test]
+fn pilot_non_turn_end_hook_enqueue_omits_workspace_snapshot() -> Result<()> {
+    let repo = tempfile::tempdir()?;
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops@example.com",
+    );
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+
+    enqueue_lifecycle_hook_from_hook(
+        repo.path(),
+        AGENT_NAME_GEMINI,
+        crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_PRE_COMPRESS,
+        r#"{"session_id":"session-1","transcript_path":"/tmp/session.jsonl"}"#,
+    )?;
+
+    let conn = rusqlite::Connection::open(
+        crate::config::resolve_bound_repo_runtime_db_path_for_repo(repo.path())?,
+    )?;
+    let (lifecycle_jobs, snapshots): (i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COUNT(workspace_snapshot) FROM agent_lifecycle_spool_jobs",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+
+    assert_eq!(lifecycle_jobs, 1);
+    assert_eq!(snapshots, 0);
     Ok(())
 }
