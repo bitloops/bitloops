@@ -31,6 +31,30 @@ pub(super) fn given_start_daemon(
     })
 }
 
+pub(super) fn given_installer_default_config_configure_flow(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "I run the installer default-config configure flow",
+            helpers::run_installer_default_config_configure_flow(world),
+        );
+    })
+}
+
+pub(super) fn given_configure_default_config(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "I run bitloops configure --default-config",
+            helpers::run_configure_default_config(world),
+        );
+    })
+}
+
 pub(super) fn given_init_commit(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
