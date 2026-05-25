@@ -3,7 +3,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::cli::embeddings::{EmbeddingsInstallState, inspect_embeddings_install_state};
+use crate::cli::embeddings::{
+    EmbeddingsInstallState, EmbeddingsRuntime, inspect_embeddings_install_state,
+};
 use crate::cli::inference::{
     SummarySetupSelection, prompt_summary_setup_selection, summary_generation_configured,
 };
@@ -35,6 +37,7 @@ pub(crate) enum InitSummaryEmbeddingsSetupSelection {
 pub(crate) fn choose_embeddings_setup_during_init(
     repo_root: &Path,
     repo_selected_embedding_lanes: bool,
+    explicit_runtime: Option<EmbeddingsRuntime>,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<InitEmbeddingsSetupSelection> {
@@ -47,6 +50,13 @@ pub(crate) fn choose_embeddings_setup_during_init(
         EmbeddingsInstallState::NotConfigured
     ) {
         return Ok(InitEmbeddingsSetupSelection::Existing);
+    }
+
+    if let Some(runtime) = explicit_runtime {
+        return Ok(match runtime {
+            EmbeddingsRuntime::Local => InitEmbeddingsSetupSelection::Local,
+            EmbeddingsRuntime::Platform => InitEmbeddingsSetupSelection::Cloud,
+        });
     }
 
     if !telemetry_consent::can_prompt_interactively() {

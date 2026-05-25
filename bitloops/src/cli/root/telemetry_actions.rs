@@ -390,6 +390,9 @@ fn init_action(args: &crate::cli::init::InitArgs) -> crate::telemetry::analytics
     if !args.exclude_from.is_empty() {
         flags.push("exclude_from");
     }
+    if args.embeddings_runtime.is_some() {
+        flags.push("embeddings_runtime");
+    }
     insert_flags(&mut props, flags);
     insert_bool_property(&mut props, "has_agent", !args.agent.is_empty());
     insert_bool_property(&mut props, "has_sync_choice", args.sync.is_some());

@@ -3,6 +3,8 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
+use crate::cli::embeddings::EmbeddingsRuntime;
+
 pub(crate) const DEFAULT_INIT_INGEST_BACKFILL: usize = 50;
 
 #[derive(Subcommand, Debug, Clone)]
@@ -74,6 +76,10 @@ pub struct InitArgs {
     /// Load additional exclusion globs from files under the repo-policy root (repeatable).
     #[arg(long = "exclude-from")]
     pub exclude_from: Vec<String>,
+
+    /// Select which embeddings runtime to configure during init.
+    #[arg(long, value_enum)]
+    pub embeddings_runtime: Option<EmbeddingsRuntime>,
 }
 
 fn parse_backfill_value(raw: &str) -> std::result::Result<usize, String> {

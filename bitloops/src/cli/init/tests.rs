@@ -97,6 +97,21 @@ fn app_dir_overrides(temp: &TempDir) -> TestPlatformDirOverrides {
     }
 }
 
+fn fake_login_session() -> crate::daemon::WorkosSessionDetails {
+    crate::daemon::WorkosSessionDetails {
+        client_id: "client_test".to_string(),
+        user_id: Some("user_123".to_string()),
+        user_email: Some("cli@example.com".to_string()),
+        user_first_name: Some("CLI".to_string()),
+        user_last_name: Some("User".to_string()),
+        organisation_id: Some("org_123".to_string()),
+        authentication_method: Some("Test".to_string()),
+        access_token_expires_at_unix: None,
+        authenticated_at_unix: 0,
+        updated_at_unix: 0,
+    }
+}
+
 fn setup_git_repo(dir: &TempDir) {
     init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");
 }
@@ -112,6 +127,7 @@ fn init_args() -> InitArgs {
         backfill: None,
         exclude: Vec::new(),
         exclude_from: Vec::new(),
+        embeddings_runtime: None,
     }
 }
 
@@ -180,12 +196,98 @@ fn init_args_accept_repo_local_flags() {
 }
 
 #[test]
+fn init_args_accept_embeddings_runtime_flag() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--agent",
+        "codex",
+        "--sync=false",
+        "--ingest=false",
+        "--embeddings-runtime",
+        "platform",
+    ])
+    .expect("init embeddings runtime flag should parse");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+
+    assert_eq!(
+        args.embeddings_runtime,
+        Some(crate::cli::embeddings::EmbeddingsRuntime::Platform)
+    );
+}
+
+#[test]
+fn init_embeddings_runtime_platform_configures_semantic_policy_without_prompt() {
+    let repo = TempDir::new().expect("repo");
+    let app_dirs = TempDir::new().expect("app dirs");
+    setup_git_repo(&repo);
+
+    with_process_state(None, &[], || {
+        with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+            crate::config::ensure_daemon_config_exists().expect("write default daemon config");
+            let install_called = Arc::new(Mutex::new(false));
+            let install_called_for_hook = Arc::clone(&install_called);
+            let repo_root = repo.path().to_path_buf();
+
+            crate::cli::embeddings::with_managed_platform_embeddings_install_hook(
+                move || {
+                    *install_called_for_hook.lock().expect("install called lock") = true;
+                    Ok(
+                        crate::cli::embeddings::ManagedPlatformEmbeddingsBinaryInstallOutcome {
+                            version: "v1.2.3".to_string(),
+                            binary_path: repo_root
+                                .join(".bitloops/test-bin/bitloops-platform-embeddings"),
+                            freshly_installed: true,
+                        },
+                    )
+                },
+                || {
+                    crate::cli::login::with_ensure_logged_in_hook(
+                        || Ok(fake_login_session()),
+                        || {
+                            let mut out = Vec::new();
+                            let args = InitArgs {
+                                embeddings_runtime: Some(
+                                    crate::cli::embeddings::EmbeddingsRuntime::Platform,
+                                ),
+                                ..init_args()
+                            };
+                            run_with_writer_for_project_root(args, repo.path(), &mut out, None)
+                                .expect("init should complete");
+
+                            let rendered = String::from_utf8(out).expect("utf8 output");
+                            assert!(
+                                !rendered.contains("Select an option"),
+                                "explicit embeddings runtime should not prompt for provider selection"
+                            );
+                        },
+                    );
+                },
+            );
+
+            assert!(
+                *install_called.lock().expect("install called lock"),
+                "platform embeddings install hook should be invoked"
+            );
+            let policy = std::fs::read_to_string(
+                repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+            )
+            .expect("read repo policy");
+            assert!(policy.contains("[semantic_clones]"));
+            assert!(policy.contains("embedding_mode = \"semantic_aware_once\""));
+            assert!(policy.contains("code_embeddings = \"platform_code\""));
+        })
+    });
+}
+
+#[test]
 fn init_args_reject_daemon_and_inference_configuration_flags() {
     for flag in [
         "--install-default-daemon",
         "--telemetry",
         "--no-telemetry",
-        "--embeddings-runtime",
         "--no-embeddings",
         "--no-summaries",
         "--context-guidance-runtime",
@@ -195,10 +297,7 @@ fn init_args_reject_daemon_and_inference_configuration_flags() {
         "--skip-baseline",
     ] {
         let mut args = vec!["bitloops", "init", flag];
-        if matches!(
-            flag,
-            "--telemetry" | "--embeddings-runtime" | "--context-guidance-runtime"
-        ) {
+        if matches!(flag, "--telemetry" | "--context-guidance-runtime") {
             args.push("platform");
         } else if matches!(
             flag,

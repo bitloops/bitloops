@@ -108,8 +108,14 @@ pub(crate) async fn run_for_project_root(
     if !scope_exclude.is_empty() || !scope_exclude_from.is_empty() {
         set_scope_exclusions(&local_policy_path, &scope_exclude, &scope_exclude_from)?;
     }
-    let semantic_policy =
-        configure_init_semantic_policy(&local_policy_path, project_root, out, input).await?;
+    let semantic_policy = configure_init_semantic_policy(
+        &local_policy_path,
+        project_root,
+        args.embeddings_runtime,
+        out,
+        input,
+    )
+    .await?;
 
     let settings = load_settings(project_root).unwrap_or_default();
     let _git_count = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
@@ -209,6 +215,7 @@ fn ensure_init_semantic_policy(
 async fn configure_init_semantic_policy(
     local_policy_path: &Path,
     project_root: &Path,
+    explicit_embeddings_runtime: Option<crate::cli::embeddings::EmbeddingsRuntime>,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<RepoSemanticEmbeddingPolicy> {
@@ -217,7 +224,7 @@ async fn configure_init_semantic_policy(
         return Ok(existing);
     }
 
-    if !telemetry_consent::can_prompt_interactively() {
+    if !telemetry_consent::can_prompt_interactively() && explicit_embeddings_runtime.is_none() {
         if existing.present {
             return Ok(existing);
         }
@@ -245,6 +252,7 @@ async fn configure_init_semantic_policy(
     let embeddings_selection = choose_embeddings_setup_during_init(
         project_root,
         repo_selected_embedding_lanes,
+        explicit_embeddings_runtime,
         out,
         input,
     )?;
