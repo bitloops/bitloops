@@ -27,7 +27,7 @@ async fn run_all_producer_spool_jobs(
 }
 
 #[test]
-fn daemon_lifecycle_spool_worker_processes_supported_terminal_jobs_and_deletes_them()
+fn daemon_lifecycle_spool_worker_processes_supported_terminal_jobs_one_at_a_time_and_deletes_them()
 -> anyhow::Result<()> {
     let dir = TempDir::new().expect("temp dir");
     let config_root = dir.path().join("config");
@@ -164,10 +164,15 @@ enabled = true
         .expect("enqueue lifecycle stop job");
     }
 
-    let processed =
-        crate::test_support::process_state::with_process_state(Some(&repo_root), &[], || {
-            super::worker::process_lifecycle_stop_spool_once_for_tests(&sqlite)
-        })?;
+    let mut processed = 0u64;
+    for _ in &cases {
+        let processed_once =
+            crate::test_support::process_state::with_process_state(Some(&repo_root), &[], || {
+                super::worker::process_lifecycle_stop_spool_once_for_tests(&sqlite)
+            })?;
+        assert_eq!(processed_once, 1);
+        processed += processed_once;
+    }
 
     assert_eq!(processed, cases.len() as u64);
     let remaining =

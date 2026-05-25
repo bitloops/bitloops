@@ -288,9 +288,13 @@ pub(crate) fn claim_next_lifecycle_job(
         conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
             .context("starting lifecycle spool claim transaction")?;
         let result = (|| {
-            let Some(job) = select_oldest_pending_lifecycle_job(conn)? else {
+            let Some(job) = select_oldest_active_lifecycle_job(conn)? else {
                 return Ok(None);
             };
+            if job.status == LifecycleJobStatus::Running {
+                return Ok(None);
+            }
+
             let now = unix_timestamp_now();
             if job.available_at_unix > now {
                 return Ok(None);
@@ -319,16 +323,12 @@ pub(crate) fn claim_next_lifecycle_job(
 
 pub(crate) fn claim_next_lifecycle_stop_jobs(
     sqlite: &SqliteConnectionPool,
-    limit: usize,
+    _limit: usize,
 ) -> Result<Vec<LifecycleStopJobRecord>> {
-    let mut jobs = Vec::new();
-    for _ in 0..limit.max(1) {
-        let Some(job) = claim_next_lifecycle_job(sqlite)? else {
-            break;
-        };
-        jobs.push(LifecycleStopJobRecord::from(job));
-    }
-    Ok(jobs)
+    Ok(claim_next_lifecycle_job(sqlite)?
+        .map(LifecycleStopJobRecord::from)
+        .into_iter()
+        .collect())
 }
 
 pub(crate) fn recover_running_lifecycle_jobs(sqlite: &SqliteConnectionPool) -> Result<u64> {
@@ -622,7 +622,7 @@ fn insert_lifecycle_job(conn: &rusqlite::Connection, insert: LifecycleJobInsert)
     Ok(())
 }
 
-fn select_oldest_pending_lifecycle_job(
+fn select_oldest_active_lifecycle_job(
     conn: &rusqlite::Connection,
 ) -> Result<Option<LifecycleJobRecord>> {
     conn.query_row(
@@ -630,14 +630,14 @@ fn select_oldest_pending_lifecycle_job(
                 raw_stdin, workspace_snapshot, cwd, status, attempts, available_at_unix,
                 received_at_unix, updated_at_unix, last_error
          FROM agent_lifecycle_spool_jobs
-         WHERE status = ?1
+         WHERE status != ?1
          ORDER BY sequence ASC
          LIMIT 1",
-        params![LifecycleJobStatus::Pending.as_str()],
+        params![LifecycleJobStatus::Failed.as_str()],
         map_lifecycle_job,
     )
     .optional()
-    .context("selecting oldest pending lifecycle spool job")
+    .context("selecting oldest active lifecycle spool job")
 }
 
 fn load_lifecycle_job(conn: &rusqlite::Connection, job_id: &str) -> Result<LifecycleJobRecord> {
@@ -834,6 +834,24 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_spool_running_head_blocks_later_jobs() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let sqlite = sqlite_at(&dir);
+        initialise_lifecycle_spool_schema(&sqlite)?;
+
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_lifecycle_insert(dir.path(), "running-head"))?;
+        enqueue_lifecycle_job_sqlite(
+            &sqlite,
+            sample_lifecycle_insert(dir.path(), "blocked-behind-running"),
+        )?;
+
+        let first = claim_next_lifecycle_job(&sqlite)?.expect("first claimed job");
+        assert_eq!(first.hook_name, "running-head");
+        assert!(claim_next_lifecycle_job(&sqlite)?.is_none());
+        Ok(())
+    }
+
+    #[test]
     fn lifecycle_spool_marks_job_failed_after_max_attempts() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let sqlite = sqlite_at(&dir);
@@ -919,6 +937,21 @@ mod tests {
 
         let claimed_again = claim_next_lifecycle_stop_jobs(&sqlite, 8)?;
         assert!(claimed_again.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_stop_spool_compat_claim_returns_at_most_one_job() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let sqlite = sqlite_at(&dir);
+        initialise_lifecycle_stop_spool_schema(&sqlite)?;
+
+        enqueue_lifecycle_stop_job_sqlite(&sqlite, sample_insert(dir.path()))?;
+        enqueue_lifecycle_stop_job_sqlite(&sqlite, sample_insert(dir.path()))?;
+
+        let claimed = claim_next_lifecycle_stop_jobs(&sqlite, 8)?;
+
+        assert_eq!(claimed.len(), 1);
         Ok(())
     }
 
