@@ -220,7 +220,7 @@ fn is_typescript_output_javascript_artefact(input: &SemanticFeatureInput) -> boo
         };
         segment
             .to_str()
-            .is_some_and(|value| matches_output_directory_segment(value))
+            .is_some_and(matches_output_directory_segment)
     })
 }
 

@@ -397,11 +397,8 @@ pub(crate) fn extract_js_ts_docstring(node: tree_sitter::Node, content: &str) ->
             if start < 0 {
                 break;
             }
-            let Some(block) =
-                normalize_js_ts_block_comment_block(&lines[start as usize..=line_idx as usize])
-            else {
-                return None;
-            };
+            let block =
+                normalize_js_ts_block_comment_block(&lines[start as usize..=line_idx as usize])?;
             blocks.push(block);
             line_idx = start - 1;
             continue;
