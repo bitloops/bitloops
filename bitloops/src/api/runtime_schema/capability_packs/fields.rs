@@ -8,18 +8,31 @@ use super::values::{
     has_non_empty_value, runtime_options_from_value, string_value_at_path, value_at_path,
 };
 
+pub(super) struct InferenceProfileSectionSpec<'a> {
+    pub profile_name: &'a str,
+    pub title: &'a str,
+    pub task: &'a str,
+    pub slot_key: &'a str,
+    pub driver_options: &'a [&'a str],
+    pub runtime_options: Option<&'a [&'a str]>,
+    pub include_thinking_level: bool,
+}
+
 pub(super) fn build_inference_profile_sections(
     current: &Value,
     proposed: &Value,
     ownership: &mut BTreeMap<String, String>,
-    profile_name: &str,
-    title: &str,
-    task: &str,
-    slot_key: &str,
-    driver_options: &[&str],
-    runtime_options: Option<&[&str]>,
-    include_thinking_level: bool,
+    spec: InferenceProfileSectionSpec<'_>,
 ) -> (Vec<CapabilityPackSectionObject>, Option<String>, bool) {
+    let InferenceProfileSectionSpec {
+        profile_name,
+        title,
+        task,
+        slot_key,
+        driver_options,
+        runtime_options,
+        include_thinking_level,
+    } = spec;
     let profile_owner_key = format!("profile:{profile_name}");
     let existing_owner = ownership.get(&profile_owner_key).cloned().or_else(|| {
         ownership.insert(profile_owner_key.clone(), title.to_string());

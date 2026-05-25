@@ -49,7 +49,7 @@ Bootstraps the current project or subproject.
 bitloops init
 bitloops init --sync=true
 bitloops init --sync=false
-bitloops init --agent claude-code --agent codex --sync=false --ingest=false
+bitloops init --sync=false --ingest=false --agent claude-code --agent codex
 ```
 
 Notes:

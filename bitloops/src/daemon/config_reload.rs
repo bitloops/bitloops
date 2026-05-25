@@ -152,7 +152,7 @@ pub(crate) fn schedule_delayed_daemon_restart(config_path: &Path) -> Result<bool
         {
             hook(&config_path, DELAYED_RESTART_DELAY)?;
         }
-        return Ok(true);
+        Ok(true)
     }
 
     #[cfg(not(test))]

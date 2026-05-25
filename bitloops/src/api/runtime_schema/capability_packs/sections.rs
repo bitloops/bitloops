@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::Result as AnyhowResult;
 use serde_json::{Value, json};
 
-use super::fields::{build_inference_profile_sections, config_field};
+use super::fields::{InferenceProfileSectionSpec, build_inference_profile_sections, config_field};
 use super::models::*;
 use super::values::{
     has_non_empty_value, has_truthy_value, profile_options_for_task, string_value_at_path,
@@ -140,13 +140,15 @@ fn build_architecture_sections(
             current,
             proposed,
             ownership,
-            &profile_name,
-            title,
-            STRUCTURED_GENERATION_TASK,
-            slot_key,
-            DRIVER_OPTIONS_STRUCTURED_GENERATION,
-            Some(ARCHITECTURE_RUNTIME_OPTIONS),
-            true,
+            InferenceProfileSectionSpec {
+                profile_name: &profile_name,
+                title,
+                task: STRUCTURED_GENERATION_TASK,
+                slot_key,
+                driver_options: DRIVER_OPTIONS_STRUCTURED_GENERATION,
+                runtime_options: Some(ARCHITECTURE_RUNTIME_OPTIONS),
+                include_thinking_level: true,
+            },
         );
         sections.extend(profile_sections);
         if let Some(runtime_warning) = runtime_warning {
@@ -201,13 +203,15 @@ fn build_context_guidance_sections(
         current,
         proposed,
         ownership,
-        &profile_name,
-        "Guidance generation profile",
-        TEXT_GENERATION_TASK,
-        CONTEXT_GUIDANCE_GENERATION_SLOT,
-        DRIVER_OPTIONS_TEXT_GENERATION,
-        None,
-        false,
+        InferenceProfileSectionSpec {
+            profile_name: &profile_name,
+            title: "Guidance generation profile",
+            task: TEXT_GENERATION_TASK,
+            slot_key: CONTEXT_GUIDANCE_GENERATION_SLOT,
+            driver_options: DRIVER_OPTIONS_TEXT_GENERATION,
+            runtime_options: None,
+            include_thinking_level: false,
+        },
     );
     sections.extend(profile_sections);
     if let Some(runtime_warning) = runtime_warning {
@@ -392,13 +396,15 @@ fn build_semantic_clone_sections(
             current,
             proposed,
             ownership,
-            &profile_name,
-            title,
-            task,
-            slot_key,
-            drivers,
-            None,
-            false,
+            InferenceProfileSectionSpec {
+                profile_name: &profile_name,
+                title,
+                task,
+                slot_key,
+                driver_options: drivers,
+                runtime_options: None,
+                include_thinking_level: false,
+            },
         );
         sections.extend(profile_sections);
         if let Some(runtime_warning) = runtime_warning {
