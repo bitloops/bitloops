@@ -62,7 +62,7 @@ fn interaction_branch(repo_root: &Path) -> String {
     current_branch_name(repo_root)
 }
 
-fn interaction_actor_identity() -> (String, String, String, String) {
+pub(crate) fn interaction_actor_identity() -> (String, String, String, String) {
     let Some(session) = crate::daemon::load_workos_session_details_cached()
         .ok()
         .flatten()
