@@ -6,11 +6,6 @@ pub(crate) fn recover_lifecycle_spool_jobs(sqlite: &SqliteConnectionPool) -> Res
     crate::host::checkpoints::lifecycle::spool::recover_running_lifecycle_jobs(sqlite)
 }
 
-#[allow(dead_code)]
-pub(crate) fn recover_lifecycle_stop_spool_jobs(sqlite: &SqliteConnectionPool) -> Result<u64> {
-    recover_lifecycle_spool_jobs(sqlite)
-}
-
 pub(crate) fn process_lifecycle_spool_once(sqlite: &SqliteConnectionPool) -> Result<u64> {
     let Some(job) = crate::host::checkpoints::lifecycle::spool::claim_next_lifecycle_job(sqlite)?
     else {
@@ -40,11 +35,6 @@ pub(crate) fn process_lifecycle_spool_once(sqlite: &SqliteConnectionPool) -> Res
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn process_lifecycle_stop_spool_once(sqlite: &SqliteConnectionPool) -> Result<u64> {
-    process_lifecycle_spool_once(sqlite)
-}
-
 fn process_lifecycle_job(
     job: &crate::host::checkpoints::lifecycle::spool::LifecycleJobRecord,
 ) -> Result<()> {
@@ -69,13 +59,5 @@ fn process_lifecycle_job(
 
 #[cfg(test)]
 pub(crate) fn process_lifecycle_spool_once_for_tests(sqlite: &SqliteConnectionPool) -> Result<u64> {
-    process_lifecycle_spool_once(sqlite)
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn process_lifecycle_stop_spool_once_for_tests(
-    sqlite: &SqliteConnectionPool,
-) -> Result<u64> {
     process_lifecycle_spool_once(sqlite)
 }

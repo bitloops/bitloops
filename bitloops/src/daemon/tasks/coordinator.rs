@@ -33,17 +33,17 @@ mod state;
 mod worker;
 
 #[cfg(feature = "slow-tests")]
-pub(crate) fn recover_lifecycle_stop_spool_jobs_for_tests(
+pub(crate) fn recover_lifecycle_spool_jobs_for_tests(
     sqlite: &crate::storage::SqliteConnectionPool,
 ) -> anyhow::Result<u64> {
-    worker::lifecycle_spool::recover_lifecycle_stop_spool_jobs(sqlite)
+    worker::lifecycle_spool::recover_lifecycle_spool_jobs(sqlite)
 }
 
 #[cfg(feature = "slow-tests")]
-pub(crate) fn process_lifecycle_stop_spool_once_for_tests(
+pub(crate) fn process_lifecycle_spool_once_for_tests(
     sqlite: &crate::storage::SqliteConnectionPool,
 ) -> anyhow::Result<u64> {
-    worker::lifecycle_spool::process_lifecycle_stop_spool_once(sqlite)
+    worker::lifecycle_spool::process_lifecycle_spool_once(sqlite)
 }
 
 #[cfg(test)]

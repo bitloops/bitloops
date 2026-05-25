@@ -41,6 +41,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_lifecycle_spool_repo_status_sequence
 ON agent_lifecycle_spool_jobs (repo_id, status, sequence);
 "#;
 
+#[cfg(test)]
 pub(crate) const LIFECYCLE_STOP_SPOOL_SCHEMA_SQLITE: &str = r#"
 CREATE TABLE IF NOT EXISTS agent_lifecycle_stop_spool_jobs (
     job_id TEXT PRIMARY KEY,
@@ -92,11 +93,9 @@ impl LifecycleJobStatus {
     }
 }
 
-pub(crate) type LifecycleStopJobStatus = LifecycleJobStatus;
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct LifecycleStopWorkspaceSnapshot {
+pub(crate) struct LifecycleWorkspaceSnapshot {
     pub(crate) modified_files: Vec<String>,
     pub(crate) new_files: Vec<String>,
     pub(crate) deleted_files: Vec<String>,
@@ -110,7 +109,7 @@ pub(crate) struct LifecycleJobInsert {
     pub(crate) agent_name: String,
     pub(crate) hook_name: String,
     pub(crate) raw_stdin: String,
-    pub(crate) workspace_snapshot: Option<LifecycleStopWorkspaceSnapshot>,
+    pub(crate) workspace_snapshot: Option<LifecycleWorkspaceSnapshot>,
     pub(crate) cwd: PathBuf,
     pub(crate) received_at_unix: u64,
 }
@@ -125,7 +124,7 @@ pub(crate) struct LifecycleJobRecord {
     pub(crate) agent_name: String,
     pub(crate) hook_name: String,
     pub(crate) raw_stdin: String,
-    pub(crate) workspace_snapshot: Option<LifecycleStopWorkspaceSnapshot>,
+    pub(crate) workspace_snapshot: Option<LifecycleWorkspaceSnapshot>,
     pub(crate) cwd: PathBuf,
     pub(crate) status: LifecycleJobStatus,
     pub(crate) attempts: u64,
@@ -135,101 +134,22 @@ pub(crate) struct LifecycleJobRecord {
     pub(crate) last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct LifecycleStopJobInsert {
-    pub(crate) repo_id: String,
-    pub(crate) repo_root: PathBuf,
-    pub(crate) config_root: PathBuf,
-    pub(crate) agent_name: String,
-    pub(crate) hook_name: String,
-    pub(crate) raw_stdin: String,
-    pub(crate) workspace_snapshot: LifecycleStopWorkspaceSnapshot,
-    pub(crate) cwd: PathBuf,
-    pub(crate) received_at_unix: u64,
-}
-
-impl From<LifecycleStopJobInsert> for LifecycleJobInsert {
-    fn from(insert: LifecycleStopJobInsert) -> Self {
-        Self {
-            repo_id: insert.repo_id,
-            repo_root: insert.repo_root,
-            config_root: insert.config_root,
-            agent_name: insert.agent_name,
-            hook_name: insert.hook_name,
-            raw_stdin: insert.raw_stdin,
-            workspace_snapshot: Some(insert.workspace_snapshot),
-            cwd: insert.cwd,
-            received_at_unix: insert.received_at_unix,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LifecycleStopJobRecord {
-    pub(crate) job_id: String,
-    pub(crate) repo_id: String,
-    pub(crate) repo_root: PathBuf,
-    pub(crate) config_root: PathBuf,
-    pub(crate) agent_name: String,
-    pub(crate) hook_name: String,
-    pub(crate) raw_stdin: String,
-    pub(crate) workspace_snapshot: LifecycleStopWorkspaceSnapshot,
-    pub(crate) cwd: PathBuf,
-    pub(crate) status: LifecycleStopJobStatus,
-    pub(crate) attempts: u64,
-    pub(crate) available_at_unix: u64,
-    pub(crate) received_at_unix: u64,
-    pub(crate) updated_at_unix: u64,
-    pub(crate) last_error: Option<String>,
-}
-
-impl From<LifecycleJobRecord> for LifecycleStopJobRecord {
-    fn from(job: LifecycleJobRecord) -> Self {
-        Self {
-            job_id: job.job_id,
-            repo_id: job.repo_id,
-            repo_root: job.repo_root,
-            config_root: job.config_root,
-            agent_name: job.agent_name,
-            hook_name: job.hook_name,
-            raw_stdin: job.raw_stdin,
-            workspace_snapshot: job.workspace_snapshot.unwrap_or_default(),
-            cwd: job.cwd,
-            status: job.status,
-            attempts: job.attempts,
-            available_at_unix: job.available_at_unix,
-            received_at_unix: job.received_at_unix,
-            updated_at_unix: job.updated_at_unix,
-            last_error: job.last_error,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[cfg(test)]
 pub(crate) struct LifecycleSpoolEnqueueResult {
     pub(crate) inserted_jobs: u64,
 }
 
-#[cfg(test)]
-pub(crate) type LifecycleStopSpoolEnqueueResult = LifecycleSpoolEnqueueResult;
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct LifecycleHookEnqueueResult {
     pub(crate) inserted_jobs: u64,
 }
-
-pub(crate) type LifecycleStopHookEnqueueResult = LifecycleHookEnqueueResult;
 
 pub(crate) fn initialise_lifecycle_spool_schema(sqlite: &SqliteConnectionPool) -> Result<()> {
     sqlite
         .execute_batch(LIFECYCLE_SPOOL_SCHEMA_SQLITE)
         .context("initialising lifecycle spool schema")?;
     sqlite.with_write_connection(migrate_legacy_lifecycle_stop_spool_jobs)
-}
-
-pub(crate) fn initialise_lifecycle_stop_spool_schema(sqlite: &SqliteConnectionPool) -> Result<()> {
-    initialise_lifecycle_spool_schema(sqlite)
 }
 
 pub(crate) fn unix_timestamp_now() -> u64 {
@@ -257,14 +177,6 @@ pub(crate) fn enqueue_lifecycle_job_sqlite(
     })
 }
 
-#[cfg(test)]
-pub(crate) fn enqueue_lifecycle_stop_job_sqlite(
-    sqlite: &SqliteConnectionPool,
-    insert: LifecycleStopJobInsert,
-) -> Result<LifecycleStopSpoolEnqueueResult> {
-    enqueue_lifecycle_job_sqlite(sqlite, insert.into())
-}
-
 pub(crate) fn enqueue_lifecycle_job_hook_safe_at(
     db_path: &Path,
     insert: LifecycleJobInsert,
@@ -272,13 +184,6 @@ pub(crate) fn enqueue_lifecycle_job_hook_safe_at(
     let conn = open_hook_safe_sqlite(db_path)?;
     insert_lifecycle_job(&conn, insert).context("hook-safe inserting lifecycle spool job")?;
     Ok(LifecycleHookEnqueueResult { inserted_jobs: 1 })
-}
-
-pub(crate) fn enqueue_lifecycle_stop_job_hook_safe_at(
-    db_path: &Path,
-    insert: LifecycleStopJobInsert,
-) -> Result<LifecycleStopHookEnqueueResult> {
-    enqueue_lifecycle_job_hook_safe_at(db_path, insert.into())
 }
 
 pub(crate) fn claim_next_lifecycle_job(
@@ -321,16 +226,6 @@ pub(crate) fn claim_next_lifecycle_job(
     })
 }
 
-pub(crate) fn claim_next_lifecycle_stop_jobs(
-    sqlite: &SqliteConnectionPool,
-    _limit: usize,
-) -> Result<Vec<LifecycleStopJobRecord>> {
-    Ok(claim_next_lifecycle_job(sqlite)?
-        .map(LifecycleStopJobRecord::from)
-        .into_iter()
-        .collect())
-}
-
 pub(crate) fn recover_running_lifecycle_jobs(sqlite: &SqliteConnectionPool) -> Result<u64> {
     sqlite.with_write_connection(|conn| {
         let now = sql_i64(unix_timestamp_now())?;
@@ -350,10 +245,6 @@ pub(crate) fn recover_running_lifecycle_jobs(sqlite: &SqliteConnectionPool) -> R
             .context("recovering running lifecycle spool jobs")?;
         Ok(u64::try_from(updated).unwrap_or_default())
     })
-}
-
-pub(crate) fn recover_running_lifecycle_stop_jobs(sqlite: &SqliteConnectionPool) -> Result<u64> {
-    recover_running_lifecycle_jobs(sqlite)
 }
 
 pub(crate) fn lifecycle_spool_repo_ids_with_work(
@@ -379,12 +270,6 @@ pub(crate) fn lifecycle_spool_repo_ids_with_work(
     })
 }
 
-pub(crate) fn lifecycle_stop_spool_repo_ids_with_work(
-    sqlite: &SqliteConnectionPool,
-) -> Result<HashSet<String>> {
-    lifecycle_spool_repo_ids_with_work(sqlite)
-}
-
 pub(crate) fn lifecycle_spool_has_repo_work(
     sqlite: &SqliteConnectionPool,
     repo_id: &str,
@@ -405,13 +290,6 @@ pub(crate) fn lifecycle_spool_has_repo_work(
             .context("checking lifecycle spool repo work")?;
         Ok(count > 0)
     })
-}
-
-pub(crate) fn lifecycle_stop_spool_has_repo_work(
-    sqlite: &SqliteConnectionPool,
-    repo_id: &str,
-) -> Result<bool> {
-    lifecycle_spool_has_repo_work(sqlite, repo_id)
 }
 
 pub(crate) fn requeue_lifecycle_job(
@@ -439,14 +317,6 @@ pub(crate) fn requeue_lifecycle_job(
         .with_context(|| format!("requeueing lifecycle spool job `{job_id}`"))?;
         Ok(())
     })
-}
-
-pub(crate) fn requeue_lifecycle_stop_job(
-    sqlite: &SqliteConnectionPool,
-    job_id: &str,
-    last_error: &str,
-) -> Result<()> {
-    requeue_lifecycle_job(sqlite, job_id, last_error)
 }
 
 pub(crate) fn mark_lifecycle_job_failed(
@@ -497,10 +367,6 @@ pub(crate) fn delete_lifecycle_job(sqlite: &SqliteConnectionPool, job_id: &str) 
     })
 }
 
-pub(crate) fn delete_lifecycle_stop_job(sqlite: &SqliteConnectionPool, job_id: &str) -> Result<()> {
-    delete_lifecycle_job(sqlite, job_id)
-}
-
 #[cfg(test)]
 pub(crate) fn list_lifecycle_jobs_for_tests(
     sqlite: &SqliteConnectionPool,
@@ -521,16 +387,6 @@ pub(crate) fn list_lifecycle_jobs_for_tests(
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .context("collecting lifecycle spool jobs for tests")
     })
-}
-
-#[cfg(test)]
-pub(crate) fn list_lifecycle_stop_jobs_for_tests(
-    sqlite: &SqliteConnectionPool,
-) -> Result<Vec<LifecycleStopJobRecord>> {
-    Ok(list_lifecycle_jobs_for_tests(sqlite)?
-        .into_iter()
-        .map(LifecycleStopJobRecord::from)
-        .collect())
 }
 
 #[cfg(test)]
@@ -677,7 +533,7 @@ fn map_lifecycle_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<LifecycleJobRe
     })
 }
 
-fn parse_workspace_snapshot(raw: String) -> LifecycleStopWorkspaceSnapshot {
+fn parse_workspace_snapshot(raw: String) -> LifecycleWorkspaceSnapshot {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -767,22 +623,7 @@ mod tests {
         SqliteConnectionPool::connect(dir.path().join("runtime.sqlite")).expect("open sqlite")
     }
 
-    fn sample_insert(repo_root: &Path) -> LifecycleStopJobInsert {
-        LifecycleStopJobInsert {
-            repo_id: "repo-1".to_string(),
-            repo_root: repo_root.to_path_buf(),
-            config_root: repo_root.join(".bitloops-test-state/daemon"),
-            agent_name: crate::adapters::agents::AGENT_NAME_CODEX.to_string(),
-            hook_name: crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP.to_string(),
-            raw_stdin: r#"{"session_id":"session-1","transcript_path":"/tmp/session.jsonl"}"#
-                .to_string(),
-            workspace_snapshot: LifecycleStopWorkspaceSnapshot::default(),
-            cwd: repo_root.to_path_buf(),
-            received_at_unix: 1_778_800_000,
-        }
-    }
-
-    fn sample_lifecycle_insert(repo_root: &Path, hook_name: &str) -> LifecycleJobInsert {
+    fn sample_insert(repo_root: &Path, hook_name: &str) -> LifecycleJobInsert {
         LifecycleJobInsert {
             repo_id: "repo-1".to_string(),
             repo_root: repo_root.to_path_buf(),
@@ -791,7 +632,7 @@ mod tests {
             hook_name: hook_name.to_string(),
             raw_stdin: r#"{"session_id":"session-1","transcript_path":"/tmp/session.jsonl"}"#
                 .to_string(),
-            workspace_snapshot: Some(LifecycleStopWorkspaceSnapshot::default()),
+            workspace_snapshot: Some(LifecycleWorkspaceSnapshot::default()),
             cwd: repo_root.to_path_buf(),
             received_at_unix: 1_778_800_000,
         }
@@ -803,8 +644,8 @@ mod tests {
         let sqlite = sqlite_at(&dir);
         initialise_lifecycle_spool_schema(&sqlite)?;
 
-        enqueue_lifecycle_job_sqlite(&sqlite, sample_lifecycle_insert(dir.path(), "first-hook"))?;
-        enqueue_lifecycle_job_sqlite(&sqlite, sample_lifecycle_insert(dir.path(), "second-hook"))?;
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_insert(dir.path(), "first-hook"))?;
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_insert(dir.path(), "second-hook"))?;
 
         let first = claim_next_lifecycle_job(&sqlite)?.expect("first claimed job");
         assert_eq!(first.hook_name, "first-hook");
@@ -821,13 +662,10 @@ mod tests {
         let sqlite = sqlite_at(&dir);
         initialise_lifecycle_spool_schema(&sqlite)?;
 
-        enqueue_lifecycle_job_sqlite(&sqlite, sample_lifecycle_insert(dir.path(), "retry-head"))?;
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_insert(dir.path(), "retry-head"))?;
         let first = claim_next_lifecycle_job(&sqlite)?.expect("first claimed job");
         requeue_lifecycle_job(&sqlite, &first.job_id, "transient failure")?;
-        enqueue_lifecycle_job_sqlite(
-            &sqlite,
-            sample_lifecycle_insert(dir.path(), "blocked-behind-head"),
-        )?;
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_insert(dir.path(), "blocked-behind-head"))?;
 
         assert!(claim_next_lifecycle_job(&sqlite)?.is_none());
         Ok(())
@@ -839,11 +677,8 @@ mod tests {
         let sqlite = sqlite_at(&dir);
         initialise_lifecycle_spool_schema(&sqlite)?;
 
-        enqueue_lifecycle_job_sqlite(&sqlite, sample_lifecycle_insert(dir.path(), "running-head"))?;
-        enqueue_lifecycle_job_sqlite(
-            &sqlite,
-            sample_lifecycle_insert(dir.path(), "blocked-behind-running"),
-        )?;
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_insert(dir.path(), "running-head"))?;
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_insert(dir.path(), "blocked-behind-running"))?;
 
         let first = claim_next_lifecycle_job(&sqlite)?.expect("first claimed job");
         assert_eq!(first.hook_name, "running-head");
@@ -856,7 +691,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let sqlite = sqlite_at(&dir);
         initialise_lifecycle_spool_schema(&sqlite)?;
-        enqueue_lifecycle_job_sqlite(&sqlite, sample_lifecycle_insert(dir.path(), "stop"))?;
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_insert(dir.path(), "stop"))?;
 
         let mut job_id = None;
         for expected_attempt in 1..=MAX_LIFECYCLE_JOB_ATTEMPTS {
@@ -898,7 +733,7 @@ mod tests {
                         .to_string_lossy()
                         .to_string(),
                     crate::adapters::agents::AGENT_NAME_CODEX,
-                    serde_json::to_string(&LifecycleStopWorkspaceSnapshot::default())?,
+                    serde_json::to_string(&LifecycleWorkspaceSnapshot::default())?,
                     dir.path().to_string_lossy().to_string(),
                 ],
             )?;
@@ -918,136 +753,140 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_stop_spool_inserts_and_claims_pending_jobs() -> Result<()> {
+    fn lifecycle_spool_inserts_and_claims_pending_jobs() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let sqlite = sqlite_at(&dir);
-        initialise_lifecycle_stop_spool_schema(&sqlite)?;
+        initialise_lifecycle_spool_schema(&sqlite)?;
 
-        let inserted = enqueue_lifecycle_stop_job_sqlite(&sqlite, sample_insert(dir.path()))?;
+        let inserted = enqueue_lifecycle_job_sqlite(
+            &sqlite,
+            sample_insert(
+                dir.path(),
+                crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP,
+            ),
+        )?;
         assert_eq!(inserted.inserted_jobs, 1);
 
-        let claimed = claim_next_lifecycle_stop_jobs(&sqlite, 8)?;
-        assert_eq!(claimed.len(), 1);
-        assert_eq!(claimed[0].repo_id, "repo-1");
+        let claimed = claim_next_lifecycle_job(&sqlite)?.expect("claimed lifecycle job");
+        assert_eq!(claimed.repo_id, "repo-1");
         assert_eq!(
-            claimed[0].agent_name,
+            claimed.agent_name,
             crate::adapters::agents::AGENT_NAME_CODEX
         );
-        assert_eq!(claimed[0].status, LifecycleStopJobStatus::Running);
+        assert_eq!(claimed.status, LifecycleJobStatus::Running);
 
-        let claimed_again = claim_next_lifecycle_stop_jobs(&sqlite, 8)?;
-        assert!(claimed_again.is_empty());
+        assert!(claim_next_lifecycle_job(&sqlite)?.is_none());
         Ok(())
     }
 
     #[test]
-    fn lifecycle_stop_spool_compat_claim_returns_at_most_one_job() -> Result<()> {
+    fn lifecycle_spool_claims_at_most_one_job() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let sqlite = sqlite_at(&dir);
-        initialise_lifecycle_stop_spool_schema(&sqlite)?;
+        initialise_lifecycle_spool_schema(&sqlite)?;
 
-        enqueue_lifecycle_stop_job_sqlite(&sqlite, sample_insert(dir.path()))?;
-        enqueue_lifecycle_stop_job_sqlite(&sqlite, sample_insert(dir.path()))?;
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_insert(dir.path(), "first-hook"))?;
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_insert(dir.path(), "second-hook"))?;
 
-        let claimed = claim_next_lifecycle_stop_jobs(&sqlite, 8)?;
+        let claimed = claim_next_lifecycle_job(&sqlite)?;
 
-        assert_eq!(claimed.len(), 1);
+        assert!(claimed.is_some());
         Ok(())
     }
 
     #[test]
-    fn lifecycle_stop_spool_recovers_running_jobs() -> Result<()> {
+    fn lifecycle_spool_recovers_running_jobs() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let sqlite = sqlite_at(&dir);
-        initialise_lifecycle_stop_spool_schema(&sqlite)?;
-        enqueue_lifecycle_stop_job_sqlite(&sqlite, sample_insert(dir.path()))?;
+        initialise_lifecycle_spool_schema(&sqlite)?;
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_insert(dir.path(), "stop"))?;
 
-        let first_claim = claim_next_lifecycle_stop_jobs(&sqlite, 8)?;
-        assert_eq!(first_claim.len(), 1);
+        assert!(claim_next_lifecycle_job(&sqlite)?.is_some());
 
-        let recovered = recover_running_lifecycle_stop_jobs(&sqlite)?;
+        let recovered = recover_running_lifecycle_jobs(&sqlite)?;
         assert_eq!(recovered, 1);
 
-        let second_claim = claim_next_lifecycle_stop_jobs(&sqlite, 8)?;
-        assert_eq!(second_claim.len(), 1);
-        assert_eq!(second_claim[0].attempts, 2);
+        let second_claim = claim_next_lifecycle_job(&sqlite)?.expect("claimed recovered job");
+        assert_eq!(second_claim.attempts, 2);
         Ok(())
     }
 
     #[test]
-    fn lifecycle_stop_spool_requeues_failed_jobs_with_error() -> Result<()> {
+    fn lifecycle_spool_requeues_failed_jobs_with_error() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let sqlite = sqlite_at(&dir);
-        initialise_lifecycle_stop_spool_schema(&sqlite)?;
-        enqueue_lifecycle_stop_job_sqlite(&sqlite, sample_insert(dir.path()))?;
+        initialise_lifecycle_spool_schema(&sqlite)?;
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_insert(dir.path(), "stop"))?;
 
-        let claimed = claim_next_lifecycle_stop_jobs(&sqlite, 8)?;
-        requeue_lifecycle_stop_job(&sqlite, &claimed[0].job_id, "parse failed")?;
+        let claimed = claim_next_lifecycle_job(&sqlite)?.expect("claimed lifecycle job");
+        requeue_lifecycle_job(&sqlite, &claimed.job_id, "parse failed")?;
 
-        let rows = list_lifecycle_stop_jobs_for_tests(&sqlite)?;
+        let rows = list_lifecycle_jobs_for_tests(&sqlite)?;
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].status, LifecycleStopJobStatus::Pending);
+        assert_eq!(rows[0].status, LifecycleJobStatus::Pending);
         assert_eq!(rows[0].last_error.as_deref(), Some("parse failed"));
         Ok(())
     }
 
     #[test]
-    fn lifecycle_stop_spool_deletes_completed_jobs() -> Result<()> {
+    fn lifecycle_spool_deletes_completed_jobs() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let sqlite = sqlite_at(&dir);
-        initialise_lifecycle_stop_spool_schema(&sqlite)?;
-        enqueue_lifecycle_stop_job_sqlite(&sqlite, sample_insert(dir.path()))?;
+        initialise_lifecycle_spool_schema(&sqlite)?;
+        enqueue_lifecycle_job_sqlite(&sqlite, sample_insert(dir.path(), "stop"))?;
 
-        let claimed = claim_next_lifecycle_stop_jobs(&sqlite, 8)?;
-        delete_lifecycle_stop_job(&sqlite, &claimed[0].job_id)?;
+        let claimed = claim_next_lifecycle_job(&sqlite)?.expect("claimed lifecycle job");
+        delete_lifecycle_job(&sqlite, &claimed.job_id)?;
 
-        assert!(list_lifecycle_stop_jobs_for_tests(&sqlite)?.is_empty());
+        assert!(list_lifecycle_jobs_for_tests(&sqlite)?.is_empty());
         Ok(())
     }
 
     #[test]
-    fn lifecycle_stop_hook_enqueue_writes_sqlite_row_with_bounded_connection() -> Result<()> {
+    fn lifecycle_hook_enqueue_writes_sqlite_row_with_bounded_connection() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let db_path = dir.path().join("stores/runtime/runtime.sqlite");
 
-        let result = enqueue_lifecycle_stop_job_hook_safe_at(&db_path, sample_insert(dir.path()))?;
+        let insert = sample_insert(dir.path(), "stop");
+        let raw_stdin = insert.raw_stdin.clone();
+        let result = enqueue_lifecycle_job_hook_safe_at(&db_path, insert)?;
 
         assert_eq!(result.inserted_jobs, 1);
         let sqlite = SqliteConnectionPool::connect(db_path)?;
-        let rows = list_lifecycle_stop_jobs_for_tests(&sqlite)?;
+        let rows = list_lifecycle_jobs_for_tests(&sqlite)?;
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].raw_stdin, sample_insert(dir.path()).raw_stdin);
+        assert_eq!(rows[0].raw_stdin, raw_stdin);
         Ok(())
     }
 
     #[test]
-    fn lifecycle_stop_spool_round_trips_workspace_snapshot() -> Result<()> {
+    fn lifecycle_spool_round_trips_workspace_snapshot() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let sqlite = sqlite_at(&dir);
-        initialise_lifecycle_stop_spool_schema(&sqlite)?;
-        let mut insert = sample_insert(dir.path());
-        insert.workspace_snapshot = LifecycleStopWorkspaceSnapshot {
+        initialise_lifecycle_spool_schema(&sqlite)?;
+        let mut insert = sample_insert(dir.path(), "stop");
+        insert.workspace_snapshot = Some(LifecycleWorkspaceSnapshot {
             modified_files: vec!["src/main.rs".to_string()],
             new_files: vec!["src/new.rs".to_string()],
             deleted_files: vec!["old.rs".to_string()],
-        };
+        });
 
-        enqueue_lifecycle_stop_job_sqlite(&sqlite, insert)?;
+        enqueue_lifecycle_job_sqlite(&sqlite, insert)?;
 
-        let rows = list_lifecycle_stop_jobs_for_tests(&sqlite)?;
+        let rows = list_lifecycle_jobs_for_tests(&sqlite)?;
         assert_eq!(rows.len(), 1);
-        assert_eq!(
-            rows[0].workspace_snapshot.modified_files,
-            vec!["src/main.rs"]
-        );
-        assert_eq!(rows[0].workspace_snapshot.new_files, vec!["src/new.rs"]);
-        assert_eq!(rows[0].workspace_snapshot.deleted_files, vec!["old.rs"]);
+        let workspace_snapshot = rows[0]
+            .workspace_snapshot
+            .as_ref()
+            .expect("workspace snapshot");
+        assert_eq!(workspace_snapshot.modified_files, vec!["src/main.rs"]);
+        assert_eq!(workspace_snapshot.new_files, vec!["src/new.rs"]);
+        assert_eq!(workspace_snapshot.deleted_files, vec!["old.rs"]);
         Ok(())
     }
 
     #[test]
-    fn lifecycle_stop_hook_enqueue_fails_quickly_when_runtime_sqlite_write_lock_is_held()
-    -> Result<()> {
+    fn lifecycle_hook_enqueue_fails_quickly_when_runtime_sqlite_write_lock_is_held() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let db_path = dir.path().join("runtime.sqlite");
         let locker = rusqlite::Connection::open(&db_path)?;
@@ -1056,7 +895,8 @@ mod tests {
         locker.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
 
         let started = std::time::Instant::now();
-        let result = enqueue_lifecycle_stop_job_hook_safe_at(&db_path, sample_insert(dir.path()));
+        let result =
+            enqueue_lifecycle_job_hook_safe_at(&db_path, sample_insert(dir.path(), "stop"));
 
         locker.execute_batch("ROLLBACK")?;
         assert!(result.is_err());

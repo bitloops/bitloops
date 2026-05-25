@@ -609,9 +609,7 @@ fn enqueue_lifecycle_hook_from_hook(
     let cwd = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
     let workspace_snapshot =
         should_capture_workspace_snapshot_for_lifecycle_spool(agent_name, hook_name).then(|| {
-            crate::host::checkpoints::lifecycle::capture_workspace_snapshot_for_lifecycle_stop(
-                repo_root,
-            )
+            crate::host::checkpoints::lifecycle::capture_workspace_snapshot_for_turn_end(repo_root)
         });
     let insert = crate::host::checkpoints::lifecycle::spool::LifecycleJobInsert {
         repo_id: repo.repo_id,

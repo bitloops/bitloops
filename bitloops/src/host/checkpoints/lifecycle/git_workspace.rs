@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use super::spool::LifecycleStopWorkspaceSnapshot;
+use super::spool::LifecycleWorkspaceSnapshot;
 
 /// Returns (modified, new_files, deleted) relative to repo_root. Used by handle_lifecycle_turn_end.
 pub(super) fn detect_file_changes_for_turn_end(
@@ -77,12 +77,12 @@ pub(super) fn detect_file_changes_for_turn_end(
     )
 }
 
-pub(crate) fn capture_workspace_snapshot_for_lifecycle_stop(
+pub(crate) fn capture_workspace_snapshot_for_turn_end(
     repo_root: &Path,
-) -> LifecycleStopWorkspaceSnapshot {
+) -> LifecycleWorkspaceSnapshot {
     let (modified_files, new_files, deleted_files) =
         detect_file_changes_for_turn_end(repo_root, None);
-    LifecycleStopWorkspaceSnapshot {
+    LifecycleWorkspaceSnapshot {
         modified_files,
         new_files,
         deleted_files,

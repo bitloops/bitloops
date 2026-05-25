@@ -8,7 +8,7 @@ use super::git_workspace::{
     filter_to_uncommitted_files_for_turn_end, merge_unique_for_turn_end,
 };
 use super::interaction::{flush_interaction_spool_best_effort, resolve_interaction_spool};
-use super::spool::LifecycleStopWorkspaceSnapshot;
+use super::spool::LifecycleWorkspaceSnapshot;
 use super::time_and_ids::{generate_interaction_event_id, generate_lifecycle_turn_id, now_rfc3339};
 use super::transcript::resolve_transcript_offset;
 use super::types::{LifecycleEvent, PrePromptState, SessionIdPolicy, apply_session_id_policy};
@@ -55,7 +55,7 @@ pub(crate) fn handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
     repo_root: &Path,
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
-    workspace_snapshot: Option<LifecycleStopWorkspaceSnapshot>,
+    workspace_snapshot: Option<LifecycleWorkspaceSnapshot>,
 ) -> Result<()> {
     let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::FallbackUnknown)?;
     let backend = create_session_backend_or_local(repo_root);
@@ -397,7 +397,7 @@ pub(crate) fn handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
 
 fn workspace_changes_from_snapshot_for_turn_end(
     repo_root: &Path,
-    snapshot: LifecycleStopWorkspaceSnapshot,
+    snapshot: LifecycleWorkspaceSnapshot,
     pre_untracked: &[String],
 ) -> (Vec<String>, Vec<String>, Vec<String>, bool) {
     let pre_untracked = pre_untracked

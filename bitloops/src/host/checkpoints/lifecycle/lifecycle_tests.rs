@@ -581,7 +581,7 @@ fn test_handle_lifecycle_turn_end_uses_hook_workspace_snapshot_after_commit() {
         .unwrap();
 
     std::fs::write(dir.path().join("README.md"), "changed by agent\n").unwrap();
-    let workspace_snapshot = super::capture_workspace_snapshot_for_lifecycle_stop(dir.path());
+    let workspace_snapshot = super::capture_workspace_snapshot_for_turn_end(dir.path());
     assert_eq!(workspace_snapshot.modified_files, vec!["README.md"]);
 
     git_output(dir.path(), &["add", "README.md"]);

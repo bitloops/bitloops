@@ -119,10 +119,7 @@ enabled = true
             crate::adapters::agents::AGENT_NAME_CODEX,
             crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP,
             raw_stdin,
-            Some(
-                crate::host::checkpoints::lifecycle::spool::LifecycleStopWorkspaceSnapshot::default(
-                ),
-            ),
+            Some(crate::host::checkpoints::lifecycle::spool::LifecycleWorkspaceSnapshot::default()),
             received_at_unix,
         )
     }
@@ -133,7 +130,7 @@ enabled = true
         hook_name: &str,
         raw_stdin: String,
         workspace_snapshot: Option<
-            crate::host::checkpoints::lifecycle::spool::LifecycleStopWorkspaceSnapshot,
+            crate::host::checkpoints::lifecycle::spool::LifecycleWorkspaceSnapshot,
         >,
         received_at_unix: u64,
     ) -> anyhow::Result<()> {
@@ -239,7 +236,8 @@ fn daemon_lifecycle_spool_worker_processes_supported_terminal_jobs_one_at_a_time
                 hook_name: (*hook_name).to_string(),
                 raw_stdin: raw_stdin.to_string(),
                 workspace_snapshot: Some(
-                    crate::host::checkpoints::lifecycle::spool::LifecycleStopWorkspaceSnapshot::default(),
+                    crate::host::checkpoints::lifecycle::spool::LifecycleWorkspaceSnapshot::default(
+                    ),
                 ),
                 cwd: harness.repo_root.clone(),
                 received_at_unix: 1_778_800_000 + u64::try_from(index).unwrap_or_default(),

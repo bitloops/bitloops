@@ -24,7 +24,7 @@ pub mod adapters;
 pub use adapter::LifecycleAgentAdapter;
 pub use capture::capture_pre_prompt_state;
 pub use dispatch::{dispatch_lifecycle_event, dispatch_lifecycle_event_for_repo};
-pub(crate) use git_workspace::capture_workspace_snapshot_for_lifecycle_stop;
+pub(crate) use git_workspace::capture_workspace_snapshot_for_turn_end;
 pub use handlers_session::{handle_lifecycle_session_start, handle_lifecycle_turn_start};
 pub use handlers_tail::{
     handle_lifecycle_compaction, handle_lifecycle_session_end, handle_lifecycle_subagent_end,

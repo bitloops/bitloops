@@ -12,7 +12,7 @@ use crate::adapters::agents::gemini::agent::GeminiCliAgent;
 use crate::adapters::agents::open_code::agent::OpenCodeAgent;
 use crate::adapters::agents::{TokenCalculator, TranscriptAnalyzer};
 
-use super::spool::LifecycleStopWorkspaceSnapshot;
+use super::spool::LifecycleWorkspaceSnapshot;
 use super::{
     LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, dispatch_lifecycle_event_for_repo,
     handle_lifecycle_turn_end_for_repo_with_workspace_snapshot, read_and_parse_hook_input,
@@ -533,7 +533,7 @@ pub(crate) fn route_hook_command_to_lifecycle_for_repo_with_workspace_snapshot(
     agent_name: &str,
     hook_name: &str,
     stdin: &str,
-    workspace_snapshot: Option<LifecycleStopWorkspaceSnapshot>,
+    workspace_snapshot: Option<LifecycleWorkspaceSnapshot>,
 ) -> Result<HookCommandOutcome> {
     let resolved = AgentAdapterRegistry::builtin().resolve_with_trace(agent_name, None)?;
     let descriptor = resolved.registration.descriptor();
