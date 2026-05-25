@@ -116,6 +116,11 @@ fn role_adjudication_queue_item_parses_valid_payload() {
             "request": {
                 "repo_id": "repo-1",
                 "generation": 8,
+                "stable_request_key": "file:src/main.rs",
+                "facts_hash": "facts",
+                "rules_hash": "rules",
+                "cluster_key": null,
+                "target_kind": "file",
                 "artefact_id": "a1",
                 "symbol_id": "s1",
                 "path": "src/main.rs",

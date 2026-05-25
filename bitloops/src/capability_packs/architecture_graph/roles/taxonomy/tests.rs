@@ -348,8 +348,28 @@ mod seeded_tests {
 
     #[test]
     fn rule_candidate_examples_use_only_supported_condition_kinds() {
-        let allowed: std::collections::BTreeSet<_> =
-            allowed_rule_condition_kinds().iter().copied().collect();
+        let catalog = supported_rule_fact_catalog();
+        let catalog = catalog.as_array().expect("catalog is an array");
+        let mut supported = std::collections::BTreeSet::new();
+        for fact in catalog {
+            let kind = fact
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .expect("fact has kind");
+            let key = fact
+                .get("key")
+                .and_then(serde_json::Value::as_str)
+                .expect("fact has key");
+            let ops = fact
+                .get("ops")
+                .and_then(serde_json::Value::as_array)
+                .expect("fact has ops");
+            for op in ops {
+                let op = op.as_str().expect("op is a string");
+                supported.insert(format!("{kind}.{key}.{op}"));
+            }
+        }
+
         let examples = role_rule_candidate_examples();
         let examples = examples.as_array().expect("examples are an array");
 
@@ -389,11 +409,29 @@ mod seeded_tests {
                         .get("kind")
                         .and_then(serde_json::Value::as_str)
                         .expect("condition has kind");
-                    assert!(allowed.contains(kind), "unsupported example kind `{kind}`");
+                    let key = condition
+                        .get("key")
+                        .and_then(serde_json::Value::as_str)
+                        .expect("condition has key");
+                    let op = condition
+                        .get("op")
+                        .and_then(serde_json::Value::as_str)
+                        .expect("condition has op");
+                    let condition_key = format!("{kind}.{key}.{op}");
+                    assert!(
+                        supported.contains(&condition_key),
+                        "unsupported example condition `{condition_key}`"
+                    );
                     assert!(
                         condition
                             .get("value")
                             .and_then(serde_json::Value::as_str)
+                            .is_some()
+                    );
+                    assert!(
+                        condition
+                            .get("score")
+                            .and_then(serde_json::Value::as_f64)
                             .is_some()
                     );
                 }
@@ -440,18 +478,29 @@ mod seeded_tests {
 
         for schema in schemas {
             for pointer in [
-                "/properties/rule_candidates/items/properties/positive_conditions/items/properties/kind/enum",
-                "/properties/rule_candidates/items/properties/negative_conditions/items/properties/kind/enum",
+                "/properties/rule_candidates/items/properties/positive_conditions/items/properties",
+                "/properties/rule_candidates/items/properties/negative_conditions/items/properties",
             ] {
-                let enum_values = schema
+                let properties = schema
                     .pointer(pointer)
+                    .and_then(serde_json::Value::as_object)
+                    .unwrap_or_else(|| panic!("missing condition properties at {pointer}"));
+                for key in ["kind", "key", "op", "value", "score"] {
+                    assert!(properties.contains_key(key), "missing condition key {key}");
+                }
+                let enum_values = properties
+                    .get("op")
+                    .and_then(|op| op.get("enum"))
                     .and_then(serde_json::Value::as_array)
-                    .unwrap_or_else(|| panic!("missing schema enum at {pointer}"));
+                    .unwrap_or_else(|| panic!("missing op enum at {pointer}"));
                 let actual = enum_values
                     .iter()
                     .map(|value| value.as_str().expect("enum value is a string"))
                     .collect::<Vec<_>>();
-                assert_eq!(actual, allowed_rule_condition_kinds());
+                assert_eq!(
+                    actual,
+                    vec!["eq", "contains", "prefix", "suffix", "gte", "lte"]
+                );
             }
         }
     }
@@ -677,14 +726,18 @@ mod seeded_tests {
                 ..Default::default()
             },
             positive_conditions: vec![RoleRuleCondition {
-                kind: "path_contains".to_string(),
+                kind: "path".to_string(),
+                key: Some("full".to_string()),
+                op: Some(RoleFactConditionOp::Contains),
                 value: json!("commands"),
-                ..Default::default()
+                score: Some(1.0),
             }],
             negative_conditions: vec![RoleRuleCondition {
-                kind: "canonical_kind_is".to_string(),
+                kind: "artefact".to_string(),
+                key: Some("canonical_kind".to_string()),
+                op: Some(RoleFactConditionOp::Eq),
                 value: json!("test"),
-                ..Default::default()
+                score: Some(1.0),
             }],
             score: RoleRuleScore {
                 base_confidence: Some(0.8),
@@ -706,19 +759,22 @@ mod seeded_tests {
                 "path_contains": [],
                 "languages": ["rust"],
                 "canonical_kinds": [],
-                "symbol_fqn_contains": []
+                "symbol_fqn_contains": [],
+                "target_kinds": [],
+                "required_facts": [],
+                "required_fact_any_groups": []
             })
         );
         assert_eq!(
             value["positive_conditions"],
             json!([
-                { "kind": "path_contains", "value": "commands" }
+                { "kind": "path", "key": "full", "op": "contains", "value": "commands", "score": 1.0 }
             ])
         );
         assert_eq!(
             value["negative_conditions"],
             json!([
-                { "kind": "canonical_kind_is", "value": "test" }
+                { "kind": "artefact", "key": "canonical_kind", "op": "eq", "value": "test", "score": 1.0 }
             ])
         );
         assert_eq!(round_tripped, spec);

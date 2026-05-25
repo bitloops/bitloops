@@ -1,8 +1,11 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+
+mod rule_storage;
+pub(super) use rule_storage::canonical_rule_hash;
+use rule_storage::{compute_stored_rule_matches, rule_spec_storage_payload, sha256_json};
 
 use crate::host::capability_host::gateways::RelationalGateway;
 use crate::host::devql::RelationalStorage;
@@ -27,11 +30,8 @@ use crate::capability_packs::architecture_graph::roles::storage::{
     normalize_role_key, update_current_assignment_status, update_role_rule_lifecycle, upsert_role,
 };
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
-    ArchitectureRoleAssignment, AssignmentStatus, MatchableArtefact, RoleCandidateSelector,
-    RoleFactCondition, RoleRuleCandidateSelector, RoleRuleCondition, RoleSplitSpecFile,
-    RuleSpecFile, parse_rule_conditions, parse_rule_selector,
-    role_rule_candidate_selector_contract, role_rule_conditions_contract,
-    role_rule_contract_matches, role_rule_matches,
+    ArchitectureRoleAssignment, AssignmentStatus, MatchableArtefact, RoleRuleCandidateSelector,
+    RoleRuleCondition, RoleSplitSpecFile, RuleSpecFile, role_rule_matches,
 };
 
 pub async fn apply_proposal(
@@ -977,78 +977,4 @@ fn assignment_status_from_management_value(status: &str) -> Result<AssignmentSta
         "rejected" => Ok(AssignmentStatus::Rejected),
         other => bail!("unsupported assignment status `{other}`"),
     }
-}
-
-fn compute_stored_rule_matches(
-    artefacts: &[MatchableArtefact],
-    rule: &ArchitectureRoleRuleRecord,
-) -> Result<BTreeSet<String>> {
-    if let (Ok(selector), Ok(positive), Ok(negative)) = (
-        parse_rule_selector(&rule.candidate_selector),
-        parse_rule_conditions(&rule.positive_conditions),
-        parse_rule_conditions(&rule.negative_conditions),
-    ) {
-        return Ok(compute_rule_matches(
-            artefacts, &selector, &positive, &negative,
-        ));
-    }
-
-    let selector = serde_json::from_value::<RoleCandidateSelector>(rule.candidate_selector.clone())
-        .with_context(|| format!("parse fact-backed selector for rule `{}`", rule.rule_id))?;
-    let positive =
-        serde_json::from_value::<Vec<RoleFactCondition>>(rule.positive_conditions.clone())
-            .with_context(|| {
-                format!(
-                    "parse fact-backed positive conditions for rule `{}`",
-                    rule.rule_id
-                )
-            })?;
-    let negative =
-        serde_json::from_value::<Vec<RoleFactCondition>>(rule.negative_conditions.clone())
-            .with_context(|| {
-                format!(
-                    "parse fact-backed negative conditions for rule `{}`",
-                    rule.rule_id
-                )
-            })?;
-
-    Ok(artefacts
-        .iter()
-        .filter(|artefact| role_rule_contract_matches(&selector, &positive, &negative, artefact))
-        .map(|artefact| artefact.artefact_id.clone())
-        .collect())
-}
-
-pub(super) fn canonical_rule_hash(spec: &RuleSpecFile) -> Result<String> {
-    let bytes = serde_json::to_vec(&rule_spec_storage_payload(spec)?)
-        .context("serialise rule spec for hashing")?;
-    Ok(hex::encode(Sha256::digest(bytes)))
-}
-
-#[derive(Debug, Serialize)]
-struct RuleSpecStoragePayload {
-    candidate_selector: Value,
-    positive_conditions: Value,
-    negative_conditions: Value,
-    score: Value,
-}
-
-fn rule_spec_storage_payload(spec: &RuleSpecFile) -> Result<RuleSpecStoragePayload> {
-    Ok(RuleSpecStoragePayload {
-        candidate_selector: serde_json::to_value(role_rule_candidate_selector_contract(
-            &spec.candidate_selector,
-        ))?,
-        positive_conditions: serde_json::to_value(role_rule_conditions_contract(
-            &spec.positive_conditions,
-        )?)?,
-        negative_conditions: serde_json::to_value(role_rule_conditions_contract(
-            &spec.negative_conditions,
-        )?)?,
-        score: serde_json::to_value(&spec.score)?,
-    })
-}
-
-fn sha256_json(value: &Value) -> Result<String> {
-    let bytes = serde_json::to_vec(value).context("serialise proposal payload for hashing")?;
-    Ok(hex::encode(Sha256::digest(bytes)))
 }

@@ -574,7 +574,7 @@ async fn classification_extracts_facts_runs_rules_and_writes_assignment() -> any
             version: 1,
             lifecycle: super::super::taxonomy::RoleRuleLifecycle::Active,
             priority: 10,
-            score: 1.0,
+            score: 0.9,
             min_positive_ratio: 1.0,
             candidate_selector: serde_json::json!({
                 "targetKinds": ["file"],
@@ -586,7 +586,7 @@ async fn classification_extracts_facts_runs_rules_and_writes_assignment() -> any
                     "key": "full",
                     "op": "suffix",
                     "value": "main.rs",
-                    "score": 0.9
+                    "score": 1.0
                 }
             ]),
             negative_conditions: serde_json::json!([]),
@@ -1029,7 +1029,7 @@ async fn classification_counts_needs_review_adjudication_candidates() -> anyhow:
             version: 1,
             lifecycle: super::super::taxonomy::RoleRuleLifecycle::Active,
             priority: 10,
-            score: 1.0,
+            score: 0.6,
             min_positive_ratio: 1.0,
             candidate_selector: serde_json::json!({ "targetKinds": ["file"] }),
             positive_conditions: serde_json::json!([
@@ -1038,7 +1038,7 @@ async fn classification_counts_needs_review_adjudication_candidates() -> anyhow:
                     "key": "full",
                     "op": "suffix",
                     "value": "main.rs",
-                    "score": 0.6
+                    "score": 1.0
                 }
             ]),
             negative_conditions: serde_json::json!([]),
@@ -1283,7 +1283,7 @@ async fn classification_returns_conflict_adjudication_request_for_top_conflictin
                 version: 1,
                 lifecycle: super::super::taxonomy::RoleRuleLifecycle::Active,
                 priority: 10,
-                score: 1.0,
+                score,
                 min_positive_ratio: 1.0,
                 candidate_selector: serde_json::json!({ "targetKinds": ["file"] }),
                 positive_conditions: serde_json::json!([
@@ -1292,7 +1292,7 @@ async fn classification_returns_conflict_adjudication_request_for_top_conflictin
                         "key": "full",
                         "op": "suffix",
                         "value": "api.rs",
-                        "score": score
+                        "score": 1.0
                     }
                 ]),
                 negative_conditions: serde_json::json!([]),

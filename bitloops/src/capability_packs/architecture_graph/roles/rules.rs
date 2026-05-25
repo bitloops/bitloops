@@ -891,11 +891,11 @@ mod tests {
             version: 1,
             lifecycle: RoleRuleLifecycle::Active,
             priority: 10,
-            score: 1.0,
+            score: 0.5,
             min_positive_ratio: 1.0,
             candidate_selector: serde_json::json!({ "targetKinds": ["file"] }),
             positive_conditions: serde_json::json!([
-                { "kind": "metrics", "key": "fan_in", "op": "gte", "value": "10", "score": 0.5 }
+                { "kind": "metrics", "key": "fan_in", "op": "gte", "value": "10", "score": 1.0 }
             ]),
             negative_conditions: serde_json::json!([]),
             provenance: serde_json::json!({ "source": "test" }),
@@ -903,7 +903,7 @@ mod tests {
 
         let result = evaluate_rules_over_facts(&rules, &facts)?;
 
-        assert_eq!(rules[0].positive_conditions[0].score, 0.5);
+        assert_eq!(rules[0].positive_conditions[0].score, 1.0);
         assert_eq!(result.signals.len(), 1);
         assert_eq!(result.signals[0].score, 0.5);
         Ok(())
