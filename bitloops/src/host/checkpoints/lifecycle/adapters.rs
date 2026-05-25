@@ -12,9 +12,10 @@ use crate::adapters::agents::gemini::agent::GeminiCliAgent;
 use crate::adapters::agents::open_code::agent::OpenCodeAgent;
 use crate::adapters::agents::{TokenCalculator, TranscriptAnalyzer};
 
+use super::spool::LifecycleStopWorkspaceSnapshot;
 use super::{
     LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, dispatch_lifecycle_event_for_repo,
-    read_and_parse_hook_input,
+    handle_lifecycle_turn_end_for_repo_with_workspace_snapshot, read_and_parse_hook_input,
 };
 
 pub const CLAUDE_HOOK_SESSION_START: &str = "session-start";
@@ -523,6 +524,18 @@ pub fn route_hook_command_to_lifecycle_for_repo(
     hook_name: &str,
     stdin: &str,
 ) -> Result<HookCommandOutcome> {
+    route_hook_command_to_lifecycle_for_repo_with_workspace_snapshot(
+        repo_root, agent_name, hook_name, stdin, None,
+    )
+}
+
+pub(crate) fn route_hook_command_to_lifecycle_for_repo_with_workspace_snapshot(
+    repo_root: &Path,
+    agent_name: &str,
+    hook_name: &str,
+    stdin: &str,
+    workspace_snapshot: Option<LifecycleStopWorkspaceSnapshot>,
+) -> Result<HookCommandOutcome> {
     let resolved = AgentAdapterRegistry::builtin().resolve_with_trace(agent_name, None)?;
     let descriptor = resolved.registration.descriptor();
     let family = descriptor.protocol_family.id;
@@ -564,8 +577,19 @@ pub fn route_hook_command_to_lifecycle_for_repo(
     })?;
     let outcome = HookCommandOutcome::default();
     if let Some(event) = event {
-        dispatch_lifecycle_event_for_repo(repo_root, Some(adapter.as_ref()), Some(&event))
-            .map_err(|err| {
+        let dispatch_result = if event.event_type.as_ref() == Some(&LifecycleEventType::TurnEnd)
+            && workspace_snapshot.is_some()
+        {
+            handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
+                repo_root,
+                adapter.as_ref(),
+                &event,
+                workspace_snapshot,
+            )
+        } else {
+            dispatch_lifecycle_event_for_repo(repo_root, Some(adapter.as_ref()), Some(&event))
+        };
+        dispatch_result.map_err(|err| {
                 anyhow!(
                     "failed to dispatch lifecycle event for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
                 )

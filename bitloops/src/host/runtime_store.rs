@@ -19,8 +19,9 @@ mod tests;
 
 pub(crate) use repo_lifecycle_spool::{
     LifecycleStopHookEnqueueResult, LifecycleStopJobInsert, LifecycleStopJobRecord,
-    claim_next_lifecycle_stop_jobs, delete_lifecycle_stop_job,
-    enqueue_lifecycle_stop_job_hook_safe_at, recover_running_lifecycle_stop_jobs,
+    LifecycleStopWorkspaceSnapshot, claim_next_lifecycle_stop_jobs, delete_lifecycle_stop_job,
+    enqueue_lifecycle_stop_job_hook_safe_at, lifecycle_stop_spool_has_repo_work,
+    lifecycle_stop_spool_repo_ids_with_work, recover_running_lifecycle_stop_jobs,
     requeue_lifecycle_stop_job, unix_timestamp_now,
 };
 #[cfg(test)]

@@ -156,6 +156,7 @@ enabled = true
                 agent_name: (*agent_name).to_string(),
                 hook_name: (*hook_name).to_string(),
                 raw_stdin: raw_stdin.to_string(),
+                workspace_snapshot: crate::host::checkpoints::lifecycle::spool::LifecycleStopWorkspaceSnapshot::default(),
                 cwd: repo_root.clone(),
                 received_at_unix: 1_778_800_000 + u64::try_from(index).unwrap_or_default(),
             },

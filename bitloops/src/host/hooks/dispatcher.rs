@@ -569,6 +569,10 @@ fn enqueue_lifecycle_stop_from_hook(
         .context("resolving daemon config root for lifecycle stop hook spool")?;
     let db_path = crate::config::resolve_repo_runtime_db_path_for_config_root(&config_root);
     let cwd = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
+    let workspace_snapshot =
+        crate::host::checkpoints::lifecycle::capture_workspace_snapshot_for_lifecycle_stop(
+            repo_root,
+        );
     let insert = crate::host::checkpoints::lifecycle::spool::LifecycleStopJobInsert {
         repo_id: repo.repo_id,
         repo_root: repo_root.to_path_buf(),
@@ -576,6 +580,7 @@ fn enqueue_lifecycle_stop_from_hook(
         agent_name: agent_name.to_string(),
         hook_name: hook_name.to_string(),
         raw_stdin: stdin.to_string(),
+        workspace_snapshot,
         cwd,
         received_at_unix: crate::host::checkpoints::lifecycle::spool::unix_timestamp_now(),
     };

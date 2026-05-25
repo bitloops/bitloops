@@ -149,6 +149,21 @@ impl DevqlTaskCoordinator {
 
     fn schedule_pending_producer_spool_jobs(self: &Arc<Self>, config_root: &Path) -> Result<bool> {
         let state = self.load_state()?;
+        let lifecycle_blocked_repo_ids =
+            match crate::host::runtime_store::open_runtime_sqlite_for_config_root(config_root)
+                .and_then(|sqlite| {
+                    crate::host::checkpoints::lifecycle::spool::lifecycle_stop_spool_repo_ids_with_work(
+                        &sqlite,
+                    )
+                }) {
+                Ok(repo_ids) => repo_ids,
+                Err(err) => {
+                    log::warn!(
+                        "daemon lifecycle stop spool repo work query failed before producer claim: {err:#}"
+                    );
+                    std::collections::HashSet::new()
+                }
+            };
         let running_tasks = state
             .tasks
             .iter()
@@ -164,7 +179,7 @@ impl DevqlTaskCoordinator {
         let post_commit_derivation_guards = post_commit_derivation_claim_guards(&state);
         let jobs = crate::host::devql::claim_next_producer_spool_jobs_excluding(
             config_root,
-            &std::collections::HashSet::new(),
+            &lifecycle_blocked_repo_ids,
             &running_tasks,
             &post_commit_derivation_guards,
         )?;

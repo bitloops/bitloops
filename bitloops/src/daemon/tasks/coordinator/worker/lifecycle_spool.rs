@@ -44,11 +44,12 @@ pub(crate) fn process_lifecycle_stop_spool_once(sqlite: &SqliteConnectionPool) -
 fn process_lifecycle_stop_job(
     job: &crate::host::checkpoints::lifecycle::spool::LifecycleStopJobRecord,
 ) -> Result<()> {
-    crate::host::checkpoints::lifecycle::adapters::route_hook_command_to_lifecycle_for_repo(
+    crate::host::checkpoints::lifecycle::adapters::route_hook_command_to_lifecycle_for_repo_with_workspace_snapshot(
         &job.repo_root,
         &job.agent_name,
         &job.hook_name,
         &job.raw_stdin,
+        Some(job.workspace_snapshot.clone()),
     )
     .with_context(|| {
         format!(

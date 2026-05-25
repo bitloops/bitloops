@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use rusqlite::{params, types::Type};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::storage::SqliteConnectionPool;
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS agent_lifecycle_stop_spool_jobs (
     agent_name TEXT NOT NULL,
     hook_name TEXT NOT NULL,
     raw_stdin TEXT NOT NULL,
+    workspace_snapshot TEXT NOT NULL DEFAULT '{"modified_files":[],"new_files":[],"deleted_files":[]}',
     cwd TEXT NOT NULL,
     status TEXT NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
@@ -58,6 +60,14 @@ impl LifecycleStopJobStatus {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct LifecycleStopWorkspaceSnapshot {
+    pub(crate) modified_files: Vec<String>,
+    pub(crate) new_files: Vec<String>,
+    pub(crate) deleted_files: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LifecycleStopJobInsert {
     pub(crate) repo_id: String,
@@ -66,6 +76,7 @@ pub(crate) struct LifecycleStopJobInsert {
     pub(crate) agent_name: String,
     pub(crate) hook_name: String,
     pub(crate) raw_stdin: String,
+    pub(crate) workspace_snapshot: LifecycleStopWorkspaceSnapshot,
     pub(crate) cwd: PathBuf,
     pub(crate) received_at_unix: u64,
 }
@@ -79,6 +90,7 @@ pub(crate) struct LifecycleStopJobRecord {
     pub(crate) agent_name: String,
     pub(crate) hook_name: String,
     pub(crate) raw_stdin: String,
+    pub(crate) workspace_snapshot: LifecycleStopWorkspaceSnapshot,
     pub(crate) cwd: PathBuf,
     pub(crate) status: LifecycleStopJobStatus,
     pub(crate) attempts: u64,
@@ -102,7 +114,8 @@ pub(crate) struct LifecycleStopHookEnqueueResult {
 pub(crate) fn initialise_lifecycle_stop_spool_schema(sqlite: &SqliteConnectionPool) -> Result<()> {
     sqlite
         .execute_batch(LIFECYCLE_STOP_SPOOL_SCHEMA_SQLITE)
-        .context("initialising lifecycle stop spool schema")
+        .context("initialising lifecycle stop spool schema")?;
+    sqlite.with_write_connection(ensure_lifecycle_stop_spool_columns)
 }
 
 pub(crate) fn unix_timestamp_now() -> u64 {
@@ -219,6 +232,51 @@ pub(crate) fn recover_running_lifecycle_stop_jobs(sqlite: &SqliteConnectionPool)
     })
 }
 
+pub(crate) fn lifecycle_stop_spool_repo_ids_with_work(
+    sqlite: &SqliteConnectionPool,
+) -> Result<HashSet<String>> {
+    sqlite.with_connection(|conn| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT repo_id
+                 FROM agent_lifecycle_stop_spool_jobs
+                 WHERE status IN (?1, ?2)",
+            )
+            .context("preparing lifecycle stop spool repo work query")?;
+        let rows = stmt.query_map(
+            params![
+                LifecycleStopJobStatus::Pending.as_str(),
+                LifecycleStopJobStatus::Running.as_str(),
+            ],
+            |row| row.get::<_, String>(0),
+        )?;
+        rows.collect::<rusqlite::Result<HashSet<_>>>()
+            .context("collecting lifecycle stop spool repo ids with work")
+    })
+}
+
+pub(crate) fn lifecycle_stop_spool_has_repo_work(
+    sqlite: &SqliteConnectionPool,
+    repo_id: &str,
+) -> Result<bool> {
+    sqlite.with_connection(|conn| {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM agent_lifecycle_stop_spool_jobs
+                 WHERE repo_id = ?1 AND status IN (?2, ?3)",
+                params![
+                    repo_id,
+                    LifecycleStopJobStatus::Pending.as_str(),
+                    LifecycleStopJobStatus::Running.as_str(),
+                ],
+                |row| row.get(0),
+            )
+            .context("checking lifecycle stop spool repo work")?;
+        Ok(count > 0)
+    })
+}
+
 pub(crate) fn requeue_lifecycle_stop_job(
     sqlite: &SqliteConnectionPool,
     job_id: &str,
@@ -265,8 +323,8 @@ pub(crate) fn list_lifecycle_stop_jobs_for_tests(
         let mut stmt = conn
             .prepare(
                 "SELECT job_id, repo_id, repo_root, config_root, agent_name, hook_name,
-                        raw_stdin, cwd, status, attempts, available_at_unix, received_at_unix,
-                        updated_at_unix, last_error
+                        raw_stdin, workspace_snapshot, cwd, status, attempts, available_at_unix,
+                        received_at_unix, updated_at_unix, last_error
                  FROM agent_lifecycle_stop_spool_jobs
                  ORDER BY received_at_unix ASC, job_id ASC",
             )
@@ -302,6 +360,7 @@ fn open_hook_safe_sqlite(db_path: &Path) -> Result<rusqlite::Connection> {
         .context("configuring hook-safe lifecycle stop SQLite pragmas")?;
     conn.execute_batch(LIFECYCLE_STOP_SPOOL_SCHEMA_SQLITE)
         .context("initialising hook-safe lifecycle stop spool schema")?;
+    ensure_lifecycle_stop_spool_columns(&conn)?;
     Ok(conn)
 }
 
@@ -315,15 +374,17 @@ fn insert_lifecycle_stop_job(
     } else {
         insert.received_at_unix
     };
+    let workspace_snapshot = serde_json::to_string(&insert.workspace_snapshot)
+        .context("serialising lifecycle stop workspace snapshot")?;
     conn.execute(
         "INSERT INTO agent_lifecycle_stop_spool_jobs (
             job_id, repo_id, repo_root, config_root, agent_name, hook_name,
-            raw_stdin, cwd, status, attempts, available_at_unix, received_at_unix,
-            updated_at_unix, last_error
+            raw_stdin, workspace_snapshot, cwd, status, attempts, available_at_unix,
+            received_at_unix, updated_at_unix, last_error
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6,
-            ?7, ?8, ?9, 0, ?10, ?11,
-            ?12, NULL
+            ?7, ?8, ?9, ?10, 0, ?11,
+            ?12, ?13, NULL
          )",
         params![
             format!("lifecycle-stop-job-{}", Uuid::new_v4()),
@@ -333,6 +394,7 @@ fn insert_lifecycle_stop_job(
             insert.agent_name,
             insert.hook_name,
             insert.raw_stdin,
+            workspace_snapshot,
             insert.cwd.to_string_lossy().to_string(),
             LifecycleStopJobStatus::Pending.as_str(),
             sql_i64(now)?,
@@ -350,8 +412,8 @@ fn load_lifecycle_stop_job(
 ) -> Result<LifecycleStopJobRecord> {
     conn.query_row(
         "SELECT job_id, repo_id, repo_root, config_root, agent_name, hook_name,
-                raw_stdin, cwd, status, attempts, available_at_unix, received_at_unix,
-                updated_at_unix, last_error
+                raw_stdin, workspace_snapshot, cwd, status, attempts, available_at_unix,
+                received_at_unix, updated_at_unix, last_error
          FROM agent_lifecycle_stop_spool_jobs
          WHERE job_id = ?1",
         params![job_id],
@@ -369,6 +431,7 @@ fn map_lifecycle_stop_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<Lifecycle
         agent_name: row.get("agent_name")?,
         hook_name: row.get("hook_name")?,
         raw_stdin: row.get("raw_stdin")?,
+        workspace_snapshot: parse_workspace_snapshot(row.get("workspace_snapshot")?),
         cwd: PathBuf::from(row.get::<_, String>("cwd")?),
         status: LifecycleStopJobStatus::parse(&row.get::<_, String>("status")?),
         attempts: row_i64_as_u64(row, "attempts")?,
@@ -377,6 +440,30 @@ fn map_lifecycle_stop_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<Lifecycle
         updated_at_unix: row_i64_as_u64(row, "updated_at_unix")?,
         last_error: row.get("last_error")?,
     })
+}
+
+fn parse_workspace_snapshot(raw: String) -> LifecycleStopWorkspaceSnapshot {
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn ensure_lifecycle_stop_spool_columns(conn: &rusqlite::Connection) -> Result<()> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(agent_lifecycle_stop_spool_jobs)")
+        .context("preparing lifecycle stop spool table info query")?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .context("querying lifecycle stop spool table columns")?;
+    let columns = rows
+        .collect::<rusqlite::Result<HashSet<_>>>()
+        .context("collecting lifecycle stop spool table columns")?;
+    if !columns.contains("workspace_snapshot") {
+        conn.execute_batch(
+            r#"ALTER TABLE agent_lifecycle_stop_spool_jobs
+               ADD COLUMN workspace_snapshot TEXT NOT NULL DEFAULT '{"modified_files":[],"new_files":[],"deleted_files":[]}'"#,
+        )
+        .context("adding lifecycle stop workspace snapshot column")?;
+    }
+    Ok(())
 }
 
 fn row_i64_as_u64(row: &rusqlite::Row<'_>, column: &str) -> rusqlite::Result<u64> {
@@ -416,6 +503,7 @@ mod tests {
             hook_name: crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP.to_string(),
             raw_stdin: r#"{"session_id":"session-1","transcript_path":"/tmp/session.jsonl"}"#
                 .to_string(),
+            workspace_snapshot: LifecycleStopWorkspaceSnapshot::default(),
             cwd: repo_root.to_path_buf(),
             received_at_unix: 1_778_800_000,
         }
@@ -506,6 +594,31 @@ mod tests {
         let rows = list_lifecycle_stop_jobs_for_tests(&sqlite)?;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].raw_stdin, sample_insert(dir.path()).raw_stdin);
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_stop_spool_round_trips_workspace_snapshot() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let sqlite = sqlite_at(&dir);
+        initialise_lifecycle_stop_spool_schema(&sqlite)?;
+        let mut insert = sample_insert(dir.path());
+        insert.workspace_snapshot = LifecycleStopWorkspaceSnapshot {
+            modified_files: vec!["src/main.rs".to_string()],
+            new_files: vec!["src/new.rs".to_string()],
+            deleted_files: vec!["old.rs".to_string()],
+        };
+
+        enqueue_lifecycle_stop_job_sqlite(&sqlite, insert)?;
+
+        let rows = list_lifecycle_stop_jobs_for_tests(&sqlite)?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].workspace_snapshot.modified_files,
+            vec!["src/main.rs"]
+        );
+        assert_eq!(rows[0].workspace_snapshot.new_files, vec!["src/new.rs"]);
+        assert_eq!(rows[0].workspace_snapshot.deleted_files, vec!["old.rs"]);
         Ok(())
     }
 
