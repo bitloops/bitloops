@@ -148,7 +148,6 @@ fn seeded_taxonomy(role_key: &str) -> SeededArchitectureTaxonomy {
         rule_candidates: vec![SeededArchitectureRuleCandidate {
             target_role_key: role_key.to_string(),
             candidate_selector: RoleRuleCandidateSelector {
-                target_kinds: vec![TargetKind::Artefact],
                 path_prefixes: vec!["src/cli".to_string()],
                 ..Default::default()
             },
@@ -163,6 +162,12 @@ fn seeded_taxonomy(role_key: &str) -> SeededArchitectureTaxonomy {
             metadata: json!({"source": "test"}),
         }],
     }
+}
+
+fn seeded_taxonomy_with_artefact_target(role_key: &str) -> SeededArchitectureTaxonomy {
+    let mut taxonomy = seeded_taxonomy(role_key);
+    taxonomy.rule_candidates[0].candidate_selector.target_kinds = vec![TargetKind::Artefact];
+    taxonomy
 }
 
 #[test]
@@ -1018,7 +1023,7 @@ async fn seed_rule_activation_leaves_zero_match_rule_draft() -> Result<()> {
         &relational,
         "repo-1",
         "local_agent",
-        seeded_taxonomy("command_dispatcher"),
+        seeded_taxonomy_with_artefact_target("command_dispatcher"),
     )
     .await?;
 
@@ -1054,7 +1059,7 @@ async fn activate_seeded_draft_rules_only_applies_seed_owned_rules() -> Result<(
         &relational,
         "repo-1",
         "local_agent",
-        seeded_taxonomy("command_dispatcher"),
+        seeded_taxonomy_with_artefact_target("command_dispatcher"),
     )
     .await?;
     let role = list_roles(&relational, "repo-1")
@@ -1137,7 +1142,7 @@ async fn activate_seeded_draft_rules_is_idempotent_after_first_activation() -> R
         &relational,
         "repo-1",
         "local_agent",
-        seeded_taxonomy("command_dispatcher"),
+        seeded_taxonomy_with_artefact_target("command_dispatcher"),
     )
     .await?;
 
