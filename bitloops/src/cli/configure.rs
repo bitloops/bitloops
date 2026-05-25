@@ -18,7 +18,7 @@ enum ConfigureWebStartMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConfigureDaemonStartAction {
     Restart,
-    StartService,
+    StartDetached,
 }
 
 #[cfg(test)]
@@ -192,8 +192,8 @@ async fn start_configured_daemon_after_install(
 
     match action {
         ConfigureDaemonStartAction::Restart => crate::daemon::restart(Some(daemon_config)).await,
-        ConfigureDaemonStartAction::StartService => {
-            crate::daemon::start_service(daemon_config, default_dashboard_server_config(), None)
+        ConfigureDaemonStartAction::StartDetached => {
+            crate::daemon::start_detached(daemon_config, default_dashboard_server_config(), None)
                 .await
         }
     }
@@ -206,7 +206,7 @@ fn configure_daemon_start_action(
     if runtime.is_some() || service.is_some() {
         ConfigureDaemonStartAction::Restart
     } else {
-        ConfigureDaemonStartAction::StartService
+        ConfigureDaemonStartAction::StartDetached
     }
 }
 
@@ -351,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn configure_daemon_start_action_restarts_existing_daemon() {
+    fn configure_daemon_start_action_restarts_existing_daemon_and_starts_fresh_detached() {
         let temp = TempDir::new().expect("temp dir");
         let daemon_config = crate::daemon::ResolvedDaemonConfig {
             config_path: temp.path().join("config.toml"),
@@ -369,7 +369,7 @@ mod tests {
         );
         assert_eq!(
             configure_daemon_start_action(None, None),
-            ConfigureDaemonStartAction::StartService
+            ConfigureDaemonStartAction::StartDetached
         );
     }
 
@@ -416,7 +416,7 @@ mod tests {
                         start_actions_for_hook.borrow_mut().push(action);
                         Ok(fake_daemon_state(
                             daemon_config,
-                            crate::daemon::DaemonMode::Service,
+                            crate::daemon::DaemonMode::Detached,
                         ))
                     },
                     || {
@@ -445,7 +445,7 @@ mod tests {
                 );
                 assert_eq!(
                     start_actions.borrow().as_slice(),
-                    &[ConfigureDaemonStartAction::StartService]
+                    &[ConfigureDaemonStartAction::StartDetached]
                 );
 
                 let content =
