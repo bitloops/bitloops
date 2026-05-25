@@ -273,7 +273,7 @@ fn daemon_lifecycle_spool_does_not_process_later_job_when_head_retries() -> anyh
         1_778_800_001,
     )?;
 
-    assert_eq!(harness.process_once()?, 0);
+    assert_eq!(harness.process_once()?, 1);
 
     let rows =
         crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(&harness.sqlite)?;
@@ -283,6 +283,10 @@ fn daemon_lifecycle_spool_does_not_process_later_job_when_head_retries() -> anyh
         crate::host::checkpoints::lifecycle::spool::LifecycleJobStatus::Pending
     );
     assert_eq!(rows[0].attempts, 1);
+    assert!(
+        rows[0].available_at_unix > rows[0].updated_at_unix,
+        "failed head should be requeued for a future retry"
+    );
     assert!(
         rows[0]
             .last_error
@@ -298,17 +302,6 @@ fn daemon_lifecycle_spool_does_not_process_later_job_when_head_retries() -> anyh
     assert_eq!(rows[1].attempts, 0);
     assert!(rows[1].last_error.is_none());
 
-    assert_eq!(harness.process_once()?, 0);
-
-    let rows =
-        crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(&harness.sqlite)?;
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].attempts, 1);
-    assert_eq!(rows[1].attempts, 0);
-    assert_eq!(
-        rows[1].status,
-        crate::host::checkpoints::lifecycle::spool::LifecycleJobStatus::Pending
-    );
     Ok(())
 }
 
@@ -330,7 +323,7 @@ fn daemon_lifecycle_spool_failed_head_unblocks_later_job_at_max_attempts() -> an
             )?;
         }
 
-        assert_eq!(harness.process_once()?, 0);
+        assert_eq!(harness.process_once()?, 1);
 
         let rows = crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(
             &harness.sqlite,

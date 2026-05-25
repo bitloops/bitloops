@@ -35,7 +35,7 @@ pub(crate) fn process_lifecycle_spool_once(sqlite: &SqliteConnectionPool) -> Res
                 &job,
                 &format!("{err:#}"),
             )?;
-            Ok(0)
+            Ok(1)
         }
     }
 }
