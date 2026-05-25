@@ -108,6 +108,22 @@ fn codex_response_item_line(role: &str, kind: &str, text: &str) -> String {
     .to_string()
 }
 
+fn cursor_project_transcript_dir(
+    home: &std::path::Path,
+    repo_root: &std::path::Path,
+) -> std::path::PathBuf {
+    let project_dir: String = repo_root
+        .to_string_lossy()
+        .trim_start_matches('/')
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect();
+    home.join(".cursor")
+        .join("projects")
+        .join(project_dir)
+        .join("agent-transcripts")
+}
+
 #[test]
 fn lifecycle_adapters_expose_usage_capabilities_for_supported_agents() {
     let claude = ClaudeCodeLifecycleAdapter;
@@ -466,6 +482,164 @@ fn codex_stop_route_uses_explicit_repo_root_for_transcript_fallback() -> Result<
                 .expect("load saved interaction session");
             assert_eq!(saved_transcript_path, transcript_path_str);
 
+            Ok(())
+        },
+    )?;
+
+    Ok(())
+}
+
+#[test]
+fn route_session_end_uses_explicit_repo_root_when_daemon_cwd_differs() -> Result<()> {
+    let repo = seed_repo();
+    let other_cwd = TempDir::new().expect("temp dir");
+    let session_id = "claude-explicit-repo-session-end";
+    let transcript_path = repo.path().join("claude-session-end.jsonl");
+    let transcript_path_str = transcript_path.to_string_lossy().to_string();
+    std::fs::write(&transcript_path, "").expect("write transcript");
+
+    let state_dir = repo.path().join(".explicit-session-end-state");
+    let state_dir_str = state_dir.to_string_lossy().to_string();
+    with_process_state(
+        Some(other_cwd.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir_str.as_str()),
+        )],
+        || -> Result<()> {
+            let backend = create_session_backend_or_local(repo.path());
+            backend.save_session(&crate::host::checkpoints::session::state::SessionState {
+                session_id: session_id.to_string(),
+                phase: crate::host::checkpoints::session::phase::SessionPhase::Active,
+                transcript_path: transcript_path_str.clone(),
+                agent_type: AGENT_NAME_CLAUDE_CODE.to_string(),
+                ..Default::default()
+            })?;
+
+            let payload = serde_json::json!({
+                "session_id": session_id,
+                "transcript_path": transcript_path_str,
+            })
+            .to_string();
+            route_hook_command_to_lifecycle_for_repo(
+                repo.path(),
+                AGENT_NAME_CLAUDE_CODE,
+                CLAUDE_HOOK_SESSION_END,
+                &payload,
+            )?;
+
+            let saved = backend
+                .load_session(session_id)?
+                .expect("session state should exist in repo backend");
+            assert_eq!(
+                saved.phase,
+                crate::host::checkpoints::session::phase::SessionPhase::Ended
+            );
+            assert!(saved.ended_at.is_some());
+            Ok(())
+        },
+    )?;
+
+    Ok(())
+}
+
+#[test]
+fn route_compaction_uses_explicit_repo_root_when_daemon_cwd_differs() -> Result<()> {
+    let repo = seed_repo();
+    let other_cwd = TempDir::new().expect("temp dir");
+    let session_id = "gemini-explicit-repo-compaction";
+    let transcript_path = repo.path().join("gemini-compaction.jsonl");
+    let transcript_path_str = transcript_path.to_string_lossy().to_string();
+    std::fs::write(&transcript_path, "").expect("write transcript");
+
+    let state_dir = repo.path().join(".explicit-compaction-state");
+    let state_dir_str = state_dir.to_string_lossy().to_string();
+    with_process_state(
+        Some(other_cwd.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir_str.as_str()),
+        )],
+        || -> Result<()> {
+            let backend = create_session_backend_or_local(repo.path());
+            backend.save_session(&crate::host::checkpoints::session::state::SessionState {
+                session_id: session_id.to_string(),
+                phase: crate::host::checkpoints::session::phase::SessionPhase::Active,
+                pending: crate::host::checkpoints::session::state::PendingCheckpointState {
+                    checkpoint_transcript_start: 42,
+                    ..Default::default()
+                },
+                transcript_path: transcript_path_str.clone(),
+                agent_type: AGENT_NAME_GEMINI.to_string(),
+                ..Default::default()
+            })?;
+
+            let payload = serde_json::json!({
+                "session_id": session_id,
+                "transcript_path": transcript_path_str,
+            })
+            .to_string();
+            route_hook_command_to_lifecycle_for_repo(
+                repo.path(),
+                AGENT_NAME_GEMINI,
+                GEMINI_HOOK_PRE_COMPRESS,
+                &payload,
+            )?;
+
+            let saved = backend
+                .load_session(session_id)?
+                .expect("session state should exist in repo backend");
+            assert_eq!(saved.pending.checkpoint_transcript_start, 0);
+            Ok(())
+        },
+    )?;
+
+    Ok(())
+}
+
+#[test]
+fn route_cursor_prompt_uses_explicit_repo_root_for_transcript_fallback() -> Result<()> {
+    let repo = seed_repo();
+    let other_cwd = TempDir::new().expect("temp dir");
+    let home = TempDir::new().expect("temp home");
+    let session_id = "cursor-explicit-repo-transcript";
+    let transcript_dir = cursor_project_transcript_dir(home.path(), repo.path());
+    std::fs::create_dir_all(&transcript_dir).expect("create cursor transcript dir");
+    let transcript_path = transcript_dir.join(format!("{session_id}.jsonl"));
+    let transcript_path_str = transcript_path.to_string_lossy().to_string();
+    std::fs::write(&transcript_path, r#"{"type":"user","text":"hello"}"#)
+        .expect("write cursor transcript");
+
+    let state_dir = repo.path().join(".explicit-cursor-state");
+    let state_dir_str = state_dir.to_string_lossy().to_string();
+    let home_str = home.path().to_string_lossy().to_string();
+    with_process_state(
+        Some(other_cwd.path()),
+        &[
+            (
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_dir_str.as_str()),
+            ),
+            ("HOME", Some(home_str.as_str())),
+        ],
+        || -> Result<()> {
+            let payload = serde_json::json!({
+                "conversation_id": session_id,
+                "prompt": "Explain tracked.txt",
+            })
+            .to_string();
+            route_hook_command_to_lifecycle_for_repo(
+                repo.path(),
+                AGENT_NAME_CURSOR,
+                CURSOR_HOOK_BEFORE_SUBMIT_PROMPT,
+                &payload,
+            )?;
+
+            let backend = create_session_backend_or_local(repo.path());
+            let saved = backend
+                .load_session(session_id)?
+                .expect("session state should exist in repo backend");
+            assert_eq!(saved.transcript_path, transcript_path_str);
             Ok(())
         },
     )?;

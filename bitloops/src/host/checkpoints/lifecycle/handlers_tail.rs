@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+use std::path::Path;
+
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use super::adapter::LifecycleAgentAdapter;
@@ -37,7 +39,7 @@ use crate::host::runtime_store::{
 };
 
 pub fn handle_lifecycle_compaction(
-    _agent: &dyn LifecycleAgentAdapter,
+    agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
     let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::PreserveEmpty)?;
@@ -56,8 +58,21 @@ pub fn handle_lifecycle_compaction(
             return Ok(());
         }
     };
+    handle_lifecycle_compaction_for_repo(&repo_root, agent, event)
+}
 
-    let backend = create_session_backend_or_local(&repo_root);
+pub fn handle_lifecycle_compaction_for_repo(
+    repo_root: &Path,
+    _agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
+    let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::PreserveEmpty)?;
+    if session_id.is_empty() {
+        eprintln!("Context compaction: transcript offset reset");
+        return Ok(());
+    }
+
+    let backend = create_session_backend_or_local(repo_root);
     match backend.load_session(&session_id) {
         Ok(Some(mut state)) => {
             let context = SessionTransitionContext {
@@ -132,13 +147,21 @@ pub fn handle_lifecycle_session_end(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
+    let repo_root = crate::utils::paths::repo_root()?;
+    handle_lifecycle_session_end_for_repo(&repo_root, agent, event)
+}
+
+pub fn handle_lifecycle_session_end_for_repo(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
     let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::PreserveEmpty)?;
     if session_id.is_empty() {
         return Ok(());
     }
 
-    let repo_root = crate::utils::paths::repo_root()?;
-    let backend = create_session_backend_or_local(&repo_root);
+    let backend = create_session_backend_or_local(repo_root);
     if event.finalize_open_turn {
         let pre_prompt = backend.load_pre_prompt(&session_id)?;
         let session = backend.load_session(&session_id)?;
@@ -154,7 +177,7 @@ pub fn handle_lifecycle_session_end(
         if should_finalize_turn {
             let mut turn_end = event.clone();
             turn_end.event_type = Some(super::types::LifecycleEventType::TurnEnd);
-            super::turn_end::handle_lifecycle_turn_end(agent, &turn_end)?;
+            super::turn_end::handle_lifecycle_turn_end_for_repo(repo_root, agent, &turn_end)?;
         }
     }
     let ended_at = now_rfc3339();
@@ -234,64 +257,100 @@ pub fn handle_lifecycle_session_end(
 }
 
 pub fn handle_lifecycle_subagent_start(
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
+    let Ok(repo_root) = crate::utils::paths::repo_root() else {
+        return Ok(());
+    };
+    handle_lifecycle_subagent_start_for_repo(&repo_root, agent, event)
+}
+
+pub fn handle_lifecycle_subagent_start_for_repo(
+    repo_root: &Path,
     _agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    if let Ok(repo_root) = crate::utils::paths::repo_root() {
-        let backend = create_session_backend_or_local(&repo_root);
-        if let Some(mut state) = backend.load_session(&event.session_id)? {
-            state.last_interaction_time = Some(now_rfc3339());
-            backend.save_session(&state)?;
-        }
+    let backend = create_session_backend_or_local(repo_root);
+    if let Some(mut state) = backend.load_session(&event.session_id)? {
+        state.last_interaction_time = Some(now_rfc3339());
+        backend.save_session(&state)?;
+    }
 
-        let marker = PreTaskState {
-            tool_use_id: event.tool_use_id.clone(),
+    let marker = PreTaskState {
+        tool_use_id: event.tool_use_id.clone(),
+        session_id: event.session_id.clone(),
+        timestamp: now_rfc3339(),
+        untracked_files: detect_untracked_files(Some(repo_root)),
+    };
+    backend.create_pre_task_marker(&marker)?;
+
+    if let Some(spool) = resolve_interaction_spool(repo_root) {
+        if let Err(err) = spool.record_event(&InteractionEvent {
+            event_id: generate_interaction_event_id(),
             session_id: event.session_id.clone(),
-            timestamp: now_rfc3339(),
-            untracked_files: detect_untracked_files(Some(&repo_root)),
-        };
-        backend.create_pre_task_marker(&marker)?;
-
-        if let Some(spool) = resolve_interaction_spool(&repo_root) {
-            if let Err(err) = spool.record_event(&InteractionEvent {
-                event_id: generate_interaction_event_id(),
-                session_id: event.session_id.clone(),
-                turn_id: None,
-                repo_id: spool.repo_id().to_string(),
-                event_type: InteractionEventType::SubagentStart,
-                event_time: now_rfc3339(),
-                source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
-                agent_type: String::new(),
-                model: resolve_interaction_model(&event.model, &event.session_ref),
-                payload: serde_json::json!({
-                    "subagent_id": event.subagent_id,
-                    "tool_use_id": event.tool_use_id,
-                }),
-                ..Default::default()
-            }) {
-                eprintln!("[bitloops] Warning: failed to spool subagent_start event: {err}");
-            }
-            flush_interaction_spool_best_effort(&repo_root);
+            turn_id: None,
+            repo_id: spool.repo_id().to_string(),
+            event_type: InteractionEventType::SubagentStart,
+            event_time: now_rfc3339(),
+            source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
+            agent_type: String::new(),
+            model: resolve_interaction_model(&event.model, &event.session_ref),
+            payload: serde_json::json!({
+                "subagent_id": event.subagent_id,
+                "tool_use_id": event.tool_use_id,
+            }),
+            ..Default::default()
+        }) {
+            eprintln!("[bitloops] Warning: failed to spool subagent_start event: {err}");
         }
+        flush_interaction_spool_best_effort(repo_root);
     }
     Ok(())
 }
 
 pub fn handle_lifecycle_tool_invocation(
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
+    let Ok(repo_root) = crate::utils::paths::repo_root() else {
+        return Ok(());
+    };
+    handle_lifecycle_tool_invocation_for_repo(&repo_root, agent, event)
+}
+
+pub fn handle_lifecycle_tool_invocation_for_repo(
+    repo_root: &Path,
     _agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    handle_lifecycle_tool_event(event, InteractionEventType::ToolInvocationObserved)
+    handle_lifecycle_tool_event_for_repo(
+        repo_root,
+        event,
+        InteractionEventType::ToolInvocationObserved,
+    )
 }
 
 pub fn handle_lifecycle_tool_result(
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
+    let Ok(repo_root) = crate::utils::paths::repo_root() else {
+        return Ok(());
+    };
+    handle_lifecycle_tool_result_for_repo(&repo_root, agent, event)
+}
+
+pub fn handle_lifecycle_tool_result_for_repo(
+    repo_root: &Path,
     _agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    handle_lifecycle_tool_event(event, InteractionEventType::ToolResultObserved)
+    handle_lifecycle_tool_event_for_repo(repo_root, event, InteractionEventType::ToolResultObserved)
 }
 
-fn handle_lifecycle_tool_event(
+fn handle_lifecycle_tool_event_for_repo(
+    repo_root: &Path,
     event: &LifecycleEvent,
     event_type: InteractionEventType,
 ) -> Result<()> {
@@ -301,86 +360,84 @@ fn handle_lifecycle_tool_event(
         return Ok(());
     }
 
-    if let Ok(repo_root) = crate::utils::paths::repo_root() {
-        let backend = create_session_backend_or_local(&repo_root);
-        let now = now_rfc3339();
-        let session_state = backend.load_session(&event.session_id)?;
-        if let Some(mut state) = session_state.clone() {
-            state.last_interaction_time = Some(now.clone());
-            backend.save_session(&state)?;
-        }
+    let backend = create_session_backend_or_local(repo_root);
+    let now = now_rfc3339();
+    let session_state = backend.load_session(&event.session_id)?;
+    if let Some(mut state) = session_state.clone() {
+        state.last_interaction_time = Some(now.clone());
+        backend.save_session(&state)?;
+    }
 
-        if let Some(spool) = resolve_interaction_spool(&repo_root) {
-            let turn_id = session_state
+    if let Some(spool) = resolve_interaction_spool(repo_root) {
+        let turn_id = session_state
+            .as_ref()
+            .filter(|state| !state.turn_id.trim().is_empty())
+            .map(|state| state.turn_id.clone());
+        let transcript_path = session_state
+            .as_ref()
+            .map(|state| state.transcript_path.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(event.session_ref.as_str());
+        let model = resolve_interaction_model(&event.model, transcript_path);
+        let tool_input = event.tool_input.as_ref().unwrap_or(&Value::Null);
+        let input = derive_tool_input(tool_name, tool_input);
+        let input_summary = input.summary.clone();
+        let command = input.command.clone();
+        let command_binary = input.command_binary.clone();
+        let command_argv = input.command_argv.clone();
+        let output_summary = event
+            .tool_response
+            .as_ref()
+            .map(summarise_tool_result)
+            .unwrap_or_default();
+        let payload = match event_type {
+            InteractionEventType::ToolInvocationObserved => serde_json::json!({
+                "source": INTERACTION_SOURCE_LIVE_HOOK,
+                "tool_name": tool_name,
+                "tool_input": event.tool_input.clone().unwrap_or(Value::Null),
+                "input_summary": input_summary,
+                "command": command,
+                "command_binary": command_binary,
+                "command_argv": command_argv,
+                "transcript_path": transcript_path,
+            }),
+            InteractionEventType::ToolResultObserved => serde_json::json!({
+                "source": INTERACTION_SOURCE_LIVE_HOOK,
+                "tool_name": tool_name,
+                "tool_response": event.tool_response.clone().unwrap_or(Value::Null),
+                "output_summary": output_summary,
+                "transcript_path": transcript_path,
+            }),
+            _ => return Ok(()),
+        };
+        let task_description = match event_type {
+            InteractionEventType::ToolInvocationObserved => input.summary,
+            InteractionEventType::ToolResultObserved => output_summary.clone(),
+            _ => String::new(),
+        };
+        if let Err(err) = spool.record_event(&InteractionEvent {
+            event_id: generate_interaction_event_id(),
+            session_id: event.session_id.clone(),
+            turn_id,
+            repo_id: spool.repo_id().to_string(),
+            event_type,
+            event_time: now.clone(),
+            source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
+            sequence_number: 0,
+            agent_type: session_state
                 .as_ref()
-                .filter(|state| !state.turn_id.trim().is_empty())
-                .map(|state| state.turn_id.clone());
-            let transcript_path = session_state
-                .as_ref()
-                .map(|state| state.transcript_path.as_str())
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or(event.session_ref.as_str());
-            let model = resolve_interaction_model(&event.model, transcript_path);
-            let tool_input = event.tool_input.as_ref().unwrap_or(&Value::Null);
-            let input = derive_tool_input(tool_name, tool_input);
-            let input_summary = input.summary.clone();
-            let command = input.command.clone();
-            let command_binary = input.command_binary.clone();
-            let command_argv = input.command_argv.clone();
-            let output_summary = event
-                .tool_response
-                .as_ref()
-                .map(summarise_tool_result)
-                .unwrap_or_default();
-            let payload = match event_type {
-                InteractionEventType::ToolInvocationObserved => serde_json::json!({
-                    "source": INTERACTION_SOURCE_LIVE_HOOK,
-                    "tool_name": tool_name,
-                    "tool_input": event.tool_input.clone().unwrap_or(Value::Null),
-                    "input_summary": input_summary,
-                    "command": command,
-                    "command_binary": command_binary,
-                    "command_argv": command_argv,
-                    "transcript_path": transcript_path,
-                }),
-                InteractionEventType::ToolResultObserved => serde_json::json!({
-                    "source": INTERACTION_SOURCE_LIVE_HOOK,
-                    "tool_name": tool_name,
-                    "tool_response": event.tool_response.clone().unwrap_or(Value::Null),
-                    "output_summary": output_summary,
-                    "transcript_path": transcript_path,
-                }),
-                _ => return Ok(()),
-            };
-            let task_description = match event_type {
-                InteractionEventType::ToolInvocationObserved => input.summary,
-                InteractionEventType::ToolResultObserved => output_summary.clone(),
-                _ => String::new(),
-            };
-            if let Err(err) = spool.record_event(&InteractionEvent {
-                event_id: generate_interaction_event_id(),
-                session_id: event.session_id.clone(),
-                turn_id,
-                repo_id: spool.repo_id().to_string(),
-                event_type,
-                event_time: now.clone(),
-                source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
-                sequence_number: 0,
-                agent_type: session_state
-                    .as_ref()
-                    .map(|state| state.agent_type.clone())
-                    .unwrap_or_default(),
-                model,
-                tool_use_id: tool_use_id.to_string(),
-                tool_kind: tool_name.to_string(),
-                task_description,
-                payload,
-                ..Default::default()
-            }) {
-                eprintln!("[bitloops] Warning: failed to spool {event_type} event: {err}");
-            }
-            flush_interaction_spool_best_effort(&repo_root);
+                .map(|state| state.agent_type.clone())
+                .unwrap_or_default(),
+            model,
+            tool_use_id: tool_use_id.to_string(),
+            tool_kind: tool_name.to_string(),
+            task_description,
+            payload,
+            ..Default::default()
+        }) {
+            eprintln!("[bitloops] Warning: failed to spool {event_type} event: {err}");
         }
+        flush_interaction_spool_best_effort(repo_root);
     }
 
     Ok(())
@@ -390,138 +447,148 @@ pub fn handle_lifecycle_subagent_end(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    if let Ok(repo_root) = crate::utils::paths::repo_root() {
-        let backend = create_session_backend_or_local(&repo_root);
-        let subagent_transcript_path = resolve_subagent_transcript_path(
-            &event.session_ref,
-            &event.session_id,
-            &event.subagent_id,
-        );
-        let pre_untracked = backend
-            .load_pre_task_marker(&event.tool_use_id)?
-            .map(|s| s.untracked_files)
-            .unwrap_or_default();
-        let changes = detect_file_changes(Some(&repo_root), Some(&pre_untracked));
-        let total_changes =
-            changes.modified.len() + changes.new_files.len() + changes.deleted.len();
-        let (subagent_type, task_description) =
-            parse_subagent_type_and_description(event.tool_input.as_ref());
+    let Ok(repo_root) = crate::utils::paths::repo_root() else {
+        return Ok(());
+    };
+    handle_lifecycle_subagent_end_for_repo(&repo_root, agent, event)
+}
 
-        if let Some(spool) = resolve_interaction_spool(&repo_root) {
-            if let Err(err) = spool.record_event(&InteractionEvent {
-                event_id: generate_interaction_event_id(),
-                session_id: event.session_id.clone(),
-                turn_id: None,
-                repo_id: spool.repo_id().to_string(),
-                event_type: InteractionEventType::SubagentEnd,
-                event_time: now_rfc3339(),
-                source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
-                agent_type: String::new(),
-                model: resolve_interaction_model(&event.model, &event.session_ref),
-                payload: serde_json::json!({
-                    "tool_use_id": event.tool_use_id,
-                    "subagent_id": event.subagent_id,
-                    "subagent_type": subagent_type,
-                    "task_description": task_description,
-                    "subagent_transcript_path": subagent_transcript_path,
-                }),
-                tool_use_id: event.tool_use_id.clone(),
-                tool_kind: subagent_type.clone(),
-                task_description: task_description.clone(),
-                subagent_id: event.subagent_id.clone(),
-                ..Default::default()
-            }) {
-                eprintln!("[bitloops] Warning: failed to spool subagent_end event: {err}");
-            }
-            flush_interaction_spool_best_effort(&repo_root);
+pub fn handle_lifecycle_subagent_end_for_repo(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
+    let backend = create_session_backend_or_local(repo_root);
+    let subagent_transcript_path =
+        resolve_subagent_transcript_path(&event.session_ref, &event.session_id, &event.subagent_id);
+    let pre_untracked = backend
+        .load_pre_task_marker(&event.tool_use_id)?
+        .map(|s| s.untracked_files)
+        .unwrap_or_default();
+    let changes = detect_file_changes(Some(repo_root), Some(&pre_untracked));
+    let total_changes = changes.modified.len() + changes.new_files.len() + changes.deleted.len();
+    let (subagent_type, task_description) =
+        parse_subagent_type_and_description(event.tool_input.as_ref());
+
+    if let Some(spool) = resolve_interaction_spool(repo_root) {
+        if let Err(err) = spool.record_event(&InteractionEvent {
+            event_id: generate_interaction_event_id(),
+            session_id: event.session_id.clone(),
+            turn_id: None,
+            repo_id: spool.repo_id().to_string(),
+            event_type: InteractionEventType::SubagentEnd,
+            event_time: now_rfc3339(),
+            source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
+            agent_type: String::new(),
+            model: resolve_interaction_model(&event.model, &event.session_ref),
+            payload: serde_json::json!({
+                "tool_use_id": event.tool_use_id,
+                "subagent_id": event.subagent_id,
+                "subagent_type": subagent_type,
+                "task_description": task_description,
+                "subagent_transcript_path": subagent_transcript_path,
+            }),
+            tool_use_id: event.tool_use_id.clone(),
+            tool_kind: subagent_type.clone(),
+            task_description: task_description.clone(),
+            subagent_id: event.subagent_id.clone(),
+            ..Default::default()
+        }) {
+            eprintln!("[bitloops] Warning: failed to spool subagent_end event: {err}");
         }
+        flush_interaction_spool_best_effort(repo_root);
+    }
 
-        if total_changes > 0 {
-            let session_metadata = std::fs::read(&event.session_ref).ok().and_then(|transcript| {
+    if total_changes > 0 {
+        let session_metadata = std::fs::read(&event.session_ref)
+            .ok()
+            .and_then(|transcript| {
                 let prompts = extract_prompts_from_transcript_bytes(&transcript);
-                let commit_message = crate::host::hooks::runtime::agent_runtime::helpers::generate_commit_message(
-                    prompts.last().map(String::as_str).unwrap_or_default(),
-                );
+                let commit_message =
+                    crate::host::hooks::runtime::agent_runtime::helpers::generate_commit_message(
+                        prompts.last().map(String::as_str).unwrap_or_default(),
+                    );
                 let metadata =
                     build_session_metadata_bundle(&event.session_id, &commit_message, &transcript)
                         .ok()?;
-                let runtime_store = RepoSqliteRuntimeStore::open(&repo_root).ok()?;
+                let runtime_store = RepoSqliteRuntimeStore::open(repo_root).ok()?;
                 let mut snapshot =
                     SessionMetadataSnapshot::new(event.session_id.clone(), metadata.clone());
                 snapshot.transcript_identifier = event.session_id.clone();
                 snapshot.transcript_path = event.session_ref.clone();
-                runtime_store.save_session_metadata_snapshot(&snapshot).ok()?;
+                runtime_store
+                    .save_session_metadata_snapshot(&snapshot)
+                    .ok()?;
                 Some(metadata)
             });
-            let checkpoint_json = build_task_checkpoint_payload(
-                &event.session_id,
-                &event.tool_use_id,
-                "",
-                &event.subagent_id,
-            )?;
-            let subagent_transcript = if subagent_transcript_path.trim().is_empty() {
-                None
-            } else {
-                std::fs::read(&subagent_transcript_path).ok()
-            };
-            let runtime_store = RepoSqliteRuntimeStore::open(&repo_root)
-                .context("opening runtime store for lifecycle task checkpoint artefacts")?;
-            let mut checkpoint_artefact = TaskCheckpointArtefact::new(
+        let checkpoint_json = build_task_checkpoint_payload(
+            &event.session_id,
+            &event.tool_use_id,
+            "",
+            &event.subagent_id,
+        )?;
+        let subagent_transcript = if subagent_transcript_path.trim().is_empty() {
+            None
+        } else {
+            std::fs::read(&subagent_transcript_path).ok()
+        };
+        let runtime_store = RepoSqliteRuntimeStore::open(repo_root)
+            .context("opening runtime store for lifecycle task checkpoint artefacts")?;
+        let mut checkpoint_artefact = TaskCheckpointArtefact::new(
+            event.session_id.clone(),
+            event.tool_use_id.clone(),
+            RuntimeMetadataBlobType::TaskCheckpoint,
+            checkpoint_json.clone(),
+        );
+        checkpoint_artefact.agent_id = event.subagent_id.clone();
+        runtime_store.save_task_checkpoint_artefact(&checkpoint_artefact)?;
+        if let Some(payload) = subagent_transcript.as_ref() {
+            let mut transcript_artefact = TaskCheckpointArtefact::new(
                 event.session_id.clone(),
                 event.tool_use_id.clone(),
-                RuntimeMetadataBlobType::TaskCheckpoint,
-                checkpoint_json.clone(),
+                RuntimeMetadataBlobType::SubagentTranscript,
+                payload.clone(),
             );
-            checkpoint_artefact.agent_id = event.subagent_id.clone();
-            runtime_store.save_task_checkpoint_artefact(&checkpoint_artefact)?;
-            if let Some(payload) = subagent_transcript.as_ref() {
-                let mut transcript_artefact = TaskCheckpointArtefact::new(
-                    event.session_id.clone(),
-                    event.tool_use_id.clone(),
-                    RuntimeMetadataBlobType::SubagentTranscript,
-                    payload.clone(),
-                );
-                transcript_artefact.agent_id = event.subagent_id.clone();
-                runtime_store.save_task_checkpoint_artefact(&transcript_artefact)?;
-            }
-
-            let strategy = super::resolve_configured_strategy(&repo_root)?;
-            strategy.save_task_step(&TaskStepContext {
-                session_id: event.session_id.clone(),
-                tool_use_id: event.tool_use_id.clone(),
-                agent_id: event.subagent_id.clone(),
-                modified_files: changes.modified,
-                new_files: changes.new_files,
-                deleted_files: changes.deleted,
-                session_metadata,
-                task_metadata: Some(TaskCheckpointMetadataBundle {
-                    checkpoint_json: Some(checkpoint_json),
-                    subagent_transcript,
-                    incremental_checkpoint: None,
-                    prompt: None,
-                }),
-                transcript_path: event.session_ref.clone(),
-                subagent_transcript_path,
-                checkpoint_uuid: String::new(),
-                author_name: String::new(),
-                author_email: String::new(),
-                subagent_type,
-                task_description,
-                agent_type: agent.agent_name().to_string(),
-                is_incremental: false,
-                incremental_sequence: 0,
-                incremental_type: String::new(),
-                incremental_data: String::new(),
-                todo_content: String::new(),
-                commit_message: String::new(),
-            })?;
+            transcript_artefact.agent_id = event.subagent_id.clone();
+            runtime_store.save_task_checkpoint_artefact(&transcript_artefact)?;
         }
 
-        backend.delete_pre_task_marker(&event.tool_use_id)?;
-        if let Some(mut state) = backend.load_session(&event.session_id)? {
-            state.last_interaction_time = Some(now_rfc3339());
-            backend.save_session(&state)?;
-        }
+        let strategy = super::resolve_configured_strategy(repo_root)?;
+        strategy.save_task_step(&TaskStepContext {
+            session_id: event.session_id.clone(),
+            tool_use_id: event.tool_use_id.clone(),
+            agent_id: event.subagent_id.clone(),
+            modified_files: changes.modified,
+            new_files: changes.new_files,
+            deleted_files: changes.deleted,
+            session_metadata,
+            task_metadata: Some(TaskCheckpointMetadataBundle {
+                checkpoint_json: Some(checkpoint_json),
+                subagent_transcript,
+                incremental_checkpoint: None,
+                prompt: None,
+            }),
+            transcript_path: event.session_ref.clone(),
+            subagent_transcript_path,
+            checkpoint_uuid: String::new(),
+            author_name: String::new(),
+            author_email: String::new(),
+            subagent_type,
+            task_description,
+            agent_type: agent.agent_name().to_string(),
+            is_incremental: false,
+            incremental_sequence: 0,
+            incremental_type: String::new(),
+            incremental_data: String::new(),
+            todo_content: String::new(),
+            commit_message: String::new(),
+        })?;
+    }
+
+    backend.delete_pre_task_marker(&event.tool_use_id)?;
+    if let Some(mut state) = backend.load_session(&event.session_id)? {
+        state.last_interaction_time = Some(now_rfc3339());
+        backend.save_session(&state)?;
     }
     Ok(())
 }
@@ -533,20 +600,28 @@ pub fn handle_lifecycle_todo_checkpoint(
     let Ok(repo_root) = crate::utils::paths::repo_root() else {
         return Ok(());
     };
-    let backend = create_session_backend_or_local(&repo_root);
+    handle_lifecycle_todo_checkpoint_for_repo(&repo_root, agent, event)
+}
+
+pub fn handle_lifecycle_todo_checkpoint_for_repo(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
+    let backend = create_session_backend_or_local(repo_root);
     let active_task = backend.find_active_pre_task()?;
     let task_tool_use_id = match active_task {
         Some(id) => id,
         None => return Ok(()),
     };
 
-    let (skip, branch_name) = crate::git::should_skip_on_default_branch();
+    let (skip, branch_name) = should_skip_on_default_branch_for_repo(repo_root);
     if skip {
         eprintln!("Bitloops: skipping incremental checkpoint on branch '{branch_name}'");
         return Ok(());
     }
 
-    let changes = detect_file_changes(Some(&repo_root), None);
+    let changes = detect_file_changes(Some(repo_root), None);
     let total_changes = changes.modified.len() + changes.new_files.len() + changes.deleted.len();
     if total_changes == 0 {
         return Ok(());
@@ -560,12 +635,12 @@ pub fn handle_lifecycle_todo_checkpoint(
         }
     }
 
-    let incremental_sequence = RepoSqliteRuntimeStore::open(&repo_root)
+    let incremental_sequence = RepoSqliteRuntimeStore::open(repo_root)
         .and_then(|store| {
             store.next_task_incremental_sequence(&event.session_id, &task_tool_use_id)
         })
         .unwrap_or_else(|_| {
-            next_incremental_sequence(Some(&repo_root), &event.session_id, &task_tool_use_id)
+            next_incremental_sequence(Some(repo_root), &event.session_id, &task_tool_use_id)
         });
     let session_metadata = std::fs::read(&event.session_ref)
         .ok()
@@ -578,7 +653,7 @@ pub fn handle_lifecycle_todo_checkpoint(
             let metadata =
                 build_session_metadata_bundle(&event.session_id, &commit_message, &transcript)
                     .ok()?;
-            let runtime_store = RepoSqliteRuntimeStore::open(&repo_root).ok()?;
+            let runtime_store = RepoSqliteRuntimeStore::open(repo_root).ok()?;
             let mut snapshot =
                 SessionMetadataSnapshot::new(event.session_id.clone(), metadata.clone());
             snapshot.transcript_identifier = event.session_id.clone();
@@ -597,7 +672,7 @@ pub fn handle_lifecycle_todo_checkpoint(
             .as_ref()
             .unwrap_or(&serde_json::Value::Null),
     )?;
-    let runtime_store = RepoSqliteRuntimeStore::open(&repo_root)
+    let runtime_store = RepoSqliteRuntimeStore::open(repo_root)
         .context("opening runtime store for lifecycle incremental checkpoint artefacts")?;
     let mut artefact = TaskCheckpointArtefact::new(
         event.session_id.clone(),
@@ -610,7 +685,7 @@ pub fn handle_lifecycle_todo_checkpoint(
     artefact.is_incremental = true;
     runtime_store.save_task_checkpoint_artefact(&artefact)?;
 
-    let strategy = super::resolve_configured_strategy(&repo_root)?;
+    let strategy = super::resolve_configured_strategy(repo_root)?;
     strategy.save_task_step(&TaskStepContext {
         session_id: event.session_id.clone(),
         tool_use_id: task_tool_use_id.clone(),
@@ -650,4 +725,81 @@ pub fn handle_lifecycle_todo_checkpoint(
     }
 
     Ok(())
+}
+
+fn should_skip_on_default_branch_for_repo(repo_root: &Path) -> (bool, String) {
+    is_on_default_branch_for_repo(repo_root).unwrap_or((false, String::new()))
+}
+
+fn is_on_default_branch_for_repo(repo_root: &Path) -> Result<(bool, String)> {
+    let current = git_output_for_repo(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .context("failed to get HEAD")?;
+    if !current.status.success() {
+        bail!("failed to get HEAD: {}", stderr_or_stdout(&current));
+    }
+
+    let current_branch = stdout_trimmed(&current).to_string();
+    if current_branch == "HEAD" {
+        return Ok((false, String::new()));
+    }
+
+    let default_branch = default_branch_name_for_repo(repo_root);
+    if default_branch.is_empty() {
+        return Ok((
+            current_branch == "main" || current_branch == "master",
+            current_branch,
+        ));
+    }
+
+    Ok((current_branch == default_branch, current_branch))
+}
+
+fn default_branch_name_for_repo(repo_root: &Path) -> String {
+    let symbolic = git_output_for_repo(repo_root, &["symbolic-ref", "refs/remotes/origin/HEAD"]);
+    if let Ok(output) = symbolic
+        && output.status.success()
+    {
+        let target = stdout_trimmed(&output);
+        if let Some(stripped) = target.strip_prefix("refs/remotes/origin/") {
+            return stripped.to_string();
+        }
+    }
+
+    for candidate in ["main", "master"] {
+        let status = std::process::Command::new("git")
+            .args([
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/remotes/origin/{candidate}"),
+            ])
+            .current_dir(repo_root)
+            .status();
+        if matches!(status, Ok(status) if status.success()) {
+            return candidate.to_string();
+        }
+    }
+
+    String::new()
+}
+
+fn git_output_for_repo(repo_root: &Path, args: &[&str]) -> Result<std::process::Output> {
+    std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo_root)
+        .output()
+        .with_context(|| format!("failed to execute git {}", args.join(" ")))
+}
+
+fn stdout_trimmed(output: &std::process::Output) -> &str {
+    std::str::from_utf8(&output.stdout).unwrap_or("").trim()
+}
+
+fn stderr_or_stdout(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    } else {
+        stderr
+    }
 }

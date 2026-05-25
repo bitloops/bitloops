@@ -566,6 +566,10 @@ pub(crate) fn route_hook_command_to_lifecycle_for_repo_with_workspace_snapshot(
         crate::adapters::agents::codex::lifecycle::parse_hook_event_for_repo(
             hook_name, &mut input, repo_root,
         )
+    } else if adapter.agent_name() == crate::adapters::agents::AGENT_NAME_CURSOR {
+        crate::adapters::agents::cursor::lifecycle::parse_hook_event_for_repo(
+            hook_name, &mut input, repo_root,
+        )
     } else {
         adapter.parse_hook_event(hook_name, &mut input)
     }

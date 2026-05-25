@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::{Result, anyhow};
 
 use super::adapter::LifecycleAgentAdapter;
@@ -52,14 +54,22 @@ pub fn handle_lifecycle_session_start(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
+    let repo_root = crate::utils::paths::repo_root()?;
+    handle_lifecycle_session_start_for_repo(&repo_root, agent, event)
+}
+
+pub fn handle_lifecycle_session_start_for_repo(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
     let canonical_request = build_phase3_canonical_request(agent.agent_name(), event)?;
     let session_id = apply_session_id_policy(
         &canonical_request.session.session_id,
         SessionIdPolicy::Strict,
     )
     .map_err(|_| anyhow!("no session_id in SessionStart event"))?;
-    let repo_root = crate::utils::paths::repo_root()?;
-    let backend = create_session_backend_or_local(&repo_root);
+    let backend = create_session_backend_or_local(repo_root);
 
     let mut state = backend.load_session(&session_id)?.unwrap_or_else(|| {
         crate::host::checkpoints::session::state::SessionState {
@@ -146,14 +156,22 @@ pub fn handle_lifecycle_turn_start(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
+    let repo_root = crate::utils::paths::repo_root()?;
+    handle_lifecycle_turn_start_for_repo(&repo_root, agent, event)
+}
+
+pub fn handle_lifecycle_turn_start_for_repo(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
     let canonical_request = build_phase3_canonical_request(agent.agent_name(), event)?;
     let session_id = apply_session_id_policy(
         &canonical_request.session.session_id,
         SessionIdPolicy::Strict,
     )
     .map_err(|_| anyhow!("no session_id in TurnStart event"))?;
-    let repo_root = crate::utils::paths::repo_root()?;
-    let backend = create_session_backend_or_local(&repo_root);
+    let backend = create_session_backend_or_local(repo_root);
 
     if event.source == PRE_PROMPT_SOURCE_CURSOR_SHELL
         && backend.load_pre_prompt(&session_id)?.is_some()
