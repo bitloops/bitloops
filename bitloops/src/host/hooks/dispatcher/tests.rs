@@ -246,39 +246,38 @@ fn agent_hooks_suppressed_env_rejects_false_values() {
 }
 
 #[test]
-fn supported_agent_terminal_turn_end_hooks_use_lifecycle_spool() {
-    assert!(should_spool_lifecycle_stop_hook(
-        AGENT_NAME_CODEX,
-        CODEX_HOOK_STOP
-    ));
-    assert!(should_spool_lifecycle_stop_hook(
-        AGENT_NAME_CLAUDE_CODE,
-        CLAUDE_HOOK_STOP
-    ));
-    assert!(should_spool_lifecycle_stop_hook(
-        AGENT_NAME_GEMINI,
-        crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_AGENT
-    ));
-    assert!(should_spool_lifecycle_stop_hook(
-        AGENT_NAME_CURSOR,
-        crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP
-    ));
-    assert!(should_spool_lifecycle_stop_hook(
-        AGENT_NAME_COPILOT,
-        crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP
-    ));
-    assert!(should_spool_lifecycle_stop_hook(
-        AGENT_NAME_OPEN_CODE,
-        crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END
-    ));
-    assert!(!should_spool_lifecycle_stop_hook(
-        AGENT_NAME_CODEX,
-        crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_USER_PROMPT_SUBMIT
-    ));
+fn terminal_turn_end_hooks_use_lifecycle_spool() {
+    let cases = [
+        (AGENT_NAME_CODEX, CODEX_HOOK_STOP),
+        (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_STOP),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_AGENT,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP,
+        ),
+        (
+            AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END,
+        ),
+    ];
+
+    for (agent, hook) in cases {
+        assert!(
+            should_spool_lifecycle_hook(agent, hook),
+            "expected lifecycle spooling for terminal turn-end agent={agent} hook={hook}"
+        );
+    }
 }
 
 #[test]
-fn non_stop_hooks_remain_synchronous() {
+fn non_terminal_hooks_remain_synchronous() {
     let cases = [
         (
             AGENT_NAME_CODEX,
@@ -324,7 +323,7 @@ fn non_stop_hooks_remain_synchronous() {
 
     for (agent, hook) in cases {
         assert!(
-            !should_spool_lifecycle_stop_hook(agent, hook),
+            !should_spool_lifecycle_hook(agent, hook),
             "unexpected spooling for agent={agent} hook={hook}"
         );
     }
@@ -341,7 +340,7 @@ fn codex_stop_hook_enqueue_creates_spool_without_inline_turn() -> Result<()> {
     );
     crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
 
-    enqueue_lifecycle_stop_from_hook(
+    enqueue_lifecycle_hook_from_hook(
         repo.path(),
         AGENT_NAME_CODEX,
         CODEX_HOOK_STOP,
@@ -351,10 +350,10 @@ fn codex_stop_hook_enqueue_creates_spool_without_inline_turn() -> Result<()> {
     let conn = rusqlite::Connection::open(
         crate::config::resolve_bound_repo_runtime_db_path_for_repo(repo.path())?,
     )?;
-    let stop_jobs: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM agent_lifecycle_stop_spool_jobs",
+    let (lifecycle_jobs, snapshots): (i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COUNT(workspace_snapshot) FROM agent_lifecycle_spool_jobs",
         [],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     let turns_table_exists: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'interaction_turns'",
@@ -369,7 +368,8 @@ fn codex_stop_hook_enqueue_creates_spool_without_inline_turn() -> Result<()> {
         })?
     };
 
-    assert_eq!(stop_jobs, 1);
+    assert_eq!(lifecycle_jobs, 1);
+    assert_eq!(snapshots, 1);
     assert_eq!(turns, 0, "hook enqueue must not run turn-end inline");
     Ok(())
 }

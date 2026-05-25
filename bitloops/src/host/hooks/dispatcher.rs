@@ -533,7 +533,7 @@ fn emit_hook_stdout_if_present(
     Ok(())
 }
 
-fn should_spool_lifecycle_stop_hook(agent_name: &str, hook_name: &str) -> bool {
+fn should_spool_lifecycle_hook(agent_name: &str, hook_name: &str) -> bool {
     matches!(
         (agent_name, hook_name),
         (AGENT_NAME_CODEX, CODEX_HOOK_STOP)
@@ -557,36 +557,34 @@ fn should_spool_lifecycle_stop_hook(agent_name: &str, hook_name: &str) -> bool {
     )
 }
 
-fn enqueue_lifecycle_stop_from_hook(
+fn enqueue_lifecycle_hook_from_hook(
     repo_root: &Path,
     agent_name: &str,
     hook_name: &str,
     stdin: &str,
-) -> Result<crate::host::checkpoints::lifecycle::spool::LifecycleStopHookEnqueueResult> {
+) -> Result<crate::host::checkpoints::lifecycle::spool::LifecycleHookEnqueueResult> {
     let repo = crate::host::devql::resolve_repo_identity(repo_root)
-        .context("resolving repo identity for lifecycle stop hook spool")?;
+        .context("resolving repo identity for lifecycle hook spool")?;
     let config_root = crate::config::resolve_bound_daemon_config_root_for_repo(repo_root)
-        .context("resolving daemon config root for lifecycle stop hook spool")?;
+        .context("resolving daemon config root for lifecycle hook spool")?;
     let db_path = crate::config::resolve_repo_runtime_db_path_for_config_root(&config_root);
     let cwd = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
     let workspace_snapshot =
         crate::host::checkpoints::lifecycle::capture_workspace_snapshot_for_lifecycle_stop(
             repo_root,
         );
-    let insert = crate::host::checkpoints::lifecycle::spool::LifecycleStopJobInsert {
+    let insert = crate::host::checkpoints::lifecycle::spool::LifecycleJobInsert {
         repo_id: repo.repo_id,
         repo_root: repo_root.to_path_buf(),
         config_root,
         agent_name: agent_name.to_string(),
         hook_name: hook_name.to_string(),
         raw_stdin: stdin.to_string(),
-        workspace_snapshot,
+        workspace_snapshot: Some(workspace_snapshot),
         cwd,
         received_at_unix: crate::host::checkpoints::lifecycle::spool::unix_timestamp_now(),
     };
-    crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_stop_job_hook_safe_at(
-        &db_path, insert,
-    )
+    crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_job_hook_safe_at(&db_path, insert)
 }
 
 fn route_or_enqueue_lifecycle_hook(
@@ -595,8 +593,8 @@ fn route_or_enqueue_lifecycle_hook(
     hook_name: &str,
     stdin: &str,
 ) -> Result<crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome> {
-    if should_spool_lifecycle_stop_hook(agent_name, hook_name) {
-        enqueue_lifecycle_stop_from_hook(repo_root, agent_name, hook_name, stdin)
+    if should_spool_lifecycle_hook(agent_name, hook_name) {
+        enqueue_lifecycle_hook_from_hook(repo_root, agent_name, hook_name, stdin)
             .map(|_| crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome::default())
     } else {
         route_hook_command_to_lifecycle(repo_root, agent_name, hook_name, stdin)
