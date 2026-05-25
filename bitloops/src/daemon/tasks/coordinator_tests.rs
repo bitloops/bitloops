@@ -26,6 +26,161 @@ async fn run_all_producer_spool_jobs(
     }
 }
 
+#[test]
+fn daemon_lifecycle_spool_worker_processes_supported_terminal_jobs_and_deletes_them()
+-> anyhow::Result<()> {
+    let dir = TempDir::new().expect("temp dir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::write(
+        repo_root.join(crate::config::REPO_POLICY_FILE_NAME),
+        r#"
+[capture]
+enabled = true
+"#,
+    )
+    .expect("write repo policy");
+    std::fs::write(repo_root.join("tracked.txt"), "one\n").expect("write tracked file");
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "initial"]);
+
+    let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
+
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+    let sqlite = crate::host::runtime_store::open_runtime_sqlite_for_config_root(&config_root)
+        .expect("open repo runtime sqlite");
+    let write_transcript = |session_id: &str| {
+        let transcript_path = repo_root.join(format!("{session_id}.jsonl"));
+        std::fs::write(
+            &transcript_path,
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "No file changes"
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .expect("write transcript");
+        transcript_path
+    };
+
+    let cases = [
+        (
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_STOP,
+            "claude-spooled-stop",
+            serde_json::json!({
+                "session_id": "claude-spooled-stop",
+                "transcript_path": write_transcript("claude-spooled-stop").to_string_lossy(),
+                "model": "claude-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP,
+            "codex-spooled-stop",
+            serde_json::json!({
+                "sessionId": "codex-spooled-stop",
+                "transcriptPath": write_transcript("codex-spooled-stop").to_string_lossy(),
+                "model": "codex-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_AGENT,
+            "gemini-spooled-stop",
+            serde_json::json!({
+                "session_id": "gemini-spooled-stop",
+                "transcript_path": write_transcript("gemini-spooled-stop").to_string_lossy(),
+                "model": "gemini-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP,
+            "cursor-spooled-stop",
+            serde_json::json!({
+                "conversation_id": "cursor-spooled-stop",
+                "transcript_path": write_transcript("cursor-spooled-stop").to_string_lossy(),
+                "model": "cursor-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP,
+            "copilot-spooled-stop",
+            serde_json::json!({
+                "sessionId": "copilot-spooled-stop",
+                "transcriptPath": write_transcript("copilot-spooled-stop").to_string_lossy(),
+                "model": "copilot-test",
+            }),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END,
+            "opencode-spooled-stop",
+            serde_json::json!({
+                "session_id": "opencode-spooled-stop",
+                "transcript_path": write_transcript("opencode-spooled-stop").to_string_lossy(),
+            }),
+        ),
+    ];
+
+    for (index, (agent_name, hook_name, _session_id, raw_stdin)) in cases.iter().enumerate() {
+        crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_stop_job_sqlite(
+            &sqlite,
+            crate::host::checkpoints::lifecycle::spool::LifecycleStopJobInsert {
+                repo_id: repo.repo_id.clone(),
+                repo_root: repo_root.clone(),
+                config_root: config_root.clone(),
+                agent_name: (*agent_name).to_string(),
+                hook_name: (*hook_name).to_string(),
+                raw_stdin: raw_stdin.to_string(),
+                workspace_snapshot: crate::host::checkpoints::lifecycle::spool::LifecycleStopWorkspaceSnapshot::default(),
+                cwd: repo_root.clone(),
+                received_at_unix: 1_778_800_000 + u64::try_from(index).unwrap_or_default(),
+            },
+        )
+        .expect("enqueue lifecycle stop job");
+    }
+
+    let processed =
+        crate::test_support::process_state::with_process_state(Some(&repo_root), &[], || {
+            super::worker::process_lifecycle_stop_spool_once_for_tests(&sqlite)
+        })?;
+
+    assert_eq!(processed, cases.len() as u64);
+    let remaining =
+        crate::host::checkpoints::lifecycle::spool::list_lifecycle_stop_jobs_for_tests(&sqlite)
+            .expect("list lifecycle stop jobs");
+    assert!(
+        remaining.is_empty(),
+        "processed lifecycle stop job should be deleted"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn receive_embeddings_bootstrap_outcome_waits_for_result_after_progress_channel_closes() {
     let (progress_tx, progress_rx) = mpsc::unbounded_channel();

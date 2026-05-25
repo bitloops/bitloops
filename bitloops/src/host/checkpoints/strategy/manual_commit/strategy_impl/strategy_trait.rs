@@ -342,7 +342,33 @@ impl Strategy for ManualCommitStrategy {
             );
         }
 
-        self.execute_post_commit_derivation(&head, &committed_files_vec, is_rebase_in_progress)?;
+        if should_defer_post_commit_derivation_for_lifecycle_stop(&self.repo_root) {
+            match crate::host::devql::enqueue_spooled_post_commit_derivation(
+                &self.repo_root,
+                &head,
+                &committed_files_vec,
+                is_rebase_in_progress,
+            ) {
+                Ok(_) => {}
+                Err(err) => {
+                    eprintln!(
+                        "[bitloops] Warning: failed to queue post-commit derivation behind lifecycle stop spool for commit {}: {err:#}",
+                        head
+                    );
+                    self.execute_post_commit_derivation(
+                        &head,
+                        &committed_files_vec,
+                        is_rebase_in_progress,
+                    )?;
+                }
+            }
+        } else {
+            self.execute_post_commit_derivation(
+                &head,
+                &committed_files_vec,
+                is_rebase_in_progress,
+            )?;
+        }
         if let Err(err) = run_devql_post_commit_ingest(&self.repo_root, &head) {
             eprintln!(
                 "[bitloops] Warning: DevQL post-commit ingest failed for commit {}: {err:#}",
@@ -756,6 +782,31 @@ fn open_interaction_spool(repo_root: &Path) -> Result<SqliteInteractionSpool> {
     crate::host::runtime_store::RepoSqliteRuntimeStore::open(repo_root)
         .context("opening repo runtime store for interaction spool")?
         .interaction_spool()
+}
+
+fn should_defer_post_commit_derivation_for_lifecycle_stop(repo_root: &Path) -> bool {
+    let result = (|| {
+        let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
+            .context("resolving repo identity for lifecycle stop post-commit guard")?
+            .repo_id;
+        let config_root = crate::config::resolve_bound_daemon_config_root_for_repo(repo_root)
+            .context("resolving daemon config root for lifecycle stop post-commit guard")?;
+        let sqlite = crate::host::runtime_store::open_runtime_sqlite_for_config_root(&config_root)
+            .context("opening runtime SQLite for lifecycle stop post-commit guard")?;
+        crate::host::checkpoints::lifecycle::spool::lifecycle_stop_spool_has_repo_work(
+            &sqlite, &repo_id,
+        )
+    })();
+
+    match result {
+        Ok(has_work) => has_work,
+        Err(err) => {
+            eprintln!(
+                "[bitloops] Warning: failed to inspect lifecycle stop spool before post_commit derivation: {err:#}"
+            );
+            false
+        }
+    }
 }
 
 pub(crate) fn execute_devql_post_commit_derivation(
