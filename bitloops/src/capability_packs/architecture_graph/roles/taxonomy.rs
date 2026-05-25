@@ -386,6 +386,18 @@ pub struct ArchitectureRoleReconcileMetrics {
     #[serde(default)]
     pub deterministic_unassigned_targets: usize,
     #[serde(default)]
+    pub unknown_targets_total: usize,
+    #[serde(default)]
+    pub unknown_targets_suppressed_non_role: usize,
+    #[serde(default)]
+    pub unknown_targets_rule_mining_eligible: usize,
+    #[serde(default)]
+    pub unknown_targets_adjudication_escalated: usize,
+    #[serde(default)]
+    pub role_mining_clusters: usize,
+    #[serde(default)]
+    pub role_mining_representative_targets: usize,
+    #[serde(default)]
     pub unknown_adjudication_candidates: usize,
     #[serde(default)]
     pub high_impact_adjudication_candidates: usize,

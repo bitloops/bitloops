@@ -2,6 +2,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 use crate::capability_packs::architecture_graph::roles::llm_adjudication::{
     SEED_RULE_ROLE_BATCH_SIZE, architecture_roles_seed_roles_request,
@@ -10,7 +11,7 @@ use crate::capability_packs::architecture_graph::roles::llm_adjudication::{
     decode_seeded_rule_candidates_response,
 };
 use crate::capability_packs::architecture_graph::roles::migrations::{
-    apply_proposal, create_rule_activate_proposal,
+    apply_proposal, create_rule_activate_proposal, preview_existing_rule_match_safety,
 };
 use crate::capability_packs::architecture_graph::roles::seed_evidence::{
     BudgetedSeedEvidence, ROLE_DISCOVERY_USER_PROMPT_BUDGET_BYTES,
@@ -29,6 +30,7 @@ use crate::capability_packs::architecture_graph::roles::taxonomy::{
     seeded_role_lifecycle_status,
 };
 use crate::config::InferenceTask;
+use crate::host::capability_host::gateways::RelationalGateway;
 use crate::host::capability_host::{CurrentStateConsumerContext, DevqlCapabilityHost};
 use crate::host::inference::{
     InferenceGateway, ResolvedInferenceSlot, StructuredGenerationRequest,
@@ -56,6 +58,8 @@ pub(super) struct SeedRuleActivationSummary {
     pub(super) proposals_applied: usize,
     pub(super) activated_rule_ids: Vec<String>,
     pub(super) proposal_ids: Vec<String>,
+    pub(super) blocked_rule_ids: Vec<String>,
+    pub(super) blocked_reasons: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -536,6 +540,7 @@ pub(super) async fn load_seed_owned_draft_rule_ids(
 
 pub(super) async fn activate_seeded_draft_rules(
     relational: &crate::host::devql::RelationalStorage,
+    gateway: &dyn RelationalGateway,
     repo_id: &str,
     profile_name: &str,
     provenance: Value,
@@ -543,9 +548,30 @@ pub(super) async fn activate_seeded_draft_rules(
     let rule_ids = load_seed_owned_draft_rule_ids(relational, repo_id, profile_name).await?;
     let mut activated_rule_ids = Vec::new();
     let mut proposal_ids = Vec::new();
+    let mut blocked_rule_ids = Vec::new();
+    let mut blocked_reasons = BTreeMap::new();
 
     for rule_id in &rule_ids {
         let rule_ref = format!("rule:{rule_id}");
+        let preview =
+            preview_existing_rule_match_safety(relational, gateway, repo_id, &rule_ref).await?;
+        let blocking_reasons = preview
+            .get("safety")
+            .and_then(|safety| safety.get("blocking_reasons"))
+            .and_then(Value::as_array)
+            .map(|reasons| {
+                reasons
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !blocking_reasons.is_empty() {
+            blocked_rule_ids.push(rule_id.clone());
+            blocked_reasons.insert(rule_id.clone(), blocking_reasons);
+            continue;
+        }
         let proposal = create_rule_activate_proposal(
             relational,
             repo_id,
@@ -571,6 +597,8 @@ pub(super) async fn activate_seeded_draft_rules(
         proposals_applied: proposal_ids.len(),
         activated_rule_ids,
         proposal_ids,
+        blocked_rule_ids,
+        blocked_reasons,
     })
 }
 
@@ -626,6 +654,7 @@ pub(super) fn format_seed_command_output(
         {
             sections.push(format!("activated_rule={rule_id} proposal={proposal_id}"));
         }
+        push_blocked_rule_activation_lines(&mut sections, activation);
     }
     if let Some(classification) = summary.classification.as_ref() {
         sections.push(format_roles_classify_output(classification, false)?);
@@ -657,6 +686,7 @@ pub(super) fn format_bootstrap_command_output(
         summary.rule_activation.proposals_created,
         summary.rule_activation.proposals_applied,
     ));
+    push_blocked_rule_activation_lines(&mut sections, &summary.rule_activation);
     sections.push(format_roles_classify_output(
         &summary.classification,
         false,
@@ -675,6 +705,27 @@ pub(super) fn format_seed_summary(summary: &SeedSummary) -> String {
         summary.rules_created,
         summary.rules_reused,
     )
+}
+
+fn push_blocked_rule_activation_lines(
+    sections: &mut Vec<String>,
+    activation: &SeedRuleActivationSummary,
+) {
+    if activation.blocked_rule_ids.is_empty() {
+        return;
+    }
+    sections.push(format!(
+        "seeded rule activation blocked: blocked_rules={}",
+        activation.blocked_rule_ids.len()
+    ));
+    for rule_id in &activation.blocked_rule_ids {
+        let reasons = activation
+            .blocked_reasons
+            .get(rule_id)
+            .map(|values| values.join(","))
+            .unwrap_or_else(|| "unknown".to_string());
+        sections.push(format!("blocked_rule={rule_id} reasons={reasons}"));
+    }
 }
 
 fn sql_text(value: &str) -> String {

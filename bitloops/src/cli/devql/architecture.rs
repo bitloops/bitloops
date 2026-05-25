@@ -509,6 +509,7 @@ async fn run_architecture_roles_seed_command(
     let rule_activation = if args.activate_rules {
         let activation = activate_seeded_draft_rules(
             context.storage.as_ref(),
+            context.relational.as_ref(),
             &scope.repo.repo_id,
             &seed.profile_name,
             cli_provenance("seed_activate_rules"),
@@ -574,6 +575,7 @@ async fn run_architecture_roles_bootstrap_command(
         .await?;
         let rule_activation = activate_seeded_draft_rules(
             context.storage.as_ref(),
+            context.relational.as_ref(),
             &scope.repo.repo_id,
             &profile_name,
             cli_provenance("bootstrap_skip_seed_activate_rules"),
@@ -662,6 +664,17 @@ pub(super) fn format_roles_classify_output(
             output.roles.deterministic_conflict_targets,
             output.roles.deterministic_unassigned_targets,
             output.roles.deterministic_coverage_ratio,
+        ),
+        format!(
+            "unknown policy: total={} suppressed_non_role={} rule_mining_eligible={} adjudication_escalated={}",
+            output.roles.unknown_targets_total,
+            output.roles.unknown_targets_suppressed_non_role,
+            output.roles.unknown_targets_rule_mining_eligible,
+            output.roles.unknown_targets_adjudication_escalated,
+        ),
+        format!(
+            "rule mining: clusters={} representative_targets={}",
+            output.roles.role_mining_clusters, output.roles.role_mining_representative_targets,
         ),
         format!(
             "architecture embeddings: selected={} enqueued={} deduped={}",

@@ -31,7 +31,7 @@ use crate::capability_packs::architecture_graph::roles::storage::{
 };
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
     ArchitectureRoleAssignment, AssignmentStatus, MatchableArtefact, RoleRuleCandidateSelector,
-    RoleRuleCondition, RoleSplitSpecFile, RuleSpecFile, role_rule_matches,
+    RoleRuleCondition, RoleSplitSpecFile, RuleSpecFile, TargetKind, role_rule_matches,
 };
 
 pub async fn apply_proposal(
@@ -371,6 +371,11 @@ fn rule_preview_safety(
     };
     let max_match_ratio_without_override = 0.20;
     let uses_target_kinds = !spec.candidate_selector.target_kinds.is_empty();
+    let impossible_target_kind = spec
+        .candidate_selector
+        .target_kinds
+        .iter()
+        .any(|target_kind| matches!(target_kind, TargetKind::File | TargetKind::Symbol));
     let positive_condition_count = spec.positive_conditions.len();
     let negative_condition_count = spec.negative_conditions.len();
     let path_only = positive_condition_count > 0
@@ -391,6 +396,12 @@ fn rule_preview_safety(
 
     let mut blocking_reasons = Vec::new();
     let mut warnings = Vec::new();
+    if matched_targets == 0 {
+        blocking_reasons.push("zero_matches");
+    }
+    if impossible_target_kind {
+        blocking_reasons.push("unsupported_preview_target_kind");
+    }
     if match_ratio > max_match_ratio_without_override && !narrow_path_prefix {
         blocking_reasons.push("broad_match_ratio");
     }
@@ -417,6 +428,7 @@ fn rule_preview_safety(
         "max_match_ratio_without_override": max_match_ratio_without_override,
         "path_only": path_only,
         "uses_target_kinds": uses_target_kinds,
+        "impossible_target_kind": impossible_target_kind,
         "positive_condition_count": positive_condition_count,
         "negative_condition_count": negative_condition_count,
         "conflicting_active_assignments": 0,

@@ -18,13 +18,16 @@ use crate::capability_packs::architecture_graph::roles::taxonomy::{
     ArchitectureRoleAssignment, ArchitectureRoleReconcileMetrics, AssignmentPriority,
     AssignmentSource, AssignmentStatus, RoleRuleCandidateSelector, RoleRuleCondition,
     RoleRuleScore, RoleTarget, SeededArchitectureRole, SeededArchitectureRuleCandidate,
-    SeededArchitectureTaxonomy, assignment_id,
+    SeededArchitectureTaxonomy, TargetKind, assignment_id,
 };
 use crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql;
 use crate::cli::devql::architecture::roles_seed::ArchitectureSeedProfileDiagnostics;
+use crate::host::capability_host::gateways::RelationalGateway;
 use crate::host::devql::RelationalStorage;
 use crate::host::runtime_store::{WorkplaneJobRecord, WorkplaneJobStatus};
-use crate::models::CurrentCanonicalFileRecord;
+use crate::models::{
+    CurrentCanonicalArtefactRecord, CurrentCanonicalFileRecord, ProductionArtefact,
+};
 use std::collections::BTreeSet;
 
 async fn relational() -> Result<RelationalStorage> {
@@ -37,6 +40,81 @@ async fn relational() -> Result<RelationalStorage> {
         .await?;
     std::mem::forget(temp);
     Ok(relational)
+}
+
+struct PreviewGateway {
+    artefacts: Vec<CurrentCanonicalArtefactRecord>,
+}
+
+impl PreviewGateway {
+    fn with_cli_artefact() -> Self {
+        Self {
+            artefacts: vec![CurrentCanonicalArtefactRecord {
+                repo_id: "repo-1".to_string(),
+                path: "src/cli/commands/run.rs".to_string(),
+                content_id: "content-1".to_string(),
+                symbol_id: "symbol-1".to_string(),
+                artefact_id: "artefact-1".to_string(),
+                language: "rust".to_string(),
+                extraction_fingerprint: "fingerprint".to_string(),
+                canonical_kind: Some("function".to_string()),
+                language_kind: Some("function".to_string()),
+                symbol_fqn: Some("crate::cli::commands::run".to_string()),
+                parent_symbol_id: None,
+                parent_artefact_id: None,
+                start_line: 1,
+                end_line: 10,
+                start_byte: 0,
+                end_byte: 50,
+                signature: Some("fn run()".to_string()),
+                modifiers: "[]".to_string(),
+                docstring: None,
+            }],
+        }
+    }
+
+    fn empty() -> Self {
+        Self {
+            artefacts: Vec::new(),
+        }
+    }
+}
+
+impl RelationalGateway for PreviewGateway {
+    fn resolve_checkpoint_id(&self, _repo_id: &str, _checkpoint_ref: &str) -> Result<String> {
+        anyhow::bail!("not used")
+    }
+
+    fn artefact_exists(&self, _repo_id: &str, _artefact_id: &str) -> Result<bool> {
+        anyhow::bail!("not used")
+    }
+
+    fn load_repo_id_for_commit(&self, _commit_sha: &str) -> Result<String> {
+        anyhow::bail!("not used")
+    }
+
+    fn load_current_canonical_artefacts(
+        &self,
+        _repo_id: &str,
+    ) -> Result<Vec<CurrentCanonicalArtefactRecord>> {
+        Ok(self.artefacts.clone())
+    }
+
+    fn load_current_production_artefacts(&self, _repo_id: &str) -> Result<Vec<ProductionArtefact>> {
+        anyhow::bail!("not used")
+    }
+
+    fn load_production_artefacts(&self, _commit_sha: &str) -> Result<Vec<ProductionArtefact>> {
+        anyhow::bail!("not used")
+    }
+
+    fn load_artefacts_for_file_lines(
+        &self,
+        _commit_sha: &str,
+        _file_path: &str,
+    ) -> Result<Vec<(String, i64, i64)>> {
+        anyhow::bail!("not used")
+    }
 }
 
 fn test_scope() -> SlimCliRepoScope {
@@ -70,6 +148,7 @@ fn seeded_taxonomy(role_key: &str) -> SeededArchitectureTaxonomy {
         rule_candidates: vec![SeededArchitectureRuleCandidate {
             target_role_key: role_key.to_string(),
             candidate_selector: RoleRuleCandidateSelector {
+                target_kinds: vec![TargetKind::Artefact],
                 path_prefixes: vec!["src/cli".to_string()],
                 ..Default::default()
             },
@@ -264,6 +343,12 @@ fn roles_classify_formats_json_metrics() -> Result<()> {
 
     assert_eq!(parsed["roles"]["full_reconcile"], true);
     assert_eq!(parsed["roles"]["adjudication_candidates"], 0);
+    assert_eq!(parsed["roles"]["unknown_targets_total"], 0);
+    assert_eq!(parsed["roles"]["unknown_targets_suppressed_non_role"], 0);
+    assert_eq!(parsed["roles"]["unknown_targets_rule_mining_eligible"], 0);
+    assert_eq!(parsed["roles"]["unknown_targets_adjudication_escalated"], 0);
+    assert_eq!(parsed["roles"]["role_mining_clusters"], 0);
+    assert_eq!(parsed["roles"]["role_mining_representative_targets"], 0);
     Ok(())
 }
 
@@ -291,6 +376,12 @@ fn roles_classify_formats_human_metrics_without_json() -> Result<()> {
             deterministic_conflict_targets: 1,
             deterministic_unassigned_targets: 2,
             deterministic_coverage_ratio: 0.6,
+            unknown_targets_total: 4,
+            unknown_targets_suppressed_non_role: 2,
+            unknown_targets_rule_mining_eligible: 1,
+            unknown_targets_adjudication_escalated: 1,
+            role_mining_clusters: 1,
+            role_mining_representative_targets: 1,
             unknown_adjudication_candidates: 1,
             high_impact_adjudication_candidates: 0,
             low_confidence_adjudication_candidates: 1,
@@ -330,6 +421,10 @@ fn roles_classify_formats_human_metrics_without_json() -> Result<()> {
         "coverage: targets=10 active=6 review=2 conflict=1 unknown=2 deterministic_ratio=0.600"
     ));
     assert!(rendered.contains(
+        "unknown policy: total=4 suppressed_non_role=2 rule_mining_eligible=1 adjudication_escalated=1"
+    ));
+    assert!(rendered.contains("rule mining: clusters=1 representative_targets=1"));
+    assert!(rendered.contains(
         "adjudication reasons: unknown=1 high_impact=0 low_confidence=1 conflict=1 repeated_suppressed=3"
     ));
     assert!(rendered.contains("architecture embeddings: selected=2 enqueued=1 deduped=1"));
@@ -355,6 +450,8 @@ fn seed_command_output_includes_activation_and_classification_in_json() -> Resul
             proposals_applied: 1,
             activated_rule_ids: vec!["rule-1".to_string()],
             proposal_ids: vec!["proposal-1".to_string()],
+            blocked_rule_ids: Vec::new(),
+            blocked_reasons: std::collections::BTreeMap::new(),
         }),
         classification: Some(RolesClassifyOutput {
             roles: ArchitectureRoleReconcileMetrics {
@@ -539,6 +636,8 @@ fn bootstrap_skip_seed_formats_json_with_skipped_seed_flag() -> Result<()> {
             proposals_applied: 1,
             activated_rule_ids: vec!["rule-1".to_string()],
             proposal_ids: vec!["proposal-1".to_string()],
+            blocked_rule_ids: Vec::new(),
+            blocked_reasons: std::collections::BTreeMap::new(),
         },
         classification: RolesClassifyOutput {
             roles: ArchitectureRoleReconcileMetrics {
@@ -913,6 +1012,40 @@ async fn persist_seeded_taxonomy_reuses_alias_equivalent_roles() -> Result<()> {
 }
 
 #[tokio::test]
+async fn seed_rule_activation_leaves_zero_match_rule_draft() -> Result<()> {
+    let relational = relational().await?;
+    persist_seeded_taxonomy(
+        &relational,
+        "repo-1",
+        "local_agent",
+        seeded_taxonomy("command_dispatcher"),
+    )
+    .await?;
+
+    let activation = activate_seeded_draft_rules(
+        &relational,
+        &PreviewGateway::empty(),
+        "repo-1",
+        "local_agent",
+        cli_provenance("seed_activate_rules"),
+    )
+    .await?;
+
+    assert_eq!(activation.seed_owned_draft_rules, 1);
+    assert_eq!(activation.proposals_created, 0);
+    assert_eq!(activation.proposals_applied, 0);
+    assert_eq!(activation.blocked_rule_ids.len(), 1);
+    assert!(
+        activation
+            .blocked_reasons
+            .values()
+            .flatten()
+            .any(|reason| reason == "zero_matches")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn activate_seeded_draft_rules_only_applies_seed_owned_rules() -> Result<()> {
     use sha2::{Digest, Sha256};
 
@@ -956,6 +1089,7 @@ async fn activate_seeded_draft_rules_only_applies_seed_owned_rules() -> Result<(
 
     let activation = activate_seeded_draft_rules(
         &relational,
+        &PreviewGateway::with_cli_artefact(),
         "repo-1",
         "local_agent",
         cli_provenance("seed_activate_rules"),
@@ -966,6 +1100,7 @@ async fn activate_seeded_draft_rules_only_applies_seed_owned_rules() -> Result<(
     assert_eq!(activation.proposals_created, 1);
     assert_eq!(activation.proposals_applied, 1);
     assert_eq!(activation.activated_rule_ids.len(), 1);
+    assert!(activation.blocked_rule_ids.is_empty());
 
     let rules = load_role_rules(&relational, "repo-1", &role.role_id).await?;
     let active_seed_rules = rules
@@ -1008,6 +1143,7 @@ async fn activate_seeded_draft_rules_is_idempotent_after_first_activation() -> R
 
     let first = activate_seeded_draft_rules(
         &relational,
+        &PreviewGateway::with_cli_artefact(),
         "repo-1",
         "local_agent",
         cli_provenance("seed_activate_rules"),
@@ -1015,6 +1151,7 @@ async fn activate_seeded_draft_rules_is_idempotent_after_first_activation() -> R
     .await?;
     let second = activate_seeded_draft_rules(
         &relational,
+        &PreviewGateway::with_cli_artefact(),
         "repo-1",
         "local_agent",
         cli_provenance("seed_activate_rules"),
@@ -1023,9 +1160,11 @@ async fn activate_seeded_draft_rules_is_idempotent_after_first_activation() -> R
 
     assert_eq!(first.seed_owned_draft_rules, 1);
     assert_eq!(first.proposals_applied, 1);
+    assert!(first.blocked_rule_ids.is_empty());
     assert_eq!(second.seed_owned_draft_rules, 0);
     assert_eq!(second.proposals_applied, 0);
     assert!(second.activated_rule_ids.is_empty());
+    assert!(second.blocked_rule_ids.is_empty());
     Ok(())
 }
 
@@ -1034,6 +1173,7 @@ async fn seed_activation_enables_full_classification() -> Result<()> {
     let relational = relational().await?;
     let mut taxonomy = seeded_taxonomy("command_dispatcher");
     taxonomy.rule_candidates[0].candidate_selector = RoleRuleCandidateSelector {
+        target_kinds: vec![TargetKind::Artefact],
         path_prefixes: vec!["src/cli".to_string()],
         ..Default::default()
     };
@@ -1051,6 +1191,7 @@ async fn seed_activation_enables_full_classification() -> Result<()> {
     persist_seeded_taxonomy(&relational, "repo-1", "local_agent", taxonomy).await?;
     activate_seeded_draft_rules(
         &relational,
+        &PreviewGateway::with_cli_artefact(),
         "repo-1",
         "local_agent",
         cli_provenance("seed_activate_rules"),
@@ -1071,7 +1212,27 @@ async fn seed_activation_enables_full_classification() -> Result<()> {
         exists_in_index: true,
         exists_in_worktree: true,
     }];
-    let artefacts = Vec::new();
+    let artefacts = vec![CurrentCanonicalArtefactRecord {
+        repo_id: "repo-1".to_string(),
+        path: "src/cli/commands/run.rs".to_string(),
+        content_id: "content-1".to_string(),
+        symbol_id: "symbol-1".to_string(),
+        artefact_id: "artefact-1".to_string(),
+        language: "rust".to_string(),
+        extraction_fingerprint: "fingerprint".to_string(),
+        canonical_kind: Some("function".to_string()),
+        language_kind: Some("function".to_string()),
+        symbol_fqn: Some("crate::cli::commands::run".to_string()),
+        parent_symbol_id: None,
+        parent_artefact_id: None,
+        start_line: 1,
+        end_line: 10,
+        start_byte: 0,
+        end_byte: 50,
+        signature: Some("fn run()".to_string()),
+        modifiers: "[]".to_string(),
+        docstring: None,
+    }];
     let dependency_edges = Vec::new();
     let current_state = SliceArchitectureRoleCurrentStateSource::new(&artefacts, &dependency_edges);
 

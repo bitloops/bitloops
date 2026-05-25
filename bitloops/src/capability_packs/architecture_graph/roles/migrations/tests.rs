@@ -577,6 +577,51 @@ mod deterministic_tests {
     }
 
     #[tokio::test]
+    async fn rule_preview_blocks_zero_match_rule() -> Result<()> {
+        let relational = relational().await?;
+        let role = seed_role(&relational).await?;
+
+        let proposal = create_rule_draft_proposal(
+            &relational,
+            &gateway(),
+            "repo-1",
+            RuleSpecFile {
+                role_ref: role.canonical_key.clone(),
+                candidate_selector: RoleRuleCandidateSelector {
+                    target_kinds: vec![taxonomy::TargetKind::Artefact],
+                    path_prefixes: vec!["src/does-not-exist".to_string()],
+                    ..Default::default()
+                },
+                positive_conditions: vec![taxonomy::RoleRuleCondition {
+                    kind: "path_prefix".to_string(),
+                    value: json!("src/does-not-exist"),
+                    ..Default::default()
+                }],
+                negative_conditions: Vec::new(),
+                score: taxonomy::RoleRuleScore {
+                    base_confidence: Some(0.90),
+                    priority_hint: Some(100),
+                    min_positive_ratio: Some(1.0),
+                },
+                evidence: json!({}),
+                metadata: json!({}),
+            },
+            json!({"source": "test"}),
+        )
+        .await?;
+
+        assert_eq!(
+            proposal.preview_payload["safety"]["status"],
+            json!("blocked")
+        );
+        assert_eq!(
+            proposal.preview_payload["safety"]["blocking_reasons"],
+            json!(["zero_matches"])
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn rule_preview_flags_broad_path_only_rule() -> Result<()> {
         let relational = relational().await?;
         let role = seed_role(&relational).await?;

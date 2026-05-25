@@ -5,7 +5,7 @@ use super::super::taxonomy::{
     AssignmentStatus, RoleSignalPolarity, RoleTarget,
 };
 use super::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn empty_current_state() -> SliceArchitectureRoleCurrentStateSource<'static> {
     SliceArchitectureRoleCurrentStateSource::new(&[], &[])
@@ -150,6 +150,12 @@ fn classification_reports_deterministic_coverage_and_review_rates() {
                 target: active_target.clone(),
                 language: Some("rust".to_string()),
                 canonical_kind: None,
+                language_kind: None,
+                file_role: None,
+                analysis_mode: None,
+                symbol_name: None,
+                symbol_suffix: None,
+                dependency_kinds: std::collections::BTreeSet::new(),
                 high_impact: false,
             },
         ),
@@ -159,6 +165,12 @@ fn classification_reports_deterministic_coverage_and_review_rates() {
                 target: review_target.clone(),
                 language: Some("rust".to_string()),
                 canonical_kind: None,
+                language_kind: None,
+                file_role: None,
+                analysis_mode: None,
+                symbol_name: None,
+                symbol_suffix: None,
+                dependency_kinds: std::collections::BTreeSet::new(),
                 high_impact: false,
             },
         ),
@@ -168,6 +180,12 @@ fn classification_reports_deterministic_coverage_and_review_rates() {
                 target: unknown_target,
                 language: Some("rust".to_string()),
                 canonical_kind: None,
+                language_kind: None,
+                file_role: None,
+                analysis_mode: None,
+                symbol_name: None,
+                symbol_suffix: None,
+                dependency_kinds: std::collections::BTreeSet::new(),
                 high_impact: false,
             },
         ),
@@ -205,6 +223,191 @@ fn classification_reports_adjudication_requests_by_reason() {
     assert_eq!(metrics.conflict_adjudication_candidates, 1);
     assert_eq!(metrics.repeated_adjudication_suppressed, 2);
     assert_eq!(metrics.deterministic_guard_skipped, 1);
+}
+
+#[test]
+fn target_summary_captures_role_bearing_facts() {
+    let target = RoleTarget::artefact("artefact-1", "symbol-1", "src/main.rs");
+    let facts = vec![
+        ArchitectureArtefactFact {
+            repo_id: "repo-1".to_string(),
+            fact_id: "canonical-kind".to_string(),
+            target: target.clone(),
+            language: Some("rust".to_string()),
+            fact_kind: "artefact".to_string(),
+            fact_key: "canonical_kind".to_string(),
+            fact_value: "function".to_string(),
+            source: "test".to_string(),
+            confidence: 1.0,
+            evidence: serde_json::json!([]),
+            generation_seq: 1,
+        },
+        ArchitectureArtefactFact {
+            repo_id: "repo-1".to_string(),
+            fact_id: "symbol-name".to_string(),
+            target: target.clone(),
+            language: Some("rust".to_string()),
+            fact_kind: "symbol".to_string(),
+            fact_key: "name".to_string(),
+            fact_value: "main".to_string(),
+            source: "test".to_string(),
+            confidence: 1.0,
+            evidence: serde_json::json!([]),
+            generation_seq: 1,
+        },
+    ];
+
+    let summaries = target_summaries_from_facts(&facts);
+    let summary = summaries.get(&target).expect("summary");
+
+    assert_eq!(summary.language.as_deref(), Some("rust"));
+    assert_eq!(summary.canonical_kind.as_deref(), Some("function"));
+    assert_eq!(summary.symbol_name.as_deref(), Some("main"));
+    assert!(summary.high_impact);
+}
+
+#[test]
+fn unknown_policy_does_not_escalate_helper_artefact_on_main_path() {
+    let file_target = RoleTarget::file("src/main.rs");
+    let helper_target = RoleTarget::artefact("artefact-helper", "symbol-helper", "src/main.rs");
+    let facts = vec![
+        ArchitectureArtefactFact {
+            repo_id: "repo-1".to_string(),
+            fact_id: "file-path".to_string(),
+            target: file_target.clone(),
+            language: Some("rust".to_string()),
+            fact_kind: "path".to_string(),
+            fact_key: "full".to_string(),
+            fact_value: "src/main.rs".to_string(),
+            source: "test".to_string(),
+            confidence: 1.0,
+            evidence: serde_json::json!([]),
+            generation_seq: 1,
+        },
+        ArchitectureArtefactFact {
+            repo_id: "repo-1".to_string(),
+            fact_id: "helper-path".to_string(),
+            target: helper_target.clone(),
+            language: Some("rust".to_string()),
+            fact_kind: "path".to_string(),
+            fact_key: "full".to_string(),
+            fact_value: "src/main.rs".to_string(),
+            source: "test".to_string(),
+            confidence: 1.0,
+            evidence: serde_json::json!([]),
+            generation_seq: 1,
+        },
+        ArchitectureArtefactFact {
+            repo_id: "repo-1".to_string(),
+            fact_id: "helper-kind".to_string(),
+            target: helper_target.clone(),
+            language: Some("rust".to_string()),
+            fact_kind: "artefact".to_string(),
+            fact_key: "canonical_kind".to_string(),
+            fact_value: "function".to_string(),
+            source: "test".to_string(),
+            confidence: 1.0,
+            evidence: serde_json::json!([]),
+            generation_seq: 1,
+        },
+        ArchitectureArtefactFact {
+            repo_id: "repo-1".to_string(),
+            fact_id: "helper-name".to_string(),
+            target: helper_target,
+            language: Some("rust".to_string()),
+            fact_kind: "symbol".to_string(),
+            fact_key: "name".to_string(),
+            fact_value: "helper".to_string(),
+            source: "test".to_string(),
+            confidence: 1.0,
+            evidence: serde_json::json!([]),
+            generation_seq: 1,
+        },
+    ];
+    let summaries = target_summaries_from_facts(&facts);
+    let grouped_facts = facts_by_target(&facts);
+
+    let outcome = select_unknown_target_policy(
+        "repo-1",
+        1,
+        &summaries,
+        &grouped_facts,
+        &[],
+        &BTreeSet::new(),
+        None,
+    );
+
+    assert_eq!(outcome.unknown_targets_total, 2);
+    assert_eq!(outcome.adjudication_escalated, 1);
+    assert_eq!(outcome.rule_mining_eligible, 1);
+    assert_eq!(outcome.adjudication_requests.len(), 1);
+    assert_eq!(
+        outcome.adjudication_requests[0].target_kind.as_deref(),
+        Some("file")
+    );
+}
+
+#[test]
+fn unknown_policy_counts_artefact_on_deterministically_assigned_file_path() {
+    let file_target = RoleTarget::file("src/assigned.rs");
+    let artefact_target =
+        RoleTarget::artefact("artefact-assigned", "symbol-assigned", "src/assigned.rs");
+    let summaries = BTreeMap::from([
+        (
+            file_target.clone(),
+            RoleTargetSummary {
+                target: file_target.clone(),
+                language: Some("rust".to_string()),
+                canonical_kind: None,
+                language_kind: None,
+                file_role: Some("source".to_string()),
+                analysis_mode: Some("code".to_string()),
+                symbol_name: None,
+                symbol_suffix: None,
+                dependency_kinds: BTreeSet::new(),
+                high_impact: false,
+            },
+        ),
+        (
+            artefact_target.clone(),
+            RoleTargetSummary {
+                target: artefact_target.clone(),
+                language: Some("rust".to_string()),
+                canonical_kind: Some("function".to_string()),
+                language_kind: Some("function_item".to_string()),
+                file_role: None,
+                analysis_mode: None,
+                symbol_name: Some("assigned_helper".to_string()),
+                symbol_suffix: None,
+                dependency_kinds: BTreeSet::new(),
+                high_impact: false,
+            },
+        ),
+    ]);
+    let assignments = vec![assignment_for_target(file_target, AssignmentStatus::Active)];
+
+    let outcome = select_unknown_target_policy(
+        "repo-1",
+        1,
+        &summaries,
+        &BTreeMap::new(),
+        &assignments,
+        &BTreeSet::new(),
+        None,
+    );
+
+    assert_eq!(outcome.unknown_targets_total, 1);
+    assert_eq!(outcome.rule_mining_eligible, 1);
+    assert_eq!(outcome.suppressed_non_role, 0);
+    assert_eq!(outcome.adjudication_escalated, 0);
+}
+
+#[test]
+fn unknown_policy_suppresses_mypy_cache_paths() {
+    assert!(path_suppressed_for_roles(".mypy_cache/module/data.json"));
+    assert!(path_suppressed_for_roles(
+        "src/.mypy_cache/module.meta.json"
+    ));
 }
 
 #[test]
@@ -1098,12 +1301,11 @@ async fn classification_counts_needs_review_adjudication_candidates() -> anyhow:
 }
 
 #[tokio::test]
-async fn classification_queues_unknown_when_changed_target_has_no_assignment() -> anyhow::Result<()>
-{
+async fn classification_does_not_queue_ordinary_unknown_source_file() -> anyhow::Result<()> {
     let (_temp, relational) = classifier_storage()?;
-    let files = vec![file_fixture("src/unknown.rs")];
-
+    let files = vec![file_fixture("src/ordinary.rs")];
     let current_state = empty_current_state();
+
     let outcome = classify_architecture_roles_for_current_state(
         &relational,
         &current_state,
@@ -1112,7 +1314,7 @@ async fn classification_queues_unknown_when_changed_target_has_no_assignment() -
             generation_seq: 3,
             scope: ArchitectureRoleClassificationScope {
                 full_reconcile: false,
-                affected_paths: std::collections::BTreeSet::from(["src/unknown.rs".to_string()]),
+                affected_paths: std::collections::BTreeSet::from(["src/ordinary.rs".to_string()]),
                 removed_paths: std::collections::BTreeSet::new(),
             },
             files: &files,
@@ -1120,16 +1322,13 @@ async fn classification_queues_unknown_when_changed_target_has_no_assignment() -
     )
     .await?;
 
-    assert_eq!(outcome.metrics.adjudication_candidates, 1);
-    assert_eq!(outcome.adjudication_requests.len(), 1);
-    assert_eq!(
-        outcome.adjudication_requests[0].reason,
-        AdjudicationReason::Unknown
-    );
-    assert_eq!(
-        outcome.adjudication_requests[0].path.as_deref(),
-        Some("src/unknown.rs")
-    );
+    assert_eq!(outcome.metrics.unknown_targets_total, 1);
+    assert_eq!(outcome.metrics.unknown_targets_rule_mining_eligible, 1);
+    assert_eq!(outcome.metrics.unknown_targets_suppressed_non_role, 0);
+    assert_eq!(outcome.metrics.unknown_targets_adjudication_escalated, 0);
+    assert_eq!(outcome.metrics.unknown_adjudication_candidates, 0);
+    assert_eq!(outcome.metrics.adjudication_candidates, 0);
+    assert!(outcome.adjudication_requests.is_empty());
     Ok(())
 }
 
@@ -1161,6 +1360,190 @@ async fn classification_queues_high_impact_main_when_not_confidently_classified(
         outcome.adjudication_requests[0].reason,
         AdjudicationReason::HighImpact
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn classification_preserves_high_impact_main_file_adjudication() -> anyhow::Result<()> {
+    let (_temp, relational) = classifier_storage()?;
+    let files = vec![file_fixture("src/main.rs")];
+    let current_state = empty_current_state();
+
+    let outcome = classify_architecture_roles_for_current_state(
+        &relational,
+        &current_state,
+        ArchitectureRoleClassificationInput {
+            repo_id: "repo-1",
+            generation_seq: 4,
+            scope: ArchitectureRoleClassificationScope {
+                full_reconcile: false,
+                affected_paths: std::collections::BTreeSet::from(["src/main.rs".to_string()]),
+                removed_paths: std::collections::BTreeSet::new(),
+            },
+            files: &files,
+        },
+    )
+    .await?;
+
+    assert_eq!(outcome.metrics.unknown_targets_total, 1);
+    assert_eq!(outcome.metrics.unknown_targets_adjudication_escalated, 1);
+    assert_eq!(outcome.metrics.high_impact_adjudication_candidates, 1);
+    assert_eq!(outcome.metrics.adjudication_candidates, 1);
+    assert_eq!(outcome.adjudication_requests.len(), 1);
+    assert_eq!(
+        outcome.adjudication_requests[0].reason,
+        AdjudicationReason::HighImpact
+    );
+    assert_eq!(
+        outcome.adjudication_requests[0].path.as_deref(),
+        Some("src/main.rs")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn classification_suppresses_file_like_main_artefact_duplicate() -> anyhow::Result<()> {
+    let (_temp, relational) = classifier_storage()?;
+    let files = vec![file_fixture("src/main.rs")];
+    let file_like_artefact = crate::models::CurrentCanonicalArtefactRecord {
+        repo_id: "repo-1".to_string(),
+        path: "src/main.rs".to_string(),
+        content_id: "content-main".to_string(),
+        symbol_id: "symbol-main-file".to_string(),
+        artefact_id: "artefact-main-file".to_string(),
+        language: "rust".to_string(),
+        extraction_fingerprint: "fingerprint-main-file".to_string(),
+        canonical_kind: Some("file".to_string()),
+        language_kind: Some("file".to_string()),
+        symbol_fqn: Some("src/main.rs".to_string()),
+        parent_symbol_id: None,
+        parent_artefact_id: None,
+        start_line: 1,
+        end_line: 10,
+        start_byte: 0,
+        end_byte: 100,
+        signature: None,
+        modifiers: String::new(),
+        docstring: None,
+    };
+    let artefacts = [file_like_artefact];
+    let current_state = SliceArchitectureRoleCurrentStateSource::new(&artefacts, &[]);
+
+    let outcome = classify_architecture_roles_for_current_state(
+        &relational,
+        &current_state,
+        ArchitectureRoleClassificationInput {
+            repo_id: "repo-1",
+            generation_seq: 4,
+            scope: ArchitectureRoleClassificationScope {
+                full_reconcile: false,
+                affected_paths: std::collections::BTreeSet::from(["src/main.rs".to_string()]),
+                removed_paths: std::collections::BTreeSet::new(),
+            },
+            files: &files,
+        },
+    )
+    .await?;
+
+    assert_eq!(outcome.metrics.unknown_targets_total, 2);
+    assert_eq!(outcome.metrics.unknown_targets_adjudication_escalated, 1);
+    assert_eq!(outcome.metrics.unknown_targets_suppressed_non_role, 1);
+    assert_eq!(outcome.metrics.high_impact_adjudication_candidates, 1);
+    assert_eq!(outcome.adjudication_requests.len(), 1);
+    assert_eq!(
+        outcome.adjudication_requests[0].target_kind.as_deref(),
+        Some("file")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn classification_preserves_main_function_artefact_high_impact() -> anyhow::Result<()> {
+    let (_temp, relational) = classifier_storage()?;
+    let files = vec![file_fixture("src/main.rs")];
+    let main_artefact = crate::models::CurrentCanonicalArtefactRecord {
+        repo_id: "repo-1".to_string(),
+        path: "src/main.rs".to_string(),
+        content_id: "content-main".to_string(),
+        symbol_id: "symbol-main-function".to_string(),
+        artefact_id: "artefact-main-function".to_string(),
+        language: "rust".to_string(),
+        extraction_fingerprint: "fingerprint-main-function".to_string(),
+        canonical_kind: Some("function".to_string()),
+        language_kind: Some("function_item".to_string()),
+        symbol_fqn: Some("src/main.rs::main".to_string()),
+        parent_symbol_id: None,
+        parent_artefact_id: None,
+        start_line: 1,
+        end_line: 5,
+        start_byte: 0,
+        end_byte: 40,
+        signature: Some("fn main()".to_string()),
+        modifiers: String::new(),
+        docstring: None,
+    };
+    let artefacts = [main_artefact];
+    let current_state = SliceArchitectureRoleCurrentStateSource::new(&artefacts, &[]);
+
+    let outcome = classify_architecture_roles_for_current_state(
+        &relational,
+        &current_state,
+        ArchitectureRoleClassificationInput {
+            repo_id: "repo-1",
+            generation_seq: 4,
+            scope: ArchitectureRoleClassificationScope {
+                full_reconcile: false,
+                affected_paths: std::collections::BTreeSet::from(["src/main.rs".to_string()]),
+                removed_paths: std::collections::BTreeSet::new(),
+            },
+            files: &files,
+        },
+    )
+    .await?;
+
+    assert_eq!(outcome.metrics.unknown_targets_total, 2);
+    assert_eq!(outcome.metrics.unknown_targets_adjudication_escalated, 2);
+    assert_eq!(outcome.metrics.high_impact_adjudication_candidates, 2);
+    assert_eq!(outcome.adjudication_requests.len(), 2);
+    assert!(outcome.adjudication_requests.iter().any(|request| {
+        request.target_kind.as_deref() == Some("artefact")
+            && request.reason == AdjudicationReason::HighImpact
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn classification_suppresses_non_role_file_unknowns() -> anyhow::Result<()> {
+    let (_temp, relational) = classifier_storage()?;
+    let mut readme = file_fixture("README.md");
+    readme.analysis_mode = "text".to_string();
+    readme.file_role = "documentation".to_string();
+    readme.language = "plaintext".to_string();
+    readme.resolved_language = "plaintext".to_string();
+    let files = vec![readme];
+    let current_state = empty_current_state();
+
+    let outcome = classify_architecture_roles_for_current_state(
+        &relational,
+        &current_state,
+        ArchitectureRoleClassificationInput {
+            repo_id: "repo-1",
+            generation_seq: 5,
+            scope: ArchitectureRoleClassificationScope {
+                full_reconcile: false,
+                affected_paths: std::collections::BTreeSet::from(["README.md".to_string()]),
+                removed_paths: std::collections::BTreeSet::new(),
+            },
+            files: &files,
+        },
+    )
+    .await?;
+
+    assert_eq!(outcome.metrics.unknown_targets_total, 1);
+    assert_eq!(outcome.metrics.unknown_targets_suppressed_non_role, 1);
+    assert_eq!(outcome.metrics.unknown_targets_rule_mining_eligible, 0);
+    assert_eq!(outcome.metrics.unknown_targets_adjudication_escalated, 0);
+    assert!(outcome.adjudication_requests.is_empty());
     Ok(())
 }
 
