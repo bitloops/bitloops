@@ -171,6 +171,54 @@ mod seeded_tests {
     }
 
     #[test]
+    fn seeded_role_schema_allows_bounded_evidence_fields() {
+        let schema = architecture_roles_seed_roles_schema();
+        let evidence_properties = schema
+            .pointer("/properties/roles/items/properties/evidence/properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("role evidence properties");
+
+        for key in [
+            "inspected_paths",
+            "supporting_paths",
+            "supporting_symbols",
+            "db_sections_used",
+            "reasoning_summary",
+            "confidence_reason",
+            "uncertainty",
+        ] {
+            assert!(
+                evidence_properties.contains_key(key),
+                "missing role evidence key {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn seeded_rule_candidate_schema_allows_bounded_evidence_fields() {
+        let schema = architecture_roles_seed_rule_candidates_schema();
+        let evidence_properties = schema
+            .pointer("/properties/rule_candidates/items/properties/evidence/properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("rule evidence properties");
+
+        for key in [
+            "inspected_paths",
+            "positive_examples",
+            "negative_examples",
+            "db_sections_used",
+            "reasoning_summary",
+            "confidence_reason",
+            "uncertainty",
+        ] {
+            assert!(
+                evidence_properties.contains_key(key),
+                "missing rule evidence key {key}"
+            );
+        }
+    }
+
+    #[test]
     fn rule_condition_catalog_documents_all_supported_condition_kinds() {
         let allowed: std::collections::BTreeSet<_> =
             allowed_rule_condition_kinds().iter().copied().collect();
@@ -221,6 +269,34 @@ mod seeded_tests {
                     .is_some()
             );
         }
+    }
+
+    #[test]
+    fn rule_authoring_guidance_maps_supported_facts_and_names_unsupported_signals() {
+        let mapping = role_rule_fact_to_condition_mapping();
+        let mapping = mapping.as_array().expect("mapping is an array");
+        assert!(mapping.iter().any(|entry| {
+            entry
+                .get("evidence_field")
+                .and_then(serde_json::Value::as_str)
+                == Some("canonical_files.path")
+        }));
+        assert!(mapping.iter().any(|entry| {
+            entry
+                .get("condition_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("canonical_kind_is")
+        }));
+
+        let unsupported = unsupported_role_rule_signals();
+        let unsupported = unsupported.as_array().expect("unsupported is an array");
+        assert!(unsupported.iter().any(|entry| {
+            entry.get("signal").and_then(serde_json::Value::as_str)
+                == Some("signature_contains")
+        }));
+        assert!(unsupported.iter().any(|entry| {
+            entry.get("signal").and_then(serde_json::Value::as_str) == Some("file_role")
+        }));
     }
 
     #[test]
@@ -275,6 +351,36 @@ mod seeded_tests {
                     );
                 }
             }
+
+            let evidence = example
+                .get("evidence")
+                .and_then(serde_json::Value::as_object)
+                .expect("example includes bounded evidence");
+            let evidence_keys = evidence
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(
+                evidence_keys,
+                std::collections::BTreeSet::from([
+                    "inspected_paths",
+                    "positive_examples",
+                    "negative_examples",
+                    "db_sections_used",
+                    "reasoning_summary",
+                    "confidence_reason",
+                    "uncertainty",
+                ])
+            );
+
+            let metadata = example
+                .get("metadata")
+                .and_then(serde_json::Value::as_object)
+                .expect("example includes metadata");
+            assert!(
+                metadata.is_empty(),
+                "schema examples should keep metadata as a strict empty object"
+            );
         }
     }
 

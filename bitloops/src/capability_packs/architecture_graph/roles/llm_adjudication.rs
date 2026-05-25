@@ -14,7 +14,8 @@ use super::taxonomy::{
     SeededArchitectureRuleCandidates, SeededArchitectureTaxonomy, allowed_rule_condition_kinds,
     architecture_roles_seed_roles_schema, architecture_roles_seed_rule_candidates_schema,
     generic_role_family_examples, role_rule_candidate_examples, role_rule_condition_catalog,
-    validate_seeded_roles, validate_seeded_taxonomy,
+    role_rule_fact_to_condition_mapping, unsupported_role_rule_signals, validate_seeded_roles,
+    validate_seeded_taxonomy,
 };
 
 const MAX_FILE_EVIDENCE: usize = 120;
@@ -132,6 +133,80 @@ pub(crate) fn architecture_roles_seed_rules_system_prompt() -> &'static str {
     "You infer deterministic architecture role matching rules for known roles. Return JSON only that matches the supplied schema."
 }
 
+fn fact_synthesis_context(seed_phase: &'static str) -> Value {
+    json!({
+        "capability_id": "architecture_graph",
+        "slot_name": "fact_synthesis",
+        "seed_phase": seed_phase,
+        "purpose": "Use repository evidence and read-only code exploration to synthesize architecture roles and deterministic rule candidates.",
+        "source_of_truth_order": [
+            "source code inspected through workspace_path",
+            "canonical DB evidence supplied in this prompt",
+            "generic role family examples"
+        ]
+    })
+}
+
+fn agentic_code_exploration_contract() -> Value {
+    json!({
+        "write_policy": "read_only",
+        "expected_behavior": [
+            "Inspect the repository through workspace_path before finalizing role or rule output.",
+            "Use supplied DB evidence as an index for which paths, symbols, summaries, and graph facts to inspect first.",
+            "Prefer source code when DB evidence is incomplete, stale, or ambiguous.",
+            "Do not edit files, create files, run migrations, or modify repository state.",
+            "Return only JSON matching the supplied schema."
+        ],
+        "inspection_priorities": [
+            "files and symbols referenced by existing_architecture_graph_facts",
+            "canonical_artefacts with stable paths and symbol_fqn values",
+            "canonical_files with strong language, file_role, or analysis_mode signals",
+            "artefact_summaries that describe durable responsibilities",
+            "dependency_graph_hints when they clarify boundaries between roles"
+        ]
+    })
+}
+
+fn db_evidence_guide() -> Value {
+    json!({
+        "interpretation": "The evidence object is a DB snapshot and may be partial. Use it as an index into the codebase, not as a complete replacement for code inspection.",
+        "sections": [
+            {
+                "name": "repository",
+                "use_for": "Repo identity, root path, branch, and metadata."
+            },
+            {
+                "name": "language_framework_signals",
+                "use_for": "Framework, runtime, and context hints for files."
+            },
+            {
+                "name": "canonical_files",
+                "use_for": "Stable repository-relative paths, language, file_role, and analysis_mode."
+            },
+            {
+                "name": "canonical_artefacts",
+                "use_for": "Symbols, canonical_kind, language_kind, signatures, and docstrings."
+            },
+            {
+                "name": "artefact_summaries",
+                "use_for": "Semantic summaries that help identify responsibilities."
+            },
+            {
+                "name": "dependency_graph_hints",
+                "use_for": "Call/import/reference hints. Use only to support a rule when source paths or symbols also support it."
+            },
+            {
+                "name": "existing_architecture_graph_facts",
+                "use_for": "Previously synthesized graph nodes ordered by confidence. Treat as hints, not guaranteed truth."
+            },
+            {
+                "name": "evidence_budget",
+                "use_for": "Counts showing how much evidence was included or omitted from the prompt."
+            }
+        ]
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn architecture_roles_seed_user_prompt(
     scope: &SlimCliRepoScope,
@@ -175,11 +250,15 @@ pub(crate) fn architecture_roles_seed_roles_user_prompt(
     json!({
         "task": "Infer repository-specific architecture roles for this repository.",
         "rules": [
-            "Return repository-specific roles, not a hardcoded generic taxonomy.",
-            "Generic role families are examples only; adapt them to the repository evidence.",
-            "Return only durable role identities that are justified by the repository evidence.",
+            "Return repository-specific architecture roles, but keep this prompt generic. Do not create repository-specific prompt branches.",
+            "Inspect source code through workspace_path before finalizing roles. Use the supplied DB evidence as an index for where to look first.",
+            "Generic role families are examples only. Adapt them to the repository evidence and inspected source code.",
+            "Return only durable role identities that are justified by multiple evidence signals or a very strong single structural signal.",
             "Do not include lifecycle state; newly inferred roles are activated by Bitloops after validation.",
-            "Prefer fewer strong roles over many weak or redundant roles."
+            "Prefer fewer durable roles over many weak or redundant roles.",
+            "A role should describe a stable architectural responsibility, not one file, one temporary workflow, or one naming accident.",
+            "If a likely responsibility cannot be supported by deterministic rules in the next phase, keep it only when the codebase makes the role clearly important.",
+            "Populate each role evidence object with inspected paths, supporting paths, supporting symbols, DB sections used, a concise reasoning summary, confidence reason, and uncertainty."
         ],
         "repository_identity": {
             "repo_id": scope.repo.repo_id,
@@ -189,6 +268,9 @@ pub(crate) fn architecture_roles_seed_roles_user_prompt(
             "identity": scope.repo.identity,
             "branch_name": scope.branch_name,
         },
+        "fact_synthesis_context": fact_synthesis_context("roles"),
+        "agentic_code_exploration": agentic_code_exploration_contract(),
+        "db_evidence_guide": db_evidence_guide(),
         "evidence": evidence,
     })
     .to_string()
@@ -202,11 +284,17 @@ pub(crate) fn architecture_roles_seed_rules_user_prompt(
     json!({
         "task": "Generate deterministic rule candidates for the supplied architecture roles.",
         "rules": [
+            "Generate deterministic rule candidates for the supplied known roles only.",
+            "Inspect source code through workspace_path before finalizing rules. Use the supplied DB evidence as an index for where to look first.",
             "Detection rules must be reviewable and safe for deterministic use.",
+            "A good rule should match a reusable architectural pattern, not only one currently visible artefact.",
             "Use only rule condition kinds from rule_authoring_contract.allowed_condition_kinds.",
-            "Do not invent additional condition kind names or aliases.",
-            "Use rule_authoring_contract.rule_candidate_examples as shape examples only; adapt paths, languages, kinds, and symbols to repository evidence.",
-            "Return zero rule candidates for a role when the evidence does not support a stable deterministic rule."
+            "Do not invent additional condition kind names, aliases, operators, or candidate_selector fields.",
+            "Use rule_authoring_contract.fact_to_condition_mapping to translate evidence fields into supported conditions.",
+            "Use rule_authoring_contract.unsupported_today to avoid proposing rules based on signals the deterministic classifier cannot apply.",
+            "Use rule_authoring_contract.rule_candidate_examples as shape examples only. Adapt paths, languages, kinds, and symbols to repository evidence and inspected source code.",
+            "Populate each rule evidence object with inspected paths, positive examples, negative examples when known, DB sections used, a concise reasoning summary, confidence reason, and uncertainty.",
+            "Return zero rule candidates for a role when evidence does not support a stable deterministic rule."
         ],
         "repository_identity": {
             "repo_id": scope.repo.repo_id,
@@ -217,9 +305,14 @@ pub(crate) fn architecture_roles_seed_rules_user_prompt(
             "branch_name": scope.branch_name,
         },
         "known_roles": roles,
+        "fact_synthesis_context": fact_synthesis_context("rules"),
+        "agentic_code_exploration": agentic_code_exploration_contract(),
+        "db_evidence_guide": db_evidence_guide(),
         "rule_authoring_contract": {
             "allowed_condition_kinds": allowed_rule_condition_kinds(),
             "condition_catalog": role_rule_condition_catalog(),
+            "fact_to_condition_mapping": role_rule_fact_to_condition_mapping(),
+            "unsupported_today": unsupported_role_rule_signals(),
             "rule_candidate_examples": role_rule_candidate_examples(),
         },
         "evidence": evidence,
@@ -656,6 +749,93 @@ mod tests {
     }
 
     #[test]
+    fn role_discovery_prompt_explains_fact_synthesis_and_workspace_use() {
+        let prompt =
+            architecture_roles_seed_roles_user_prompt(&test_scope(), &json!({"canonical_files": []}));
+        let value: Value = serde_json::from_str(&prompt).expect("prompt is JSON");
+
+        assert_eq!(
+            value
+                .pointer("/fact_synthesis_context/slot_name")
+                .and_then(Value::as_str),
+            Some("fact_synthesis")
+        );
+        assert_eq!(
+            value
+                .pointer("/agentic_code_exploration/write_policy")
+                .and_then(Value::as_str),
+            Some("read_only")
+        );
+        assert!(
+            value
+                .pointer("/db_evidence_guide/sections")
+                .and_then(Value::as_array)
+                .expect("sections")
+                .iter()
+                .any(|section| section.get("name").and_then(Value::as_str)
+                    == Some("canonical_artefacts"))
+        );
+    }
+
+    #[test]
+    fn rule_generation_prompt_maps_db_facts_to_supported_conditions() {
+        let roles = vec![SeededArchitectureRole {
+            canonical_key: "cli_surface".to_string(),
+            display_name: "CLI Surface".to_string(),
+            description: "Command handlers.".to_string(),
+            family: Some("entrypoint".to_string()),
+            lifecycle_status: Some("active".to_string()),
+            provenance: json!({}),
+            evidence: json!({}),
+        }];
+        let prompt = architecture_roles_seed_rules_user_prompt(
+            &test_scope(),
+            &json!({"canonical_files": []}),
+            &roles,
+        );
+        let value: Value = serde_json::from_str(&prompt).expect("prompt is JSON");
+
+        let mapping = value
+            .pointer("/rule_authoring_contract/fact_to_condition_mapping")
+            .and_then(Value::as_array)
+            .expect("fact mapping");
+        assert!(mapping.iter().any(|entry| {
+            entry.get("evidence_field").and_then(Value::as_str)
+                == Some("canonical_artefacts.canonical_kind")
+                && entry.get("condition_kind").and_then(Value::as_str)
+                    == Some("canonical_kind_is")
+        }));
+
+        let unsupported = value
+            .pointer("/rule_authoring_contract/unsupported_today")
+            .and_then(Value::as_array)
+            .expect("unsupported list");
+        assert!(unsupported.iter().any(|entry| {
+            entry.get("signal").and_then(Value::as_str) == Some("dependency_count")
+        }));
+    }
+
+    #[test]
+    fn role_discovery_prompt_requires_generic_durable_roles_with_evidence() {
+        let prompt =
+            architecture_roles_seed_roles_user_prompt(&test_scope(), &json!({"canonical_files": []}));
+        let value: Value = serde_json::from_str(&prompt).expect("prompt is JSON");
+        let rules = value.get("rules").and_then(Value::as_array).expect("rules");
+        let rendered_rules = rules
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered_rules.contains("Do not create repository-specific prompt branches"));
+        assert!(rendered_rules.contains("Inspect source code through workspace_path"));
+        assert!(rendered_rules.contains("Populate each role evidence object"));
+        assert!(
+            rendered_rules.contains("Prefer fewer durable roles over many weak or redundant roles")
+        );
+    }
+
+    #[test]
     fn decode_seeded_taxonomy_response_rejects_invalid_payload() {
         let err = decode_seeded_taxonomy_response(json!({
             "roles": [],
@@ -723,7 +903,15 @@ mod tests {
                         "family": "entrypoint",
                         "lifecycle_status": "active",
                         "provenance": {},
-                        "evidence": {}
+                        "evidence": {
+                            "inspected_paths": ["bitloops/src/cli"],
+                            "supporting_paths": ["bitloops/src/cli/commands"],
+                            "supporting_symbols": [],
+                            "db_sections_used": ["canonical_files", "canonical_artefacts"],
+                            "reasoning_summary": "Command handlers form a stable entrypoint surface.",
+                            "confidence_reason": "Paths and command naming are stable.",
+                            "uncertainty": ""
+                        }
                     }
                 ]
             }),
@@ -747,7 +935,22 @@ mod tests {
                             "base_confidence": 0.8,
                             "weight": 1.0
                         },
-                        "evidence": {},
+                        "evidence": {
+                            "inspected_paths": ["bitloops/src/cli/commands/run.rs"],
+                            "positive_examples": [
+                                {
+                                    "path": "bitloops/src/cli/commands/run.rs",
+                                    "symbol_fqn": "crate::cli::commands::run",
+                                    "canonical_kind": "function",
+                                    "why": "Command path and function symbol match the CLI surface role."
+                                }
+                            ],
+                            "negative_examples": [],
+                            "db_sections_used": ["canonical_files", "canonical_artefacts"],
+                            "reasoning_summary": "The path prefix and Rust language constrain the rule.",
+                            "confidence_reason": "The rule is based on stable path structure.",
+                            "uncertainty": ""
+                        },
                         "metadata": {}
                     }
                 ]

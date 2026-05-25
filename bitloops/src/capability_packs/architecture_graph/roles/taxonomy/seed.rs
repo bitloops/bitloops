@@ -286,6 +286,65 @@ pub fn role_rule_condition_catalog() -> Value {
     ])
 }
 
+pub fn role_rule_fact_to_condition_mapping() -> Value {
+    json!([
+        {
+            "evidence_field": "canonical_files.path",
+            "condition_kind": "path_prefix|path_suffix|path_contains|path_equals",
+            "guidance": "Use stable repository-relative path structure. Prefer prefixes for directories and suffixes for file names or extensions."
+        },
+        {
+            "evidence_field": "canonical_files.resolved_language",
+            "condition_kind": "language_is",
+            "guidance": "Use the resolved language value when available."
+        },
+        {
+            "evidence_field": "canonical_artefacts.language",
+            "condition_kind": "language_is",
+            "guidance": "Use when the rule targets symbols rather than files."
+        },
+        {
+            "evidence_field": "canonical_artefacts.canonical_kind",
+            "condition_kind": "canonical_kind_is",
+            "guidance": "Use for symbol kind constraints such as function, method, struct, class, module, or test when present in evidence."
+        },
+        {
+            "evidence_field": "canonical_artefacts.symbol_fqn",
+            "condition_kind": "symbol_fqn_contains",
+            "guidance": "Use stable namespace, module, type, or function substrings. Avoid one-off generated ids."
+        }
+    ])
+}
+
+pub fn unsupported_role_rule_signals() -> Value {
+    json!([
+        {
+            "signal": "dependency_count",
+            "reason": "Dependency counts are useful evidence but are not a supported deterministic condition kind today."
+        },
+        {
+            "signal": "dependency_edge_kind",
+            "reason": "dependency_graph_hints can support confidence, but edge_kind is not directly matchable by the current classifier."
+        },
+        {
+            "signal": "signature_contains",
+            "reason": "Signatures are supplied as evidence, but the current deterministic rule DSL does not match signatures."
+        },
+        {
+            "signal": "file_role",
+            "reason": "file_role appears in canonical_files, but the current deterministic rule DSL does not match it."
+        },
+        {
+            "signal": "analysis_mode",
+            "reason": "analysis_mode appears in canonical_files, but the current deterministic rule DSL does not match it."
+        },
+        {
+            "signal": "target_kind",
+            "reason": "The current seed candidate selector does not expose target kind filtering."
+        }
+    ])
+}
+
 pub fn role_rule_candidate_examples() -> Value {
     json!([
         {
@@ -311,12 +370,29 @@ pub fn role_rule_candidate_examples() -> Value {
                 "weight": 1.0
             },
             "evidence": {
-                "example_only": true,
-                "why": "CLI command files under src/cli/commands in Rust are likely command-surface artefacts."
+                "inspected_paths": ["src/cli/commands/run.rs"],
+                "positive_examples": [
+                    {
+                        "path": "src/cli/commands/run.rs",
+                        "symbol_fqn": "crate::cli::commands::run",
+                        "canonical_kind": "function",
+                        "why": "Command path and function symbol match the CLI command surface role."
+                    }
+                ],
+                "negative_examples": [
+                    {
+                        "path": "src/cli/commands/run_test.rs",
+                        "symbol_fqn": null,
+                        "canonical_kind": "test",
+                        "why": "Test files should not define the runtime command surface role."
+                    }
+                ],
+                "db_sections_used": ["canonical_files", "canonical_artefacts"],
+                "reasoning_summary": "CLI command files under src/cli/commands in Rust are likely command-surface artefacts.",
+                "confidence_reason": "Path, language, and canonical kind are stable deterministic signals.",
+                "uncertainty": ""
             },
-            "metadata": {
-                "example_only": true
-            }
+            "metadata": {}
         },
         {
             "target_role_key": "domain_policy",
@@ -338,12 +414,22 @@ pub fn role_rule_candidate_examples() -> Value {
                 "weight": 1.0
             },
             "evidence": {
-                "example_only": true,
-                "why": "Domain path and policy naming are stable enough for reviewable deterministic suggestions."
+                "inspected_paths": ["src/domain/policy.rs"],
+                "positive_examples": [
+                    {
+                        "path": "src/domain/policy.rs",
+                        "symbol_fqn": "crate::domain::policy::apply_policy",
+                        "canonical_kind": "function",
+                        "why": "Domain path and policy symbol naming match the role."
+                    }
+                ],
+                "negative_examples": [],
+                "db_sections_used": ["canonical_files", "canonical_artefacts"],
+                "reasoning_summary": "Domain path and policy naming are stable enough for reviewable deterministic suggestions.",
+                "confidence_reason": "The rule uses stable path and symbol naming constraints.",
+                "uncertainty": ""
             },
-            "metadata": {
-                "example_only": true
-            }
+            "metadata": {}
         }
     ])
 }
@@ -354,6 +440,83 @@ fn strict_empty_object_schema() -> Value {
         "properties": {},
         "required": [],
         "additionalProperties": false
+    })
+}
+
+fn string_array_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "string" }
+    })
+}
+
+fn evidence_example_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "symbol_fqn", "canonical_kind", "why"],
+        "properties": {
+            "path": { "type": "string" },
+            "symbol_fqn": { "type": ["string", "null"] },
+            "canonical_kind": { "type": ["string", "null"] },
+            "why": { "type": "string" }
+        }
+    })
+}
+
+fn seeded_role_evidence_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "inspected_paths",
+            "supporting_paths",
+            "supporting_symbols",
+            "db_sections_used",
+            "reasoning_summary",
+            "confidence_reason",
+            "uncertainty"
+        ],
+        "properties": {
+            "inspected_paths": string_array_schema(),
+            "supporting_paths": string_array_schema(),
+            "supporting_symbols": string_array_schema(),
+            "db_sections_used": string_array_schema(),
+            "reasoning_summary": { "type": "string" },
+            "confidence_reason": { "type": "string" },
+            "uncertainty": { "type": "string" }
+        }
+    })
+}
+
+fn seeded_rule_evidence_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "inspected_paths",
+            "positive_examples",
+            "negative_examples",
+            "db_sections_used",
+            "reasoning_summary",
+            "confidence_reason",
+            "uncertainty"
+        ],
+        "properties": {
+            "inspected_paths": string_array_schema(),
+            "positive_examples": {
+                "type": "array",
+                "items": evidence_example_schema()
+            },
+            "negative_examples": {
+                "type": "array",
+                "items": evidence_example_schema()
+            },
+            "db_sections_used": string_array_schema(),
+            "reasoning_summary": { "type": "string" },
+            "confidence_reason": { "type": "string" },
+            "uncertainty": { "type": "string" }
+        }
     })
 }
 
@@ -391,7 +554,7 @@ fn seeded_role_schema() -> Value {
             "description": { "type": "string" },
             "family": { "type": ["string", "null"] },
             "provenance": strict_object.clone(),
-            "evidence": strict_object
+            "evidence": seeded_role_evidence_schema()
         }
     })
 }
@@ -450,7 +613,7 @@ fn seeded_rule_candidate_schema() -> Value {
                     "weight": { "type": ["number", "null"] }
                 }
             },
-            "evidence": strict_object.clone(),
+            "evidence": seeded_rule_evidence_schema(),
             "metadata": strict_object
         }
     })
