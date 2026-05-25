@@ -446,7 +446,7 @@ fn codex_stop_route_uses_explicit_repo_root_for_transcript_fallback() -> Result<
                 "transcriptPath": "",
             })
             .to_string();
-            route_hook_command_to_lifecycle_for_repo(
+            route_hook_command_to_lifecycle(
                 repo.path(),
                 AGENT_NAME_CODEX,
                 CODEX_HOOK_STOP,

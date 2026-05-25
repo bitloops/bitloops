@@ -509,13 +509,12 @@ impl LifecycleAgentAdapter for CodexLifecycleAdapter {
 }
 
 pub fn route_hook_command_to_lifecycle(
-    _repo_root: &Path,
+    repo_root: &Path,
     agent_name: &str,
     hook_name: &str,
     stdin: &str,
 ) -> Result<HookCommandOutcome> {
-    let repo_root = crate::utils::paths::repo_root()?;
-    route_hook_command_to_lifecycle_for_repo(&repo_root, agent_name, hook_name, stdin)
+    route_hook_command_to_lifecycle_for_repo(repo_root, agent_name, hook_name, stdin)
 }
 
 pub fn route_hook_command_to_lifecycle_for_repo(
