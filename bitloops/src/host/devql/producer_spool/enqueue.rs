@@ -89,7 +89,6 @@ pub(crate) fn enqueue_spooled_post_commit_refresh(
     )
 }
 
-#[cfg(test)]
 pub(crate) fn enqueue_spooled_post_commit_derivation(
     repo_root: &Path,
     commit_sha: &str,

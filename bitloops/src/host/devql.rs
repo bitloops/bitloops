@@ -111,13 +111,12 @@ pub(crate) use self::plain_text::{
 pub(crate) use self::producer_spool::claim_next_producer_spool_jobs;
 #[cfg(not(test))]
 pub(crate) use self::producer_spool::enqueue_spooled_ingest_task_for_repo_root;
-#[cfg(test)]
-pub(crate) use self::producer_spool::enqueue_spooled_post_commit_derivation;
 pub(crate) use self::producer_spool::{
     PostCommitDerivationClaimGuards, ProducerSpoolJobCounts, ProducerSpoolJobPayload,
     ProducerSpoolJobRecord, ProducerSpoolRunningTask, claim_next_producer_spool_jobs_excluding,
-    count_producer_spool_jobs, delete_producer_spool_job, enqueue_spooled_post_commit_refresh,
-    enqueue_spooled_post_merge_refresh, enqueue_spooled_pre_push_sync, enqueue_spooled_sync_task,
+    count_producer_spool_jobs, delete_producer_spool_job, enqueue_spooled_post_commit_derivation,
+    enqueue_spooled_post_commit_refresh, enqueue_spooled_post_merge_refresh,
+    enqueue_spooled_pre_push_sync, enqueue_spooled_sync_task,
     enqueue_spooled_sync_task_for_repo_root, list_recent_producer_spool_jobs,
     producer_spool_schema_sql_sqlite, recover_running_producer_spool_jobs,
     requeue_producer_spool_job, running_producer_spool_repo_ids,

@@ -260,7 +260,7 @@ async fn reconcile_role_current_state(
 
 async fn role_current_state_pipeline_active(
     repo_id: &str,
-    repo_root: &Path,
+    _repo_root: &Path,
     context: &CurrentStateConsumerContext,
 ) -> anyhow::Result<bool> {
     let active_rules = load_active_detection_rules(context.storage.as_ref(), repo_id)
@@ -276,13 +276,7 @@ async fn role_current_state_pipeline_active(
         return Ok(true);
     }
 
-    let semantic_clones_config = resolve_semantic_clones_config(&CapabilityConfigView::new(
-        SEMANTIC_CLONES_CAPABILITY_ID,
-        context.config_root.clone(),
-    ));
-    let intent = load_effective_mailbox_intent_for_repo(repo_root, &semantic_clones_config)
-        .context("loading semantic-clones mailbox intent for architecture role activation")?;
-    Ok(intent.architecture_embeddings_active)
+    Ok(false)
 }
 
 fn inactive_role_current_state_outcome(
