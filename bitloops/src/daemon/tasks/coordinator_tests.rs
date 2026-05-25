@@ -287,6 +287,11 @@ fn daemon_lifecycle_spool_does_not_process_later_job_when_head_retries() -> anyh
         rows[0].available_at_unix > rows[0].updated_at_unix,
         "failed head should be requeued for a future retry"
     );
+    let now = crate::host::checkpoints::lifecycle::spool::unix_timestamp_now();
+    assert!(
+        rows[0].available_at_unix > now,
+        "failed head should not be claimable yet"
+    );
     assert!(
         rows[0]
             .last_error
@@ -301,6 +306,14 @@ fn daemon_lifecycle_spool_does_not_process_later_job_when_head_retries() -> anyh
     );
     assert_eq!(rows[1].attempts, 0);
     assert!(rows[1].last_error.is_none());
+
+    assert_eq!(harness.process_once()?, 0);
+
+    let rows =
+        crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(&harness.sqlite)?;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].attempts, 1);
+    assert_eq!(rows[1].attempts, 0);
 
     Ok(())
 }
