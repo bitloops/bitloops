@@ -239,6 +239,71 @@ fn git_output(repo_root: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+#[test]
+fn lifecycle_boundary_snapshot_captures_pre_turn_state() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    setup_git_repo(&dir);
+    std::fs::write(dir.path().join("scratch.txt"), "pre-existing")?;
+    std::fs::create_dir_all(dir.path().join(".codex"))?;
+    std::fs::write(dir.path().join(".codex/hooks.json"), "{}")?;
+
+    let snapshot = super::git_workspace::capture_pre_boundary_snapshot(dir.path(), Some(17));
+
+    assert_eq!(snapshot.pre_untracked_files, vec!["scratch.txt"]);
+    assert_eq!(snapshot.transcript_offset, Some(17));
+    assert!(snapshot.workspace.is_none());
+    assert!(
+        super::git_workspace::workspace_changes_from_boundary_snapshot(dir.path(), &snapshot, &[])
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn lifecycle_boundary_snapshot_captures_workspace_and_branch() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    setup_git_repo(&dir);
+    git_output(dir.path(), &["checkout", "-b", "feature/async-hooks"]);
+    std::fs::write(dir.path().join("README.md"), "changed")?;
+    std::fs::write(dir.path().join("new.txt"), "new")?;
+
+    let snapshot = super::git_workspace::capture_workspace_and_branch_snapshot(dir.path());
+
+    assert_eq!(
+        snapshot.workspace.as_ref().unwrap().modified_files,
+        vec!["README.md"]
+    );
+    assert_eq!(
+        snapshot.workspace.as_ref().unwrap().new_files,
+        vec!["new.txt"]
+    );
+    assert_eq!(snapshot.branch_name.as_deref(), Some("feature/async-hooks"));
+    assert_eq!(snapshot.is_default_branch, Some(false));
+
+    let mut workspace_only = super::git_workspace::capture_workspace_boundary_snapshot(dir.path());
+    workspace_only.pre_untracked_files = vec!["new.txt".to_string()];
+    let changes = super::git_workspace::workspace_changes_from_boundary_snapshot(
+        dir.path(),
+        &workspace_only,
+        &[],
+    )
+    .expect("workspace snapshot");
+    assert_eq!(changes.0, vec!["README.md"]);
+    assert!(changes.1.is_empty());
+    Ok(())
+}
+
+#[test]
+fn lifecycle_boundary_snapshot_keeps_unknown_branch_unknown() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    let snapshot = super::git_workspace::capture_workspace_and_branch_snapshot(dir.path());
+
+    assert_eq!(snapshot.branch_name, None);
+    assert_eq!(snapshot.is_default_branch, None);
+    Ok(())
+}
+
 // CLI-866
 #[test]
 fn test_dispatch_lifecycle_event_nil_agent() {

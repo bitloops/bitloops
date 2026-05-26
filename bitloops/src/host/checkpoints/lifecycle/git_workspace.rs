@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use super::spool::LifecycleWorkspaceSnapshot;
+use super::spool::{LifecycleBoundarySnapshot, LifecycleWorkspaceSnapshot};
 
 /// Returns (modified, new_files, deleted) relative to repo_root. Used by handle_lifecycle_turn_end.
 pub(super) fn detect_file_changes_for_turn_end(
@@ -87,6 +87,57 @@ pub(crate) fn capture_workspace_snapshot_for_turn_end(
         new_files,
         deleted_files,
     }
+}
+
+pub(crate) fn capture_pre_boundary_snapshot(
+    repo_root: &Path,
+    transcript_offset: Option<i64>,
+) -> LifecycleBoundarySnapshot {
+    LifecycleBoundarySnapshot {
+        pre_untracked_files: collect_untracked_files_for_lifecycle(repo_root),
+        transcript_offset,
+        ..LifecycleBoundarySnapshot::default()
+    }
+}
+
+pub(crate) fn capture_workspace_boundary_snapshot(repo_root: &Path) -> LifecycleBoundarySnapshot {
+    LifecycleBoundarySnapshot {
+        workspace: Some(capture_workspace_snapshot_for_turn_end(repo_root)),
+        ..LifecycleBoundarySnapshot::default()
+    }
+}
+
+pub(crate) fn capture_workspace_and_branch_snapshot(repo_root: &Path) -> LifecycleBoundarySnapshot {
+    let branch_state = super::handlers_tail::is_on_default_branch_for_repo(repo_root).ok();
+    LifecycleBoundarySnapshot {
+        workspace: Some(capture_workspace_snapshot_for_turn_end(repo_root)),
+        branch_name: branch_state.as_ref().and_then(|(_, branch_name)| {
+            (!branch_name.is_empty()).then(|| branch_name.clone())
+        }),
+        is_default_branch: branch_state.map(|(is_default_branch, _)| is_default_branch),
+        ..LifecycleBoundarySnapshot::default()
+    }
+}
+
+pub(crate) fn workspace_changes_from_boundary_snapshot(
+    repo_root: &Path,
+    snapshot: &LifecycleBoundarySnapshot,
+    pre_untracked: &[String],
+) -> Option<(Vec<String>, Vec<String>, Vec<String>)> {
+    let workspace = snapshot.workspace.as_ref()?;
+    let pre_untracked = snapshot
+        .pre_untracked_files
+        .iter()
+        .chain(pre_untracked.iter())
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let modified = filter_and_normalize_paths_for_turn_end(&workspace.modified_files, repo_root);
+    let new_files = filter_and_normalize_paths_for_turn_end(&workspace.new_files, repo_root)
+        .into_iter()
+        .filter(|path| !pre_untracked.contains(path.as_str()))
+        .collect::<Vec<_>>();
+    let deleted = filter_and_normalize_paths_for_turn_end(&workspace.deleted_files, repo_root);
+    Some((modified, new_files, deleted))
 }
 
 pub(super) fn filter_and_normalize_paths_for_turn_end(
@@ -198,7 +249,11 @@ pub(super) fn collect_untracked_files_for_lifecycle(repo_root: &Path) -> Vec<Str
         .lines()
         .filter_map(|line| line.strip_prefix("?? "))
         .map(str::trim)
-        .filter(|path| !path.is_empty() && !crate::utils::paths::is_infrastructure_path(path))
+        .filter(|path| {
+            !path.is_empty()
+                && !crate::utils::paths::is_infrastructure_path(path)
+                && !crate::utils::paths::is_protected_path(path)
+        })
         .map(ToOwned::to_owned)
         .collect()
 }

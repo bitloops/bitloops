@@ -731,7 +731,7 @@ fn should_skip_on_default_branch_for_repo(repo_root: &Path) -> (bool, String) {
     is_on_default_branch_for_repo(repo_root).unwrap_or((false, String::new()))
 }
 
-fn is_on_default_branch_for_repo(repo_root: &Path) -> Result<(bool, String)> {
+pub(super) fn is_on_default_branch_for_repo(repo_root: &Path) -> Result<(bool, String)> {
     let current = git_output_for_repo(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])
         .context("failed to get HEAD")?;
     if !current.status.success() {
