@@ -79,6 +79,38 @@ fn spawn_detached_long_lived_process() -> u32 {
         .expect("detached pid should parse")
 }
 
+#[cfg(unix)]
+fn spawn_long_lived_child_process() -> std::process::Child {
+    std::process::Command::new("sh")
+        .args(["-c", "exec sleep 60"])
+        .spawn()
+        .expect("spawn long-lived child process")
+}
+
+#[cfg(windows)]
+fn spawn_long_lived_child_process() -> std::process::Child {
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 60"])
+        .spawn()
+        .expect("spawn long-lived child process")
+}
+
+#[cfg(unix)]
+fn spawn_exiting_child_process() -> std::process::Child {
+    std::process::Command::new("sh")
+        .args(["-c", "exit 42"])
+        .spawn()
+        .expect("spawn exiting child process")
+}
+
+#[cfg(windows)]
+fn spawn_exiting_child_process() -> std::process::Child {
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", "exit 42"])
+        .spawn()
+        .expect("spawn exiting child process")
+}
+
 fn wait_for_pid_exit(pid: u32) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -171,6 +203,64 @@ async fn daemon_lifecycle_logs_terminal_restart_failure() {
         logs.iter().any(|entry| entry.level == log::Level::Error
             && entry.message.contains("daemon restart failed")),
         "expected lifecycle owner to log terminal restart failure, got logs: {logs:?}"
+    );
+}
+
+#[tokio::test]
+async fn spawned_daemon_readiness_timeout_stops_spawned_process() {
+    let cwd = TempDir::new().expect("temp cwd");
+    let state_root = TempDir::new().expect("temp state root");
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(cwd.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_root_str.as_str()),
+        )],
+    );
+
+    let child = spawn_long_lived_child_process();
+    let pid = child.id();
+    let err =
+        lifecycle::wait_until_ready_for_spawned_daemon(child, "test", Duration::from_millis(1))
+            .await
+            .expect_err("readiness should time out without daemon runtime state");
+    let message = err.to_string();
+    assert!(
+        message.contains("did not become ready"),
+        "expected readiness timeout, got: {message}"
+    );
+    wait_for_pid_exit(pid);
+}
+
+#[tokio::test]
+async fn spawned_daemon_exits_before_readiness_fails_fast() {
+    let cwd = TempDir::new().expect("temp cwd");
+    let state_root = TempDir::new().expect("temp state root");
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(cwd.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_root_str.as_str()),
+        )],
+    );
+
+    let child = spawn_exiting_child_process();
+    let started = Instant::now();
+    let err =
+        lifecycle::wait_until_ready_for_spawned_daemon(child, "test", Duration::from_secs(30))
+            .await
+            .expect_err("child exit should fail readiness immediately");
+    let message = err.to_string();
+    assert!(
+        message.contains("exited before becoming ready"),
+        "expected child exit failure, got: {message}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "expected readiness to fail fast after child exit, elapsed={:?}",
+        started.elapsed()
     );
 }
 
