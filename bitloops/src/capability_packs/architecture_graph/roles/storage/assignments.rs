@@ -4,16 +4,21 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use crate::host::devql::{RelationalStorage, sql_json_value, sql_now};
+use crate::storage::sqlite::SqliteWritePhaseMetrics;
 
 use super::facts::{count_role_facts_for_paths, delete_facts_for_paths_sql, insert_fact_sql};
 use super::rows::{assignment_from_row, sql_opt_i64, sql_opt_text, sql_text};
 use super::signals::{
     count_role_signals_for_paths, delete_signals_for_paths_sql, insert_signal_sql,
 };
+#[cfg(test)]
+use crate::capability_packs::architecture_graph::roles::taxonomy::RoleLifecycle;
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
     ArchitectureArtefactFact, ArchitectureRoleAssignment, ArchitectureRoleRuleSignal,
-    AssignmentSource, AssignmentStatus, RoleLifecycle, assignment_history_id, assignment_id,
+    AssignmentSource, AssignmentStatus, assignment_history_id, assignment_id,
 };
+
+const ROLE_CLASSIFICATION_STATE_WRITE_BATCH_SIZE: usize = 250;
 
 pub async fn upsert_assignment(
     relational: &RelationalStorage,
@@ -25,6 +30,7 @@ pub async fn upsert_assignment(
         .context("upserting architecture role assignment")
 }
 
+#[cfg(test)]
 pub async fn replace_assignments_for_paths(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -45,7 +51,7 @@ pub struct AssignmentHistoryWrite {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RoleClassificationStateWriteCounts {
+pub(crate) struct RoleClassificationStateWriteCounts {
     pub facts_written: usize,
     pub facts_deleted: usize,
     pub signals_written: usize,
@@ -55,7 +61,7 @@ pub struct RoleClassificationStateWriteCounts {
     pub assignment_history_rows: usize,
 }
 
-pub struct RoleClassificationStateReplacement<'a> {
+pub(crate) struct RoleClassificationStateReplacement<'a> {
     pub repo_id: &'a str,
     pub fact_and_signal_paths: &'a [String],
     pub facts: &'a [ArchitectureArtefactFact],
@@ -67,10 +73,17 @@ pub struct RoleClassificationStateReplacement<'a> {
     pub generation_seq: u64,
 }
 
-pub async fn replace_role_classification_state(
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RoleClassificationStateApplyOutcome {
+    pub(crate) write_counts: RoleClassificationStateWriteCounts,
+    pub(crate) sqlite_phase_metrics: SqliteWritePhaseMetrics,
+    pub(crate) max_rss_kb: u64,
+}
+
+pub(crate) async fn replace_role_classification_state(
     relational: &RelationalStorage,
     replacement: RoleClassificationStateReplacement<'_>,
-) -> Result<RoleClassificationStateWriteCounts> {
+) -> Result<RoleClassificationStateApplyOutcome> {
     let facts_deleted = count_role_facts_for_paths(
         relational,
         replacement.repo_id,
@@ -150,23 +163,50 @@ pub async fn replace_role_classification_state(
         statements.push(insert_assignment_sql(relational, assignment));
     }
     if !statements.is_empty() {
-        relational
-            .exec_serialized_batch_transactional(&statements)
-            .await
-            .context("replacing architecture role classification state")?;
+        let mut sqlite_phase_metrics = SqliteWritePhaseMetrics::default();
+        let mut max_rss_kb = 0u64;
+        for chunk in statements.chunks(ROLE_CLASSIFICATION_STATE_WRITE_BATCH_SIZE) {
+            let phase_outcome = relational
+                .exec_serialized_batch_transactional_with_phase_outcome(
+                    chunk,
+                    crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
+                )
+                .await
+                .context("replacing architecture role classification state")?;
+            sqlite_phase_metrics.merge(phase_outcome.sqlite_phase_metrics);
+            max_rss_kb = max_rss_kb.max(phase_outcome.max_rss_kb);
+        }
+        return Ok(RoleClassificationStateApplyOutcome {
+            write_counts: RoleClassificationStateWriteCounts {
+                facts_written: replacement.facts.len(),
+                facts_deleted,
+                signals_written: replacement.signals.len(),
+                signals_deleted,
+                assignments_written: replacement.assignments.len(),
+                assignments_marked_stale: removed_active_assignments.len(),
+                assignment_history_rows: all_history_writes.len(),
+            },
+            sqlite_phase_metrics,
+            max_rss_kb,
+        });
     }
 
-    Ok(RoleClassificationStateWriteCounts {
-        facts_written: replacement.facts.len(),
-        facts_deleted,
-        signals_written: replacement.signals.len(),
-        signals_deleted,
-        assignments_written: replacement.assignments.len(),
-        assignments_marked_stale: removed_active_assignments.len(),
-        assignment_history_rows: all_history_writes.len(),
+    Ok(RoleClassificationStateApplyOutcome {
+        write_counts: RoleClassificationStateWriteCounts {
+            facts_written: replacement.facts.len(),
+            facts_deleted,
+            signals_written: replacement.signals.len(),
+            signals_deleted,
+            assignments_written: replacement.assignments.len(),
+            assignments_marked_stale: removed_active_assignments.len(),
+            assignment_history_rows: all_history_writes.len(),
+        },
+        sqlite_phase_metrics: SqliteWritePhaseMetrics::default(),
+        max_rss_kb: 0,
     })
 }
 
+#[cfg(test)]
 pub async fn replace_assignments_for_paths_with_history(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -241,6 +281,7 @@ async fn assignment_history_exists(
         > 0)
 }
 
+#[cfg(test)]
 pub async fn load_assignments_for_path(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -348,7 +389,7 @@ pub async fn load_current_assignment_by_id(
         .transpose()
 }
 
-pub async fn list_current_assignments_for_role(
+async fn list_current_assignments_for_role(
     relational: &RelationalStorage,
     repo_id: &str,
     role_id: &str,
@@ -470,6 +511,7 @@ pub async fn migrate_current_assignment_to_role(
     Ok(new_assignment_id)
 }
 
+#[cfg(test)]
 pub async fn mark_assignments_for_paths_stale(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -527,6 +569,7 @@ fn delete_assignments_for_paths_sql(repo_id: &str, paths: &[String]) -> String {
     )
 }
 
+#[cfg(test)]
 pub async fn retire_role_and_mark_assignments(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -574,6 +617,7 @@ pub async fn retire_role_and_mark_assignments(
         .context("retiring architecture role and marking assignments")
 }
 
+#[cfg(test)]
 async fn load_assignments_for_role_status(
     relational: &RelationalStorage,
     repo_id: &str,

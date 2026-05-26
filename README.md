@@ -35,22 +35,31 @@
 
 ## Quick Start
 
+Fast scripted setup installs Bitloops and applies the default daemon config:
+
 **macOS, Linux, WSL:**
 
 ```bash
-curl -fsSL https://bitloops.com/install.sh | bash
+curl -fsSL https://bitloops.com/install.sh | bash -s -- --default-config
 ```
 
 **Windows PowerShell:**
 
 ```powershell
-irm https://bitloops.com/install.ps1 | iex
+& ([scriptblock]::Create((irm https://bitloops.com/install.ps1))) -DefaultConfig
 ```
 
 Then, from inside the repo you want Bitloops to capture:
  
 ```bash
-bitloops init --install-default-daemon
+bitloops init
+```
+
+Prefer to configure manually? Install without the default-config flag, then run:
+
+```bash
+bitloops configure --web
+bitloops init
 ```
  
 Work normally with Codex, Claude Code, Cursor, Gemini, Opencode or Copilot. Commit as usual. Bitloops captures the relevant context around every change and keeps your codebase model fresh in the background.

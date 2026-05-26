@@ -5,6 +5,7 @@ use std::time::Instant;
 pub(crate) mod agent_surfaces;
 pub mod checkpoints;
 pub mod clean;
+pub mod configure;
 pub mod daemon;
 pub mod dashboard;
 pub mod debug;
@@ -78,6 +79,8 @@ pub enum Commands {
     Reset(root::ResetArgs),
     /// Initialise Bitloops for the current project.
     Init(init::InitArgs),
+    /// Configure the global Bitloops daemon.
+    Configure(configure::ConfigureArgs),
     /// Authenticate the CLI with your Bitloops account.
     Login(login::LoginArgs),
     /// Remove the current CLI login session.
@@ -115,6 +118,9 @@ pub enum Commands {
     /// Hidden internal daemon supervisor entry point.
     #[command(name = "__daemon-supervisor", hide = true)]
     DaemonSupervisor(crate::daemon::InternalDaemonSupervisorArgs),
+    /// Hidden delayed daemon restart entry point.
+    #[command(name = "__delayed-daemon-restart", hide = true)]
+    DelayedDaemonRestart(daemon::DelayedDaemonRestartArgs),
     /// Diagnose and fix stuck sessions.
     Doctor(root::DoctorArgs),
     /// Hidden internal analytics dispatch command.
@@ -125,7 +131,7 @@ pub enum Commands {
     Completion(root::CompletionArgs),
     /// Hidden post-install command used by curl|bash install flow.
     #[command(name = "curl-bash-post-install", hide = true)]
-    CurlBashPostInstall,
+    CurlBashPostInstall(root::CurlBashPostInstallArgs),
     /// Help about any command.
     Help(root::HelpArgs),
 }
@@ -192,6 +198,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Clean(args) => root::run_clean_command(&args),
         Commands::Reset(args) => root::run_reset_command(&args),
         Commands::Init(args) => init::run(args).await,
+        Commands::Configure(args) => configure::run(args).await,
         Commands::Login(args) => login::run(args).await,
         Commands::Logout(args) => logout::run(args).await,
         Commands::Enable(args) => enable::run(args).await,
@@ -210,10 +217,11 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::DevqlWatcher(args) => crate::host::devql::watch::run_process_command(args).await,
         Commands::DaemonProcess(args) => crate::daemon::run_internal_process(args).await,
         Commands::DaemonSupervisor(args) => crate::daemon::run_internal_supervisor(args).await,
+        Commands::DelayedDaemonRestart(args) => daemon::run_delayed_restart(args).await,
         Commands::Doctor(args) => root::run_doctor_command(&args),
         Commands::SendAnalytics(args) => root::run_send_analytics_command(&args),
         Commands::Completion(args) => root::run_completion_command(&args),
-        Commands::CurlBashPostInstall => root::run_curl_bash_post_install_command(),
+        Commands::CurlBashPostInstall(args) => root::run_curl_bash_post_install_command(&args),
         Commands::Help(args) => root::run_help_command(&args),
     };
 

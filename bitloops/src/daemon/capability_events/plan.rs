@@ -11,8 +11,10 @@ use crate::host::capability_host::{
 };
 
 use super::super::types::{CapabilityEventRunRecord, unix_timestamp_now};
+#[cfg(test)]
+use super::queue::GenerationRow;
 use super::queue::{
-    ArtefactChangeRow, FileChangeRow, GenerationRow, count_artefact_changes, count_file_changes,
+    ArtefactChangeRow, FileChangeRow, count_artefact_changes, count_file_changes,
     latest_generation_seq, load_artefact_changes, load_consumer_cursor,
     load_distinct_changed_paths, load_file_changes, load_generations, sql_i64,
 };
@@ -77,12 +79,21 @@ pub(super) fn build_execution_plan(
     let latest_generation = generations
         .last()
         .expect("checked non-empty generations before building execution plan");
+    let latest_generation_seq = latest_generation.generation_seq;
     let from_generation_seq = from_generation_seq_exclusive + 1;
+    let suppress_generation_full_reconcile =
+        architecture_graph_same_session_follow_up_delta_enabled(
+            run,
+            cursor.last_applied_generation_seq,
+            requested_full_reconcile,
+        );
+    let generation_requests_full_reconcile = !suppress_generation_full_reconcile
+        && generations
+            .iter()
+            .any(|generation| generation.requires_full_reconcile);
     let forced_full_reconcile = requested_full_reconcile
         || cursor.last_applied_generation_seq.is_none()
-        || generations
-            .iter()
-            .any(|generation| generation.requires_full_reconcile)
+        || generation_requests_full_reconcile
         || latest_generation_seq.saturating_sub(cursor.last_applied_generation_seq.unwrap_or(0))
             > FULL_RECONCILE_GENERATION_SPAN_THRESHOLD;
     let (
@@ -122,19 +133,35 @@ pub(super) fn build_execution_plan(
         if file_count > FULL_RECONCILE_FILE_CHANGE_THRESHOLD
             || artefact_count > FULL_RECONCILE_ARTEFACT_CHANGE_THRESHOLD
         {
-            (
-                ReconcileMode::FullReconcile,
-                load_distinct_changed_paths(
-                    conn,
-                    &run.repo_id,
-                    from_generation_seq,
-                    latest_generation_seq,
-                )?,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            )
+            if suppress_generation_full_reconcile {
+                (
+                    ReconcileMode::MergedDelta,
+                    load_distinct_changed_paths(
+                        conn,
+                        &run.repo_id,
+                        from_generation_seq,
+                        latest_generation_seq,
+                    )?,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+            } else {
+                (
+                    ReconcileMode::FullReconcile,
+                    load_distinct_changed_paths(
+                        conn,
+                        &run.repo_id,
+                        from_generation_seq,
+                        latest_generation_seq,
+                    )?,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+            }
         } else {
             let file_changes = load_file_changes(
                 conn,
@@ -150,9 +177,10 @@ pub(super) fn build_execution_plan(
             )?;
             let merged_files = merge_file_changes(&file_changes);
             let merged_artefacts = merge_artefact_changes(&artefact_changes);
-            let reconcile_mode = determine_reconcile_mode(
+            let reconcile_mode = determine_reconcile_mode_with_generation_policy(
                 cursor.last_applied_generation_seq,
-                &generations,
+                generation_requests_full_reconcile,
+                latest_generation_seq,
                 merged_files.len(),
                 merged_artefacts.len(),
             );
@@ -305,6 +333,7 @@ fn partition_artefact_changes(
     (upserts, removals)
 }
 
+#[cfg(test)]
 pub(super) fn determine_reconcile_mode(
     last_applied_generation_seq: Option<u64>,
     generations: &[GenerationRow],
@@ -314,13 +343,28 @@ pub(super) fn determine_reconcile_mode(
     let Some(last_generation) = generations.last() else {
         return ReconcileMode::MergedDelta;
     };
-    let pending_generation_span = last_generation
-        .generation_seq
-        .saturating_sub(last_applied_generation_seq.unwrap_or(0));
-    if last_applied_generation_seq.is_none()
-        || generations
+    determine_reconcile_mode_with_generation_policy(
+        last_applied_generation_seq,
+        generations
             .iter()
-            .any(|generation| generation.requires_full_reconcile)
+            .any(|generation| generation.requires_full_reconcile),
+        last_generation.generation_seq,
+        merged_file_count,
+        merged_artefact_count,
+    )
+}
+
+fn determine_reconcile_mode_with_generation_policy(
+    last_applied_generation_seq: Option<u64>,
+    generation_requests_full_reconcile: bool,
+    latest_generation_seq: u64,
+    merged_file_count: usize,
+    merged_artefact_count: usize,
+) -> ReconcileMode {
+    let pending_generation_span =
+        latest_generation_seq.saturating_sub(last_applied_generation_seq.unwrap_or(0));
+    if last_applied_generation_seq.is_none()
+        || generation_requests_full_reconcile
         || pending_generation_span > FULL_RECONCILE_GENERATION_SPAN_THRESHOLD
         || merged_file_count > FULL_RECONCILE_FILE_CHANGE_THRESHOLD
         || merged_artefact_count > FULL_RECONCILE_ARTEFACT_CHANGE_THRESHOLD
@@ -329,6 +373,29 @@ pub(super) fn determine_reconcile_mode(
     } else {
         ReconcileMode::MergedDelta
     }
+}
+
+fn architecture_graph_same_session_follow_up_delta_enabled(
+    run: &CapabilityEventRunRecord,
+    last_applied_generation_seq: Option<u64>,
+    requested_full_reconcile: bool,
+) -> bool {
+    if requested_full_reconcile
+        || run.init_session_id.is_none()
+        || last_applied_generation_seq.is_none()
+    {
+        return false;
+    }
+    if run.capability_id
+        != crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_CAPABILITY_ID
+    {
+        return false;
+    }
+    matches!(
+        run.consumer_id.as_str(),
+        crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_CONSUMER_ID
+            | crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID
+    )
 }
 
 fn reconcile_mode_label(mode: ReconcileMode) -> &'static str {

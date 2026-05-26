@@ -19,6 +19,26 @@ Feature: Activation and Onboarding
         And   the config contains a blob store path
         And   the store paths from the config exist on disk
 
+    @installer_default_config
+    Scenario: Installer default-config flow configures the daemon without browser setup
+        Given I run CleanStart for flow "installer-default-config"
+        And   I run the installer default-config configure flow
+        Then  the global daemon config file exists
+        And   the config contains a relational store path
+        And   the config contains an event store path
+        And   the config contains a blob store path
+        And   the store paths from the config exist on disk
+
+    @configure_default_config
+    Scenario: Configure default config directly configures the daemon without browser setup
+        Given I run CleanStart for flow "configure-default-config"
+        And   I run bitloops configure --default-config
+        Then  the global daemon config file exists
+        And   the config contains a relational store path
+        And   the config contains an event store path
+        And   the config contains a blob store path
+        And   the store paths from the config exist on disk
+
     # ── Enable Bitloops in a repository ───────────────────────
     Scenario: Enable Bitloops in a fresh git repository
         Given I run CleanStart for flow "enable-repo"

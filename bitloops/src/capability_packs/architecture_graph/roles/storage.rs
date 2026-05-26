@@ -15,14 +15,17 @@ pub use adjudication_attempts::{
     DbRoleAdjudicationAttemptWriter, RoleAdjudicationAttemptRecord,
     list_recent_role_adjudication_attempts,
 };
-pub use assignments::{
-    AssignmentHistoryWrite, RoleClassificationStateReplacement, RoleClassificationStateWriteCounts,
-    list_active_current_assignments_for_role, list_current_assignments_for_role,
-    load_active_assignment_paths_not_in, load_assignments_for_path, load_assignments_for_paths,
-    load_current_assignment_by_id, mark_assignments_for_paths_stale,
-    migrate_current_assignment_to_role, record_assignment_history, replace_assignments_for_paths,
-    replace_assignments_for_paths_with_history, replace_role_classification_state,
-    retire_role_and_mark_assignments, update_current_assignment_status, upsert_assignment,
+pub(crate) use assignments::{
+    AssignmentHistoryWrite, RoleClassificationStateReplacement,
+    list_active_current_assignments_for_role, load_active_assignment_paths_not_in,
+    load_assignments_for_paths, migrate_current_assignment_to_role,
+    replace_role_classification_state, update_current_assignment_status,
+};
+#[cfg(test)]
+pub(crate) use assignments::{
+    load_assignments_for_path, load_current_assignment_by_id, mark_assignments_for_paths_stale,
+    record_assignment_history, replace_assignments_for_paths, retire_role_and_mark_assignments,
+    upsert_assignment,
 };
 pub use facts::{delete_role_facts_for_paths, load_facts_for_paths, replace_facts_for_paths};
 pub use management::{

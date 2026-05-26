@@ -205,6 +205,15 @@ mod tests {
             unreachable!("unused in results tests")
         }
 
+        fn replace_coverage_capture(
+            &mut self,
+            _capture: &CoverageCaptureRecord,
+            _hits: &[CoverageHitRecord],
+            _diagnostics: &[CoverageDiagnosticRecord],
+        ) -> Result<()> {
+            unreachable!("unused in results tests")
+        }
+
         fn rebuild_classifications_from_coverage(&mut self, _commit_sha: &str) -> Result<usize> {
             unreachable!("unused in results tests")
         }

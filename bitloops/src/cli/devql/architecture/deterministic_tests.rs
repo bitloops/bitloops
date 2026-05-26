@@ -242,6 +242,7 @@ fn roles_classify_formats_json_metrics() -> Result<()> {
             assignments_marked_stale: 0,
             assignment_history_rows: 0,
             adjudication_candidates: 0,
+            ..ArchitectureRoleReconcileMetrics::default()
         },
         architecture_embedding_selected: 0,
         architecture_embedding_enqueued: 0,
@@ -278,6 +279,7 @@ fn roles_classify_formats_human_metrics_without_json() -> Result<()> {
             assignments_marked_stale: 0,
             assignment_history_rows: 6,
             adjudication_candidates: 1,
+            ..ArchitectureRoleReconcileMetrics::default()
         },
         architecture_embedding_selected: 2,
         architecture_embedding_enqueued: 1,
@@ -291,7 +293,21 @@ fn roles_classify_formats_human_metrics_without_json() -> Result<()> {
     let rendered = format_roles_classify_output(&output, false)?;
 
     assert!(rendered.contains("architecture roles classified"));
-    assert!(rendered.contains("roles: full_reconcile=true"));
+    let facts_index = rendered
+        .find("facts: written=4 deleted=1")
+        .expect("facts line present");
+    let signals_index = rendered
+        .find("signals: written=5 deleted=2")
+        .expect("signals line present");
+    let assignments_index = rendered
+        .find("assignments: written=6 marked_stale=0 history_rows=6")
+        .expect("assignments line present");
+    let roles_index = rendered
+        .find("roles: full_reconcile=true")
+        .expect("roles summary line present");
+    assert!(facts_index < signals_index);
+    assert!(signals_index < assignments_index);
+    assert!(assignments_index < roles_index);
     assert!(rendered.contains("assignments: written=6"));
     assert!(rendered.contains("architecture embeddings: selected=2 enqueued=1 deduped=1"));
     assert!(rendered.contains("warning: classification warning"));
@@ -333,6 +349,7 @@ fn seed_command_output_includes_activation_and_classification_in_json() -> Resul
                 assignments_marked_stale: 0,
                 assignment_history_rows: 2,
                 adjudication_candidates: 0,
+                ..ArchitectureRoleReconcileMetrics::default()
             },
             architecture_embedding_selected: 0,
             architecture_embedding_enqueued: 0,
@@ -516,6 +533,7 @@ fn bootstrap_skip_seed_formats_json_with_skipped_seed_flag() -> Result<()> {
                 assignments_marked_stale: 0,
                 assignment_history_rows: 1,
                 adjudication_candidates: 0,
+                ..ArchitectureRoleReconcileMetrics::default()
             },
             architecture_embedding_selected: 0,
             architecture_embedding_enqueued: 0,

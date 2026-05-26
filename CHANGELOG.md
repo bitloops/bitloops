@@ -6,9 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
-### Changed
+### Added
 
-- **Init summaries configuration now uses runtime selection**: replaced `--summaries-mode` with `--summaries-runtime local|platform`, kept `--no-summaries` as explicit opt-out, and aligned summaries setup UX with embeddings.
+- **Configure can install daemon config without starting the daemon**: `bitloops configure --file <path> --no-start` and `bitloops configure --default-config --no-start` now validate and install daemon configuration without explicitly starting or restarting the daemon.
+
+### Fixed
+
+- **Dashboard config saves now apply safe daemon changes without a manual restart**: daemon `config.toml` saves now validate, atomically write, and immediately hot-reload reloadable fields such as inference profiles and capability bindings for future work. Structural changes still schedule a deduplicated delayed daemon restart, and the daemon watches the config directory so manual TOML edits go through the same reload-or-restart decision path.
+
+- **Init and configure semantic setup now match the repo-local config split**: `bitloops configure` writes the default daemon config, starts or restarts the always-on daemon by default, and avoids opening store databases during configuration so DuckDB event-store locks from a running daemon do not block setup. `bitloops init` now keeps final setup focused on sync/ingest while restoring separate interactive setup choices for code embeddings, semantic summaries, and summary embeddings. Summary embeddings can be configured and run independently of code embeddings, so skipping code embeddings no longer hides the summary-embeddings prompt or lane.
+
+- **Supported terminal turn-end hooks now use a durable SQLite handoff (`CLI-1698`)**: Claude Code `stop`, Codex `stop`, Gemini `after-agent`, Cursor `stop`, Copilot `agent-stop`, and OpenCode `turn-end` now record only a tiny raw terminal hook payload as a lifecycle spool job in repo runtime SQLite and return quickly. Hook-side terminal handling does not read transcripts, update interaction projections, flush canonical interaction storage, or create checkpoint steps; the daemon claims lifecycle Stop jobs from runtime SQLite and replays raw payloads through the existing lifecycle adapters with explicit repo-root context, keeping agent-specific parsing in each adapter layer. Session-start, session-end, prompt, tool, compaction, subagent, and Git hooks remain synchronous. If runtime SQLite cannot accept the tiny enqueue within the bounded timeout, the hook fails quickly and logs or surfaces the enqueue error.
+- **Dashboard interaction turns no longer inherit a second agent when Cursor runs bridged Claude hooks** (`CLI-1860`): The interaction spool now keeps the session `agent_type` sticky and normalizes turn and event rows to the parent session’s agent, so the dashboard shows the correct agent icon.
+- **DevQL sync no longer fails on large Rust repos when local import resolution collapses duplicate edges** (`CLI-1896`): after local edge resolution, distinct pre-resolution import refs (for example `crate::cli::TestOpts` and `self::cli::TestOpts`) can map to the same canonical target and produce identical `edge_id` values. Materialization now deduplicates those post-resolution collisions before writing `artefact_edges_current`, avoiding SQLite `PRIMARY KEY (repo_id, edge_id)` failures seen during sync on codebases such as `rust-lang/rust`.
+- **Current coverage ingest now maps LCOV reports to current DevQL artefacts**: `bitloops devql test-harness ingest-coverage` now defaults to current-workspace mode when `--commit` is omitted, maps LCOV and LLVM JSON line hits against `artefacts_current`, replaces stale coverage rows on re-ingest, and keeps historical commit-scoped ingest behind explicit `--commit` usage.
+- **Lifecycle-captured interaction sessions now retain actor identity on the dashboard**: session start, turn start, turn end, and session end lifecycle handlers now spool the same WorkOS-backed `actor_id`, `actor_name`, `actor_email`, and `actor_source` fields as live agent-runtime hooks. This fixes interaction sessions and events that previously showed empty actors when captured through the checkpoint lifecycle path instead of the runtime hook recorder, including transcript-derived tool events on turn end.
 
 ## [0.0.30] - 2026-05-21
 

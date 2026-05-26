@@ -245,3 +245,20 @@ fn render_completed_embedding_lane_from_inline_sync_reports_processed_artefacts(
     assert!(frame.contains("12/12 artefacts"));
     assert!(frame.contains("Embeddings generated during sync"));
 }
+
+#[test]
+fn render_sync_task_reconciling_edges_uses_indeterminate_bar_and_edge_path_label() {
+    let mut task = sync_task(3112, 2000);
+    task.sync_progress
+        .as_mut()
+        .expect("sync progress")
+        .phase = "reconciling_edges".to_string();
+
+    let status_line = super::task::format_init_task_status_line(&task, "*", None);
+    let progress_line = super::task::format_init_task_progress_bar_line(&task, 0, Some(64));
+
+    assert!(status_line.contains("reconciling edges"));
+    assert!(status_line.contains("2000/3112 edge paths"));
+    assert!(progress_line.contains("reconciling edges"));
+    assert!(!progress_line.contains(" 64% "));
+}

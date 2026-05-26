@@ -19,6 +19,7 @@ pub(crate) struct InitFinalSetupSelection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InitFinalSetupPromptOptions {
+    pub show_sync_and_ingest: bool,
     pub show_telemetry: bool,
     pub show_auto_start_daemon: bool,
 }
@@ -50,10 +51,10 @@ pub(crate) fn choose_final_setup_options(
         sync: sync.unwrap_or(true),
         ingest: ingest.unwrap_or(true),
         telemetry: prompt_options.show_telemetry,
-        auto_start_daemon: prompt_options.show_auto_start_daemon && can_prompt,
+        auto_start_daemon: prompt_options.show_auto_start_daemon,
     };
-    let requires_prompt = sync.is_none()
-        || ingest.is_none()
+    let requires_prompt = ((sync.is_none() || ingest.is_none())
+        && prompt_options.show_sync_and_ingest)
         || prompt_options.show_telemetry
         || (prompt_options.show_auto_start_daemon && can_prompt);
 
@@ -62,7 +63,7 @@ pub(crate) fn choose_final_setup_options(
     }
 
     if !can_prompt {
-        if sync.is_none() || ingest.is_none() {
+        if prompt_options.show_sync_and_ingest && (sync.is_none() || ingest.is_none()) {
             bail!(
                 "`bitloops init` requires explicit `--sync=true|false` and `--ingest=true|false` choices when not running interactively."
             );
@@ -256,18 +257,19 @@ fn prompt_final_setup_selection_with_text_input(
 fn final_setup_option_specs(
     prompt_options: InitFinalSetupPromptOptions,
 ) -> Vec<InitFinalSetupOptionSpec> {
-    let mut options = vec![
-        InitFinalSetupOptionSpec {
+    let mut options = Vec::new();
+    if prompt_options.show_sync_and_ingest {
+        options.push(InitFinalSetupOptionSpec {
             kind: InitFinalSetupOptionKind::Sync,
             label: "Sync codebase",
             insert_spacing_before: false,
-        },
-        InitFinalSetupOptionSpec {
+        });
+        options.push(InitFinalSetupOptionSpec {
             kind: InitFinalSetupOptionKind::Ingest,
             label: "Import commit history",
             insert_spacing_before: false,
-        },
-    ];
+        });
+    }
 
     let mut first_setting = true;
     if prompt_options.show_telemetry {
@@ -512,4 +514,86 @@ fn selected_follow_up_checkbox() -> String {
 fn selected_follow_up_label(label: &str) -> String {
     const SELECTION_WHITE_HEX: &str = "#ffffff";
     color_hex_if_enabled(label, SELECTION_WHITE_HEX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_start_daemon_defaults_true_when_option_is_shown_without_prompting() {
+        crate::cli::telemetry_consent::with_test_tty_override(false, || {
+            let mut out = Vec::new();
+            let mut input = std::io::Cursor::new(Vec::<u8>::new());
+
+            let selection = choose_final_setup_options(
+                Some(true),
+                &mut out,
+                &mut input,
+                Some(true),
+                InitFinalSetupPromptOptions {
+                    show_sync_and_ingest: true,
+                    show_telemetry: false,
+                    show_auto_start_daemon: true,
+                },
+            )
+            .expect("selection should use defaults");
+
+            assert!(selection.auto_start_daemon);
+        });
+    }
+
+    #[test]
+    fn final_setup_prompt_keeps_semantic_runtime_lanes_out() {
+        crate::cli::telemetry_consent::with_test_tty_override(true, || {
+            let mut out = Vec::new();
+            let mut input = std::io::Cursor::new(b"\n".to_vec());
+
+            let selection = choose_final_setup_options(
+                None,
+                &mut out,
+                &mut input,
+                None,
+                InitFinalSetupPromptOptions {
+                    show_sync_and_ingest: true,
+                    show_telemetry: false,
+                    show_auto_start_daemon: false,
+                },
+            )
+            .expect("selection should render prompt");
+
+            let rendered = String::from_utf8(out).expect("prompt should be utf8");
+            assert!(rendered.contains("Sync codebase"));
+            assert!(rendered.contains("Import commit history"));
+            assert!(!rendered.contains("Generate code embeddings"));
+            assert!(!rendered.contains("Generate summaries"));
+            assert!(!rendered.contains("Create summary embeddings"));
+            assert!(selection.sync);
+            assert!(selection.ingest);
+        });
+    }
+
+    #[test]
+    fn final_setup_prompt_selects_sync_and_ingest_independently() {
+        crate::cli::telemetry_consent::with_test_tty_override(true, || {
+            let mut out = Vec::new();
+            let mut input = std::io::Cursor::new(b"1\n".to_vec());
+
+            let selection = choose_final_setup_options(
+                None,
+                &mut out,
+                &mut input,
+                None,
+                InitFinalSetupPromptOptions {
+                    show_sync_and_ingest: true,
+                    show_telemetry: false,
+                    show_auto_start_daemon: false,
+                },
+            )
+            .expect("selection should render prompt");
+
+            assert!(selection.sync);
+            assert!(!selection.ingest);
+        });
+    }
 }

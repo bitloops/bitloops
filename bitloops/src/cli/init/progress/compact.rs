@@ -91,10 +91,26 @@ fn compact_lane_heading(
     render_context: &LaneRenderContext<'_>,
 ) -> String {
     let available_width = render_context.terminal_width.unwrap_or(80).max(24);
-    let percent = compact_lane_percent(title, lane, task, summary_run)
-        .map(|value| format!(" {:>3}%", value))
-        .unwrap_or_else(|| "     ".to_string());
-    let reserved = label_width + percent.chars().count() + 2;
+    let active_task_summary = task
+        .filter(|task| is_active_runtime_status(task.status.as_str()))
+        .and_then(|task| {
+            let (ratio, summary) = task_progress(task);
+            ratio.is_none().then_some(summary)
+        });
+    let active_summary_run_summary = summary_run
+        .filter(|run| is_active_runtime_status(run.status.as_str()))
+        .and_then(|run| {
+            let (ratio, summary) = summary_progress(run);
+            ratio.is_none().then_some(summary)
+        });
+    let heading_summary = active_task_summary
+        .or(active_summary_run_summary)
+        .unwrap_or_else(|| {
+            compact_lane_percent(title, lane, task, summary_run)
+                .map(|value| format!(" {:>3}%", value))
+                .unwrap_or_else(|| "     ".to_string())
+        });
+    let reserved = label_width + heading_summary.chars().count() + 2;
     let bar_width = available_width.saturating_sub(reserved).max(8);
     let bar = if let Some(ratio) = compact_lane_ratio(title, lane, task, summary_run) {
         render_determinate_progress_bar(
@@ -105,7 +121,7 @@ fn compact_lane_heading(
     } else {
         render_indeterminate_progress_bar(bar_width, render_context.spinner_index)
     };
-    format!("{title:<label_width$}[{bar}]{percent}")
+    format!("{title:<label_width$}[{bar}]{heading_summary}")
 }
 
 fn compact_lane_ratio(
@@ -423,6 +439,15 @@ mod tests {
         .expect("task record")
     }
 
+    fn active_reconciling_edges_sync_task(
+        paths_completed: i32,
+        paths_total: i32,
+    ) -> TaskGraphqlRecord {
+        let mut task = active_sync_task(paths_completed, paths_total);
+        task.sync_progress.as_mut().expect("sync progress").phase = "reconciling_edges".to_string();
+        task
+    }
+
     #[test]
     fn compact_ready_summary_does_not_round_incomplete_progress_to_100_percent() {
         let lane = lane_with_progress("running", 3333, 0, 3335);
@@ -460,6 +485,44 @@ mod tests {
         assert!(
             lines[0].ends_with("  10%"),
             "unexpected heading: {}",
+            lines[0]
+        );
+    }
+
+    #[test]
+    fn compact_lane_heading_uses_edge_summary_for_reconciling_sync_tasks() {
+        let lane = lane_with_progress("running", 3333, 0, 3335);
+        let task = active_reconciling_edges_sync_task(750, 3112);
+        let render_context = LaneRenderContext {
+            spinner: "spin",
+            tick: "tick",
+            spinner_index: 0,
+            terminal_width: Some(100),
+        };
+
+        let lines = render_compact_lane(
+            INIT_SUMMARIES_SECTION_TITLE,
+            &lane,
+            "Generating summaries",
+            Some(&task),
+            None,
+            22,
+            &render_context,
+        );
+
+        assert!(
+            lines[0].contains("Reconciling edges"),
+            "unexpected heading: {}",
+            lines[0]
+        );
+        assert!(
+            lines[0].contains("750/3112 edge paths"),
+            "unexpected heading: {}",
+            lines[0]
+        );
+        assert!(
+            !lines[0].contains('%'),
+            "reconciling edges heading should not show a stale percent: {}",
             lines[0]
         );
     }

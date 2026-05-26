@@ -10,6 +10,7 @@ use super::merge::{
     merge_optional_values, merge_scope_values, normalize_scope_exclusion_array_literals,
 };
 use super::scope::resolve_repo_policy_scope_exclusions;
+use super::source::RepoPolicySource;
 use super::types::{
     ImportedKnowledgeConfig, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,
     RepoPolicyFingerprintInputs, RepoPolicyLocation, RepoPolicyScopeExclusions, RepoPolicySnapshot,
@@ -17,14 +18,17 @@ use super::types::{
 };
 
 pub fn discover_repo_policy(start: &Path) -> Result<RepoPolicySnapshot> {
-    discover_repo_policy_with_mode(start, true)
+    super::source::FileRepoPolicySource.discover_required(start)
 }
 
 pub fn discover_repo_policy_optional(start: &Path) -> Result<RepoPolicySnapshot> {
-    discover_repo_policy_with_mode(start, false)
+    super::source::FileRepoPolicySource.discover_optional(start)
 }
 
-fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPolicySnapshot> {
+pub(super) fn discover_repo_policy_with_mode(
+    start: &Path,
+    strict: bool,
+) -> Result<RepoPolicySnapshot> {
     let start = if start.is_dir() {
         start.to_path_buf()
     } else {

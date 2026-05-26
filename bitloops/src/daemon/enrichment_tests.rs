@@ -555,13 +555,18 @@ fn configure_platform_summary_refresh_for_repo(
         &config_path,
     )
     .expect("bind repo root to daemon config");
+    write_repo_semantic_policy(
+        target,
+        Some(crate::config::SemanticSummaryMode::Auto),
+        None,
+        Some("summary_llm"),
+        None,
+        None,
+    );
 
     let mut config = fs::read_to_string(&config_path).expect("read platform summary perf config");
     config.push_str(&format!(
         r#"
-[semantic_clones.inference]
-summary_generation = "summary_llm"
-
 [inference.runtimes.bitloops_inference]
 command = {runtime_command:?}
 args = []
@@ -584,6 +589,30 @@ max_output_tokens = 200
     }
 
     fs::write(&config_path, config).expect("write platform summary perf config");
+}
+
+fn write_repo_semantic_policy(
+    target: &EnrichmentJobTarget,
+    summary_mode: Option<crate::config::SemanticSummaryMode>,
+    embedding_mode: Option<crate::config::SemanticCloneEmbeddingMode>,
+    summary_generation: Option<&str>,
+    code_embeddings: Option<&str>,
+    summary_embeddings: Option<&str>,
+) {
+    crate::config::set_repo_semantic_embedding_policy(
+        &crate::config::settings::settings_local_path(&target.repo_root),
+        &crate::config::RepoSemanticEmbeddingPolicy {
+            present: true,
+            summary_mode,
+            embedding_mode,
+            inference: crate::config::SemanticClonesInferenceBindings {
+                summary_generation: summary_generation.map(str::to_string),
+                code_embeddings: code_embeddings.map(str::to_string),
+                summary_embeddings: summary_embeddings.map(str::to_string),
+            },
+        },
+    )
+    .expect("write repo semantic policy");
 }
 
 fn summary_refresh_perf_platform_prerequisites() -> Result<String, String> {
@@ -840,6 +869,14 @@ fn configure_summary_refresh_for_repo(target: &EnrichmentJobTarget) {
         &config_path,
     )
     .expect("bind repo root to daemon config");
+    write_repo_semantic_policy(
+        target,
+        Some(crate::config::SemanticSummaryMode::Auto),
+        None,
+        Some("summary_local"),
+        None,
+        None,
+    );
 
     #[cfg(unix)]
     let (command, args) = fake_text_generation_runtime_command_and_args(&target.repo_root);
@@ -853,9 +890,6 @@ fn configure_summary_refresh_for_repo(target: &EnrichmentJobTarget) {
     let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
     config.push_str(&format!(
         r#"
-[semantic_clones.inference]
-summary_generation = "summary_local"
-
 [inference.runtimes.bitloops_inference]
 command = {command:?}
 args = [{runtime_args}]
@@ -952,6 +986,14 @@ fn configure_embeddings_for_repo(target: &EnrichmentJobTarget, profile_name: &st
         &config_path,
     )
     .expect("bind repo root to daemon config");
+    write_repo_semantic_policy(
+        target,
+        None,
+        Some(crate::config::SemanticCloneEmbeddingMode::SemanticAwareOnce),
+        None,
+        Some(profile_name),
+        Some(profile_name),
+    );
 
     #[cfg(unix)]
     let (command, args) = fake_embeddings_runtime_command_and_args(&target.repo_root);
@@ -966,11 +1008,6 @@ fn configure_embeddings_for_repo(target: &EnrichmentJobTarget, profile_name: &st
     config.push_str(&format!(
         r#"
 [semantic_clones]
-embedding_mode = "semantic_aware_once"
-
-[semantic_clones.inference]
-code_embeddings = "{profile_name}"
-summary_embeddings = "{profile_name}"
 
 [inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
@@ -1002,6 +1039,14 @@ fn configure_summary_refresh_and_embeddings_for_repo(
         &config_path,
     )
     .expect("bind repo root to daemon config");
+    write_repo_semantic_policy(
+        target,
+        Some(crate::config::SemanticSummaryMode::Auto),
+        Some(crate::config::SemanticCloneEmbeddingMode::SemanticAwareOnce),
+        Some("summary_local"),
+        Some(profile_name),
+        Some(profile_name),
+    );
 
     #[cfg(unix)]
     let (summary_command, summary_args) =
@@ -1031,12 +1076,6 @@ fn configure_summary_refresh_and_embeddings_for_repo(
     config.push_str(&format!(
         r#"
 [semantic_clones]
-embedding_mode = "semantic_aware_once"
-
-[semantic_clones.inference]
-summary_generation = "summary_local"
-code_embeddings = "{profile_name}"
-summary_embeddings = "{profile_name}"
 
 [inference.runtimes.bitloops_inference]
 command = {summary_command:?}
@@ -1084,6 +1123,14 @@ fn configure_summary_embeddings_only_for_repo(
         &config_path,
     )
     .expect("bind repo root to daemon config");
+    write_repo_semantic_policy(
+        target,
+        None,
+        Some(crate::config::SemanticCloneEmbeddingMode::SemanticAwareOnce),
+        None,
+        None,
+        Some(profile_name),
+    );
 
     #[cfg(unix)]
     let (command, args) = fake_embeddings_runtime_command_and_args(&target.repo_root);
@@ -1098,10 +1145,6 @@ fn configure_summary_embeddings_only_for_repo(
     config.push_str(&format!(
         r#"
 [semantic_clones]
-embedding_mode = "semantic_aware_once"
-
-[semantic_clones.inference]
-summary_embeddings = "{profile_name}"
 
 [inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
@@ -1134,16 +1177,19 @@ fn configure_remote_embeddings_for_repo(
         &config_path,
     )
     .expect("bind repo root to daemon config");
+    write_repo_semantic_policy(
+        target,
+        None,
+        Some(crate::config::SemanticCloneEmbeddingMode::SemanticAwareOnce),
+        None,
+        Some(profile_name),
+        Some(profile_name),
+    );
 
     let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
     config.push_str(&format!(
         r#"
 [semantic_clones]
-embedding_mode = "semantic_aware_once"
-
-[semantic_clones.inference]
-code_embeddings = "{profile_name}"
-summary_embeddings = "{profile_name}"
 
 [inference.runtimes.bitloops_platform_embeddings]
 command = "platform-embeddings"
@@ -1172,9 +1218,6 @@ fn configure_repo_local_remote_embeddings_for_repo(
     let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
     config.push_str(&format!(
         r#"
-[semantic_clones.inference]
-summary_generation = "summary_llm"
-
 [inference.runtimes.bitloops_platform_embeddings]
 command = "platform-embeddings"
 args = []
@@ -1214,9 +1257,11 @@ max_output_tokens = 200
 config_path = {:?}
 
 [semantic_clones]
+summary_mode = "auto"
 embedding_mode = "semantic_aware_once"
 
 [semantic_clones.inference]
+summary_generation = "summary_llm"
 code_embeddings = "{profile_name}"
 summary_embeddings = "{profile_name}"
 "#,
@@ -1249,9 +1294,6 @@ fn configure_repo_local_remote_embeddings_with_fake_summary_for_repo(
     let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
     config.push_str(&format!(
         r#"
-[semantic_clones.inference]
-summary_generation = "summary_local"
-
 [inference.runtimes.bitloops_platform_embeddings]
 command = "platform-embeddings"
 args = []
@@ -1291,9 +1333,11 @@ max_output_tokens = 200
 config_path = {:?}
 
 [semantic_clones]
+summary_mode = "auto"
 embedding_mode = "semantic_aware_once"
 
 [semantic_clones.inference]
+summary_generation = "summary_local"
 code_embeddings = "{profile_name}"
 summary_embeddings = "{profile_name}"
 "#,

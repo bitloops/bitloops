@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
 use crate::config::unified_config::resolve_embedding_capability_from_unified;
 use crate::config::{
-    EmbeddingCapabilityConfig, EmbeddingProfileConfig, InferenceTask, load_daemon_settings,
+    EmbeddingCapabilityConfig, EmbeddingProfileConfig, InferenceTask, SemanticCloneEmbeddingMode,
+    load_daemon_settings, repo_semantic_embedding_policy,
     resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
     resolve_embedding_capability_config_for_repo,
 };
@@ -57,20 +58,22 @@ pub(crate) fn inspect_embeddings_install_state(repo_root: &Path) -> EmbeddingsIn
         return EmbeddingsInstallState::NotConfigured;
     }
     let capability = resolve_embedding_capability_config_for_repo(repo_root);
-    let Some(profile_name) = selected_inference_profile_name(&capability).map(ToOwned::to_owned)
-    else {
+    let Some(profile_name) = selected_repo_embedding_profile_name(repo_root) else {
         return EmbeddingsInstallState::NotConfigured;
     };
-    let kind = capability
-        .inference
-        .profiles
-        .get(&profile_name)
-        .map(|profile| profile.driver.clone());
-    let runtime = capability
-        .inference
-        .profiles
-        .get(&profile_name)
-        .and_then(|profile| profile.runtime.clone());
+    let Some(profile) = capability.inference.profiles.get(&profile_name) else {
+        return EmbeddingsInstallState::NotConfigured;
+    };
+    let kind = Some(profile.driver.clone());
+    let runtime = profile.runtime.clone();
+    if kind.as_deref() == Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER) {
+        let Some(runtime_name) = runtime.as_deref() else {
+            return EmbeddingsInstallState::NotConfigured;
+        };
+        if !capability.inference.runtimes.contains_key(runtime_name) {
+            return EmbeddingsInstallState::NotConfigured;
+        }
+    }
     if kind.as_deref() == Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER)
         && runtime.as_deref() == Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
     {
@@ -82,6 +85,29 @@ pub(crate) fn inspect_embeddings_install_state(repo_root: &Path) -> EmbeddingsIn
     } else {
         EmbeddingsInstallState::ConfiguredNonLocal { profile_name, kind }
     }
+}
+
+fn selected_repo_embedding_profile_name(repo_root: &Path) -> Option<String> {
+    let policy = repo_semantic_embedding_policy(repo_root).ok()?;
+    if policy.embedding_mode == Some(SemanticCloneEmbeddingMode::Off) {
+        return None;
+    }
+    policy
+        .inference
+        .code_embeddings
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            policy
+                .inference
+                .summary_embeddings
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
 }
 
 #[cfg(test)]

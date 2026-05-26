@@ -649,8 +649,8 @@ pub struct DevqlTestHarnessIngestCoverageArgs {
     #[arg(long)]
     pub input: Option<std::path::PathBuf>,
     #[arg(long)]
-    pub commit: String,
-    #[arg(long)]
+    pub commit: Option<String>,
+    #[arg(long, default_value = "workspace")]
     pub scope: String,
     #[arg(long, default_value = "unknown")]
     pub tool: String,

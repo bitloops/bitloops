@@ -32,8 +32,8 @@ const TAIL_SCAN_BLOCK_SIZE: usize = 8 * 1024;
 
 pub use args::{
     DaemonArgs, DaemonCommand, DaemonLogLevel, DaemonLogsArgs, DaemonRestartArgs, DaemonStartArgs,
-    DaemonStatusArgs, DaemonStopArgs, EnrichmentArgs, EnrichmentCommand, EnrichmentPauseArgs,
-    EnrichmentResumeArgs, EnrichmentRetryFailedArgs, EnrichmentStatusArgs,
+    DaemonStatusArgs, DaemonStopArgs, DelayedDaemonRestartArgs, EnrichmentArgs, EnrichmentCommand,
+    EnrichmentPauseArgs, EnrichmentResumeArgs, EnrichmentRetryFailedArgs, EnrichmentStatusArgs,
     MISSING_SUBCOMMAND_MESSAGE,
 };
 
@@ -394,6 +394,19 @@ pub async fn run_restart(args: DaemonRestartArgs) -> Result<()> {
     let state = daemon::restart(requested_config.as_ref()).await?;
     println!("Bitloops daemon restarted at {}", state.url);
     Ok(())
+}
+
+pub async fn run_delayed_restart(args: DelayedDaemonRestartArgs) -> Result<()> {
+    log::info!(
+        "cli daemon delayed restart: config={} delay_ms={}",
+        args.config.display(),
+        args.delay_ms
+    );
+    tokio::time::sleep(Duration::from_millis(args.delay_ms)).await;
+    run_restart(DaemonRestartArgs {
+        config: Some(args.config),
+    })
+    .await
 }
 
 pub async fn run_enrichments(args: EnrichmentArgs) -> Result<()> {

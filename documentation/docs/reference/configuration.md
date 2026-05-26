@@ -19,19 +19,23 @@ Bitloops stores daemon configuration at:
 - Linux: `${XDG_CONFIG_HOME:-~/.config}/bitloops/config.toml`
 - macOS and Windows: the platform-equivalent config directory returned by the OS
 
-`bitloops start` and `bitloops daemon start` use this file.
+`bitloops configure`, `bitloops start`, and `bitloops daemon start` use this file.
 
+- `bitloops configure --web` creates the default file and local stores when needed, starts or reuses the daemon, and opens the dashboard configuration page.
+- `bitloops configure --file <path>` validates a complete daemon `config.toml`, installs it at the default daemon config path, ensures local stores exist, then restarts or starts the daemon.
+- `bitloops configure --default-config` installs the generated default daemon config directly and starts or reuses the daemon.
+- Add `--no-start` to `bitloops configure --file <path>` or `bitloops configure --default-config` when you want to install the daemon config without starting or restarting the daemon. `--no-start` is not valid with `--web`.
+- Installers support a default-config flag for scripted setup. On macOS, Linux, and WSL pass `--default-config` to `install.sh`; on Windows PowerShell pass `-DefaultConfig`; on Windows CMD pass `--default-config` or `/default-config`. The installers write the generated default daemon TOML and run `bitloops configure --file`.
+- The manual alternative is to install without the default-config flag, run `bitloops configure --web`, then run `bitloops init` inside each repo.
 - In interactive mode, plain `bitloops start` prompts to create the default file when it is missing.
 - `bitloops start --create-default-config` creates the default file and the matching default local SQLite, DuckDB, and blob-store paths.
-- `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
-- When embeddings are not configured yet, interactive `bitloops init --install-default-daemon` asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now. Bitloops cloud is the recommended default.
 - `bitloops embeddings install --runtime platform` installs the managed `bitloops-platform-embeddings` runtime and writes the hosted runtime args into the daemon config. Add `--gateway-url https://gateway.example/v1/embeddings` only when you want an explicit gateway override.
 - `--config /path/to/config.toml` uses an explicit daemon config file. If that explicit path is missing, `start` fails instead of creating it.
 - `bitloops start --config /path/to/config.toml --bootstrap-local-stores` keeps that explicit config path and creates the matching local SQLite, DuckDB, and blob-store artefacts before startup.
-- `bitloops start`, `bitloops init`, and `bitloops enable` all accept `--telemetry`, `--telemetry=false`, and `--no-telemetry` to resolve telemetry consent explicitly.
+- `bitloops start` and `bitloops enable` accept `--telemetry`, `--telemetry=false`, and `--no-telemetry` to resolve telemetry consent explicitly.
 - `bitloops enable --install-embeddings` and `bitloops daemon enable --install-embeddings` can also update the effective daemon config when they add the default local embeddings profile. When that profile uses the default local Bitloops-managed runtime, Bitloops also installs or updates the managed `bitloops-local-embeddings` binary.
-- `bitloops init --embeddings-runtime platform` and `bitloops enable --install-embeddings --embeddings-runtime platform` follow the hosted platform path instead. Add `--embeddings-gateway-url https://gateway.example/v1/embeddings` or set `BITLOOPS_PLATFORM_GATEWAY_URL` only when you want to override the platform default. The bearer token environment variable defaults to `BITLOOPS_PLATFORM_GATEWAY_TOKEN` and can be overridden with `--embeddings-api-key-env`.
-- `bitloops init --context-guidance-runtime platform` and `bitloops enable --capture --install-context-guidance --context-guidance-runtime platform` configure hosted context guidance text generation. Add `--context-guidance-gateway-url https://gateway.example/v1/chat/completions` only when you want an explicit chat completions endpoint override. The bearer token environment variable defaults to `BITLOOPS_PLATFORM_GATEWAY_TOKEN` and can be overridden with `--context-guidance-api-key-env`.
+- `bitloops enable --install-embeddings --embeddings-runtime platform` follows the hosted platform path instead. Add `--embeddings-gateway-url https://gateway.example/v1/embeddings` or set `BITLOOPS_PLATFORM_GATEWAY_URL` only when you want to override the platform default. The bearer token environment variable defaults to `BITLOOPS_PLATFORM_GATEWAY_TOKEN` and can be overridden with `--embeddings-api-key-env`.
+- `bitloops enable --capture --install-context-guidance --context-guidance-runtime platform` configures hosted context guidance text generation. Add `--context-guidance-gateway-url https://gateway.example/v1/chat/completions` only when you want an explicit chat completions endpoint override. The bearer token environment variable defaults to `BITLOOPS_PLATFORM_GATEWAY_TOKEN` and can be overridden with `--context-guidance-api-key-env`.
 
 The daemon config owns:
 
@@ -163,7 +167,7 @@ Notes:
 - `task = "text_generation"` profiles must also declare `temperature` and `max_output_tokens`.
 - Bitloops always routes text generation through the configured runtime, typically `bitloops_inference`.
 - `driver` on a text-generation profile is interpreted by `bitloops-inference`, not by Bitloops itself.
-- Local summary bootstrap uses Ollama by default when `bitloops init --install-default-daemon` or interactive `bitloops enable` can detect it, and writes `base_url = "http://127.0.0.1:11434/api/chat"`.
+- Local summary bootstrap uses Ollama by default when interactive `bitloops enable` can detect it, and writes `base_url = "http://127.0.0.1:11434/api/chat"`.
 - Local context guidance setup uses the same Ollama chat profile shape and writes `max_output_tokens = 4096`.
 - `thinking_level` is an optional profile property for local CLI-agent drivers only. Bitloops preserves the configured value and includes it in runtime identity; when absent, Bitloops leaves it unset and does not synthesize a default.
 
@@ -248,7 +252,7 @@ Repo-scoped commands that need daemon settings resolve the effective daemon conf
 2. The nearest `config.toml` found by walking upwards from the current repo
 3. The default global daemon config
 
-`bitloops enable --install-embeddings`, `bitloops daemon enable --install-embeddings`, and `bitloops init --install-default-daemon` all use that same precedence when deciding which daemon config to read, mutate, and bootstrap against.
+`bitloops enable --install-embeddings`, `bitloops daemon enable --install-embeddings`, and `bitloops configure --file` all use daemon config paths explicitly when deciding which daemon config to read, mutate, and bootstrap against.
 
 That means:
 
@@ -258,7 +262,7 @@ That means:
 
 ### Default Embeddings Enablement
 
-When Bitloops auto-enables the default local embeddings profile through `bitloops enable --install-embeddings`, interactive `bitloops enable`, `bitloops embeddings install`, or `bitloops init --install-default-daemon` after you choose `Local runtime`, it creates the minimum daemon config needed for that local profile and writes the repo opt-in to project policy:
+When Bitloops auto-enables the default local embeddings profile through `bitloops enable --install-embeddings`, interactive `bitloops enable`, or `bitloops embeddings install`, it creates the minimum daemon config needed for that local profile and writes the repo opt-in to project policy:
 
 ```toml
 [inference.runtimes.bitloops_local_embeddings]
@@ -433,11 +437,9 @@ Bitloops treats each workspace or worktree as having its own local runtime and c
 - `Capture`, which toggles `[capture].enabled`
 - `DevQL Guidance`, which toggles `[agents].devql_guidance_enabled` and the managed repo-local DevQL guidance surfaces
 
-Interactive `bitloops init` can also ask whether you want to install the default local embeddings setup when embeddings are still unconfigured, whether you want to queue an initial DevQL current-state sync after hook setup, and whether you want to run initial commit-history ingest. Use `--sync=true|false` and `--ingest=true|false` when you want to make those choices explicit; non-interactive runs require those flags.
+Interactive `bitloops init` asks whether you want to queue an initial DevQL current-state sync after hook setup and whether you want to run initial commit-history ingest. Use `--sync=true|false` and `--ingest=true|false` when you want to make those choices explicit; non-interactive runs require those flags.
 
-When you use `bitloops init --install-default-daemon` and embeddings are not already configured, interactive init asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now. Non-interactive init requires the choice to be explicit with `--embeddings-runtime local`, `--embeddings-runtime platform`, or `--no-embeddings`. If you choose the local runtime, any managed `bitloops-local-embeddings` download still happens afterwards when init also runs sync or ingest.
-
-When context guidance generation is not configured, interactive init also asks whether to skip, use Bitloops Cloud, or use local Ollama text generation. Use `--context-guidance-runtime local`, `--context-guidance-runtime platform`, or `--no-context-guidance` when you want to make that choice explicit.
+Daemon-only settings such as telemetry, inference profiles, capability packs, context guidance, semantic clone defaults, store backends, logging, and dashboard options belong to `bitloops configure`, not `bitloops init`.
 
 `bitloops init` also accepts repeatable repo-policy exclusion flags:
 

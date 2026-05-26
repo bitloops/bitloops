@@ -296,6 +296,9 @@ impl DevqlTaskCoordinator {
     pub(super) fn finish_task_failed(&self, task_id: &str, err: anyhow::Error) -> Result<()> {
         let task_id = task_id.to_string();
         let error = format!("{err:#}");
+        if is_cancelled_join_error(&error) {
+            return self.requeue_task_after_cancelled_join(&task_id, &error);
+        }
         let mut task_context: Option<(String, String, DevqlTaskKind, DevqlTaskSource)> = None;
         self.mutate_state(|state| {
             let Some(task) = state.tasks.iter_mut().find(|task| task.task_id == task_id) else {
@@ -321,6 +324,44 @@ impl DevqlTaskCoordinator {
         if let Some((task_id, repo_id, kind, source)) = task_context {
             log::error!(
                 "DevQL task failed: id={} repo={} kind={} source={} error={}",
+                task_id,
+                repo_id,
+                kind,
+                source,
+                error
+            );
+        }
+        Ok(())
+    }
+
+    fn requeue_task_after_cancelled_join(&self, task_id: &str, error: &str) -> Result<()> {
+        let task_id = task_id.to_string();
+        let error = error.to_string();
+        let mut task_context: Option<(String, String, DevqlTaskKind, DevqlTaskSource)> = None;
+        self.mutate_state(|state| {
+            let Some(task) = state.tasks.iter_mut().find(|task| task.task_id == task_id) else {
+                return Ok(());
+            };
+            task.status = DevqlTaskStatus::Queued;
+            task.started_at_unix = None;
+            task.completed_at_unix = None;
+            task.updated_at_unix = unix_timestamp_now();
+            task.error = None;
+            task.result = None;
+            task.progress = default_progress_for_spec(&task.spec);
+            task_context = Some((
+                task.task_id.clone(),
+                task.repo_id.clone(),
+                task.kind,
+                task.source,
+            ));
+            state.last_action = Some("requeued".to_string());
+            Ok(())
+        })
+        .map(|_: ()| ())?;
+        if let Some((task_id, repo_id, kind, source)) = task_context {
+            log::warn!(
+                "DevQL task requeued after cancelled join: id={} repo={} kind={} source={} error={}",
                 task_id,
                 repo_id,
                 kind,
@@ -485,4 +526,11 @@ impl DevqlTaskCoordinator {
         };
         hub.publish_checkpoint(repo_name, checkpoint);
     }
+}
+
+fn is_cancelled_join_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("joining ")
+        && lower.contains(" task: task ")
+        && (lower.contains(" was cancelled") || lower.contains(" was canceled"))
 }
