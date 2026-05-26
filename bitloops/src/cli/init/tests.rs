@@ -223,7 +223,7 @@ fn init_args_accept_repo_local_flags() {
 }
 
 #[test]
-fn init_args_bare_backfill_defaults_to_ten_commits() {
+fn init_args_bare_backfill_defaults_to_twenty_five_commits() {
     let parsed = Cli::try_parse_from([
         "bitloops",
         "init",
@@ -238,8 +238,8 @@ fn init_args_bare_backfill_defaults_to_ten_commits() {
         panic!("expected init command");
     };
 
-    assert_eq!(DEFAULT_INIT_INGEST_BACKFILL, 10);
-    assert_eq!(args.backfill, Some(10));
+    assert_eq!(DEFAULT_INIT_INGEST_BACKFILL, 25);
+    assert_eq!(args.backfill, Some(25));
 }
 
 #[test]
