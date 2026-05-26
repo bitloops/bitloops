@@ -339,11 +339,25 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
     assert!(sdl_body.contains("type RuntimeQueryRoot"));
     assert!(sdl_body.contains("configTargets: [RuntimeConfigTargetObject!]!"));
     assert!(sdl_body.contains("configSnapshot(targetId: ID!): RuntimeConfigSnapshotObject!"));
+    assert!(sdl_body.contains(
+        "runtimeExecutableResolutions(commands: [String!]!): [RuntimeExecutableResolutionObject!]!"
+    ));
+    assert!(sdl_body.contains("capabilityPacks: [CapabilityPackObject!]!"));
     assert!(sdl_body.contains("runtimeSnapshot(repoId: String!): RuntimeSnapshotObject!"));
     assert!(
         sdl_body
             .contains("updateConfig(input: UpdateRuntimeConfigInput!): UpdateRuntimeConfigResult!")
     );
+    assert!(sdl_body.contains(
+        "planCapabilityPackConfig(input: PlanCapabilityPackConfigInput!): CapabilityPackConfigPlan!"
+    ));
+    assert!(
+        sdl_body
+            .contains("applyCapabilityPackConfig(input: ApplyCapabilityPackConfigInput!): ApplyCapabilityPackConfigResult!")
+    );
+    assert!(sdl_body.contains("restartScheduled: Boolean!"));
+    assert!(!sdl_body.contains("repoLocalConfigPath"));
+    assert!(!sdl_body.contains("expectedRepoLocalRevision"));
     assert!(
         sdl_body.contains("startInit(repoId: String!, input: StartInitInput!): StartInitResult!")
     );
@@ -708,6 +722,52 @@ async fn devql_runtime_config_targets_list_existing_config_files() {
 }
 
 #[tokio::test]
+async fn devql_runtime_executable_resolutions_reports_missing_commands() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = build_dashboard_router(test_state(
+        temp.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        temp.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "query Resolve($commands: [String!]!) { runtimeExecutableResolutions(commands: $commands) { command path found } }",
+                "variables": {
+                    "commands": ["__bitloops_missing_runtime_command__"]
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    assert_eq!(
+        payload["data"]["runtimeExecutableResolutions"][0]["command"],
+        "__bitloops_missing_runtime_command__"
+    );
+    assert_eq!(
+        payload["data"]["runtimeExecutableResolutions"][0]["path"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        payload["data"]["runtimeExecutableResolutions"][0]["found"],
+        false
+    );
+}
+
+#[tokio::test]
 async fn devql_runtime_config_snapshot_and_update_config_mutation() {
     let repo = TempDir::new().expect("temp dir");
     init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
@@ -776,7 +836,7 @@ async fn devql_runtime_config_snapshot_and_update_config_mutation() {
         "application/json",
         Body::from(
             json!({
-                "query": "mutation Update($input: UpdateRuntimeConfigInput!) { updateConfig(input: $input) { restartRequired snapshot { revision sections { key fields { key value } } } } }",
+                "query": "mutation Update($input: UpdateRuntimeConfigInput!) { updateConfig(input: $input) { restartRequired reloadApplied restartScheduled applyMessage snapshot { revision sections { key fields { key value } } } } }",
                 "variables": {
                     "input": {
                         "targetId": target_id,
@@ -797,6 +857,24 @@ async fn devql_runtime_config_snapshot_and_update_config_mutation() {
         update_payload.get("errors").is_none(),
         "runtime graphql errors: {:?}",
         update_payload.get("errors")
+    );
+    assert_eq!(
+        update_payload["data"]["updateConfig"]["restartRequired"],
+        true
+    );
+    assert_eq!(
+        update_payload["data"]["updateConfig"]["reloadApplied"],
+        false
+    );
+    assert_eq!(
+        update_payload["data"]["updateConfig"]["restartScheduled"],
+        true
+    );
+    assert!(
+        update_payload["data"]["updateConfig"]["applyMessage"]
+            .as_str()
+            .is_some_and(|message| message.contains("Restart scheduled")),
+        "unexpected apply message: {update_payload}"
     );
     assert_ne!(
         update_payload["data"]["updateConfig"]["snapshot"]["revision"]
@@ -840,6 +918,296 @@ async fn devql_runtime_config_snapshot_and_update_config_mutation() {
             .as_str()
             .is_some_and(|message| message.contains("changed on disk")),
         "unexpected stale response: {stale_payload}"
+    );
+}
+
+#[tokio::test]
+async fn devql_runtime_config_update_applies_reloadable_daemon_changes_without_restart() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, targets_payload) = request_json_with_method_and_content_type(
+        app.clone(),
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "{ configTargets { id kind path } }"
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let daemon_target = targets_payload["data"]["configTargets"]
+        .as_array()
+        .expect("targets")
+        .iter()
+        .find(|target| target["kind"] == "daemon")
+        .expect("daemon target");
+    let target_id = daemon_target["id"].as_str().expect("target id");
+
+    let (status, snapshot_payload) = request_json_with_method_and_content_type(
+        app.clone(),
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "query Snapshot($targetId: ID!) { configSnapshot(targetId: $targetId) { revision } }",
+                "variables": { "targetId": target_id }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let revision = snapshot_payload["data"]["configSnapshot"]["revision"]
+        .as_str()
+        .expect("snapshot revision");
+
+    let (status, update_payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "mutation Update($input: UpdateRuntimeConfigInput!) { updateConfig(input: $input) { restartRequired reloadApplied restartScheduled applyMessage message snapshot { revision } } }",
+                "variables": {
+                    "input": {
+                        "targetId": target_id,
+                        "expectedRevision": revision,
+                        "patches": [{
+                            "path": ["inference", "profiles", "summary_llm", "max_output_tokens"],
+                            "value": 256
+                        }]
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        update_payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        update_payload.get("errors")
+    );
+    assert_eq!(
+        update_payload["data"]["updateConfig"]["restartRequired"],
+        false
+    );
+    assert_eq!(
+        update_payload["data"]["updateConfig"]["reloadApplied"],
+        true
+    );
+    assert_eq!(
+        update_payload["data"]["updateConfig"]["restartScheduled"],
+        false
+    );
+    assert!(
+        update_payload["data"]["updateConfig"]["applyMessage"]
+            .as_str()
+            .is_some_and(|message| message.contains("saved and applied")),
+        "unexpected apply message: {update_payload}"
+    );
+}
+
+#[tokio::test]
+async fn devql_runtime_config_update_applies_repo_policy_changes_without_restart() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    fs::write(
+        repo.path().join(crate::config::REPO_POLICY_FILE_NAME),
+        "[devql]\nsync_enabled = true\ningest_enabled = true\n",
+    )
+    .expect("write repo policy");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, targets_payload) = request_json_with_method_and_content_type(
+        app.clone(),
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "{ configTargets { id kind path } }"
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let repo_target = targets_payload["data"]["configTargets"]
+        .as_array()
+        .expect("targets")
+        .iter()
+        .find(|target| target["kind"] == "repo_shared")
+        .expect("repo shared target");
+    let target_id = repo_target["id"].as_str().expect("target id");
+
+    let (status, snapshot_payload) = request_json_with_method_and_content_type(
+        app.clone(),
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "query Snapshot($targetId: ID!) { configSnapshot(targetId: $targetId) { revision } }",
+                "variables": { "targetId": target_id }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let revision = snapshot_payload["data"]["configSnapshot"]["revision"]
+        .as_str()
+        .expect("snapshot revision");
+
+    let (status, update_payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "mutation Update($input: UpdateRuntimeConfigInput!) { updateConfig(input: $input) { restartRequired reloadApplied restartScheduled applyMessage } }",
+                "variables": {
+                    "input": {
+                        "targetId": target_id,
+                        "expectedRevision": revision,
+                        "patches": [{
+                            "path": ["devql", "ingest_enabled"],
+                            "value": false
+                        }]
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        update_payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        update_payload.get("errors")
+    );
+    assert_eq!(
+        update_payload["data"]["updateConfig"]["restartRequired"],
+        false
+    );
+    assert_eq!(
+        update_payload["data"]["updateConfig"]["reloadApplied"],
+        true
+    );
+    assert_eq!(
+        update_payload["data"]["updateConfig"]["restartScheduled"],
+        false
+    );
+}
+
+#[tokio::test]
+async fn devql_runtime_capability_pack_apply_still_schedules_restart() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+    let plan_input = json!({
+        "explicitEnabled": [],
+        "explicitDisabled": ["semantic_clones"],
+        "daemonPatches": []
+    });
+
+    let (status, plan_payload) = request_json_with_method_and_content_type(
+        app.clone(),
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "mutation Plan($input: PlanCapabilityPackConfigInput!) { planCapabilityPackConfig(input: $input) { planHash daemonRevision blockers restartRequired reloadRequired } }",
+                "variables": { "input": plan_input }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        plan_payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        plan_payload.get("errors")
+    );
+    assert_eq!(
+        plan_payload["data"]["planCapabilityPackConfig"]["blockers"],
+        json!([])
+    );
+    assert_eq!(
+        plan_payload["data"]["planCapabilityPackConfig"]["restartRequired"],
+        true
+    );
+    let plan_hash = plan_payload["data"]["planCapabilityPackConfig"]["planHash"]
+        .as_str()
+        .expect("plan hash");
+    let daemon_revision = plan_payload["data"]["planCapabilityPackConfig"]["daemonRevision"]
+        .as_str()
+        .expect("daemon revision");
+
+    let (status, apply_payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "mutation Apply($input: ApplyCapabilityPackConfigInput!) { applyCapabilityPackConfig(input: $input) { restartRequired restartScheduled reloadRequired message } }",
+                "variables": {
+                    "input": {
+                        "explicitEnabled": [],
+                        "explicitDisabled": ["semantic_clones"],
+                        "daemonPatches": [],
+                        "expectedDaemonRevision": daemon_revision,
+                        "planHash": plan_hash
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        apply_payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        apply_payload.get("errors")
+    );
+    assert_eq!(
+        apply_payload["data"]["applyCapabilityPackConfig"]["restartRequired"],
+        true
+    );
+    assert_eq!(
+        apply_payload["data"]["applyCapabilityPackConfig"]["restartScheduled"],
+        true
     );
 }
 

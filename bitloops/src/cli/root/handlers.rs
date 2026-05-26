@@ -1,13 +1,17 @@
 use anyhow::{Context, Result};
 use std::env;
+use std::fs;
 #[cfg(test)]
 use std::io::BufRead;
 use std::io::{self, Write};
+use std::path::Path;
 
 use crate::cli::{clean, doctor, enable, reset, resume};
 use crate::config::settings;
 
-use super::args::{CleanArgs, DisableArgs, DoctorArgs, HelpArgs, ResetArgs, ResumeArgs};
+use super::args::{
+    CleanArgs, CurlBashPostInstallArgs, DisableArgs, DoctorArgs, HelpArgs, ResetArgs, ResumeArgs,
+};
 use super::completion;
 use super::help::write_help;
 use super::settings::load_settings_once;
@@ -85,18 +89,48 @@ pub fn run_version_command(check_for_updates: bool) -> Result<()> {
 pub(crate) fn run_curl_bash_post_install_command_with_io(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
+    write_default_config: Option<&Path>,
 ) -> Result<()> {
+    if let Some(path) = write_default_config {
+        write_default_daemon_config_template(out, path)?;
+        return Ok(());
+    }
+
     if let Err(err) = enable::run_post_install_shell_completion_with_io(out, input) {
         writeln!(out, "Note: Shell completion setup skipped: {err}")?;
     }
     Ok(())
 }
 
-pub fn run_curl_bash_post_install_command() -> Result<()> {
+pub fn run_curl_bash_post_install_command(args: &CurlBashPostInstallArgs) -> Result<()> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
+    if let Some(path) = args.write_default_config.as_deref() {
+        write_default_daemon_config_template(&mut out, path)?;
+        return Ok(());
+    }
+
     if let Err(err) = enable::run_post_install_shell_completion(&mut out) {
         writeln!(out, "Note: Shell completion setup skipped: {err}")?;
     }
+    Ok(())
+}
+
+fn write_default_daemon_config_template(out: &mut dyn Write, path: &Path) -> Result<()> {
+    let content = crate::config::default_daemon_config_toml()?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating directory {}", parent.display()))?;
+    }
+    fs::write(path, content)
+        .with_context(|| format!("writing default daemon config {}", path.display()))?;
+    writeln!(
+        out,
+        "Wrote default Bitloops daemon config to {}",
+        path.display()
+    )?;
     Ok(())
 }

@@ -335,29 +335,34 @@ impl DevqlTaskCoordinator {
             .cloned()
             .ok_or_else(|| anyhow!("summary bootstrap task missing spec"))?;
         let repo_root = task.repo_root.clone();
+        let summary_setup_repo_root = repo_root.clone();
         let (progress_tx, progress_rx) = mpsc::unbounded_channel();
         let execution = tokio::task::spawn_blocking(move || {
             let plan = prepared_summary_setup_plan_from_request(&spec);
             let mut progress_state: ProgressPersistState<SummaryBootstrapProgress> =
                 ProgressPersistState::default();
-            execute_prepared_summary_setup_with_progress(&repo_root, plan, |progress| {
-                let progress = summary_progress_from_cli(progress);
-                let now = Instant::now();
-                if !should_persist_progress(
-                    progress_state.last_persisted.as_ref(),
-                    &progress,
-                    progress_state.last_persisted_at,
-                    now,
-                ) {
-                    return Ok(());
-                }
-                progress_state.last_persisted = Some(progress.clone());
-                progress_state.last_persisted_at = Some(now);
-                progress_tx
-                    .send(progress)
-                    .map_err(|_| anyhow!("summary bootstrap progress receiver dropped"))?;
-                Ok(())
-            })
+            execute_prepared_summary_setup_with_progress(
+                &summary_setup_repo_root,
+                plan,
+                |progress| {
+                    let progress = summary_progress_from_cli(progress);
+                    let now = Instant::now();
+                    if !should_persist_progress(
+                        progress_state.last_persisted.as_ref(),
+                        &progress,
+                        progress_state.last_persisted_at,
+                        now,
+                    ) {
+                        return Ok(());
+                    }
+                    progress_state.last_persisted = Some(progress.clone());
+                    progress_state.last_persisted_at = Some(now);
+                    progress_tx
+                        .send(progress)
+                        .map_err(|_| anyhow!("summary bootstrap progress receiver dropped"))?;
+                    Ok(())
+                },
+            )
         });
         let (result_tx, result_rx) = oneshot::channel();
         tokio::spawn(async move {
@@ -380,7 +385,7 @@ impl DevqlTaskCoordinator {
                     summary_result_from_cli(&result),
                 )?;
                 let enrichment = crate::daemon::shared_enrichment_coordinator();
-                refresh_enrichment_capacity_after_summary_bootstrap(&enrichment);
+                refresh_enrichment_capacity_after_summary_bootstrap(&enrichment, &repo_root);
             }
             Err(err) => self.finish_task_failed(&task.task_id, err)?,
         }
@@ -468,8 +473,10 @@ fn normalize_explicit_ingest_commits(commits: Vec<String>) -> Vec<String> {
 
 fn refresh_enrichment_capacity_after_summary_bootstrap(
     enrichment: &Arc<crate::daemon::EnrichmentCoordinator>,
+    repo_root: &std::path::Path,
 ) {
     enrichment.ensure_started();
+    enrichment.ensure_worker_capacity_for_repo(repo_root);
 }
 
 fn summary_progress_from_cli(progress: SummarySetupProgress) -> SummaryBootstrapProgress {
@@ -576,13 +583,10 @@ mod tests {
         )
     }
 
-    fn append_cloud_summary_profile(config_path: &std::path::Path) {
+    fn append_cloud_summary_profile(config_path: &std::path::Path, repo_root: &std::path::Path) {
         let mut config = fs::read_to_string(config_path).expect("read daemon config");
         config.push_str(
             r#"
-[semantic_clones.inference]
-summary_generation = "summary_llm"
-
 [inference.profiles.summary_llm]
 task = "text_generation"
 runtime = "bitloops_inference"
@@ -592,13 +596,26 @@ api_key = "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}"
 "#,
         );
         fs::write(config_path, config).expect("write cloud summary config");
+        crate::config::set_repo_semantic_embedding_policy(
+            &crate::config::settings::settings_local_path(repo_root),
+            &crate::config::RepoSemanticEmbeddingPolicy {
+                present: true,
+                summary_mode: Some(crate::config::SemanticSummaryMode::Auto),
+                embedding_mode: None,
+                inference: crate::config::SemanticClonesInferenceBindings {
+                    summary_generation: Some("summary_llm".to_string()),
+                    code_embeddings: None,
+                    summary_embeddings: None,
+                },
+            },
+        )
+        .expect("write cloud summary repo policy");
     }
 
     #[test]
     fn refresh_enrichment_capacity_after_summary_bootstrap_promotes_cloud_summary_workers() {
         let temp = TempDir::new().expect("temp dir");
-        let (enrichment, _config_root, _repo_root, config_path) =
-            test_enrichment_coordinator(&temp);
+        let (enrichment, _config_root, repo_root, config_path) = test_enrichment_coordinator(&temp);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -616,8 +633,8 @@ api_key = "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}"
                 "test should begin with the default local summary worker budget",
             );
 
-            append_cloud_summary_profile(&config_path);
-            refresh_enrichment_capacity_after_summary_bootstrap(&enrichment);
+            append_cloud_summary_profile(&config_path, &repo_root);
+            refresh_enrichment_capacity_after_summary_bootstrap(&enrichment, &repo_root);
 
             assert_eq!(
                 enrichment

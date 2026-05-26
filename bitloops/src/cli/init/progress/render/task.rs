@@ -62,8 +62,13 @@ fn format_init_sync_status(task: &crate::cli::devql::graphql::TaskGraphqlRecord)
     );
     if let Some(progress) = progress {
         if progress.paths_total > 0 {
+            let unit = if progress.phase.eq_ignore_ascii_case("reconciling_edges") {
+                "edge paths"
+            } else {
+                "paths"
+            };
             line.push_str(&format!(
-                " · {}/{} paths",
+                " · {}/{} {unit}",
                 format_count_i32(progress.paths_completed),
                 format_count_i32(progress.paths_total),
             ));
@@ -203,7 +208,9 @@ fn init_task_progress_ratio(
 ) -> Option<(f64, String, String, &'static str)> {
     if task.is_sync() {
         return task.sync_progress.as_ref().and_then(|progress| {
-            if progress.paths_total > 0 {
+            if progress.phase.eq_ignore_ascii_case("reconciling_edges") {
+                None
+            } else if progress.paths_total > 0 {
                 Some((
                     (progress.paths_completed as f64 / progress.paths_total as f64).clamp(0.0, 1.0),
                     format_count_i32(progress.paths_completed),

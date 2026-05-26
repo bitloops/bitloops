@@ -210,6 +210,7 @@ pub fn claude_stop(repo: &Path, session_id: &str, transcript_path: &str) {
     let input = format!(r#"{{"session_id":"{session_id}","transcript_path":"{transcript_path}"}}"#);
     let out = run_cmd(repo, &["hooks", "claude-code", "stop"], Some(&input));
     assert_success(&out, "hooks claude-code stop");
+    crate::test_command_support::drain_lifecycle_stop_spool(repo);
 }
 
 pub fn write_claude_transcript(path: &Path, prompt: &str, response: &str) {
@@ -291,6 +292,7 @@ pub fn cursor_stop(repo: &Path, conversation_id: &str, transcript_path: &str) {
     );
     let out = run_cmd(repo, &["hooks", "cursor", "stop"], Some(&input));
     assert_success(&out, "hooks cursor stop");
+    crate::test_command_support::drain_lifecycle_stop_spool(repo);
 }
 
 pub fn write_cursor_transcript(path: &Path, prompt: &str, response: &str) {

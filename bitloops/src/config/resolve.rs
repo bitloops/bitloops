@@ -12,7 +12,7 @@ use super::daemon_config::{
 };
 pub(crate) use super::inference_resolve::resolve_inference_from_unified_with;
 use super::repo_policy::{REPO_POLICY_LOCAL_FILE_NAME, discover_repo_policy_optional};
-use super::settings::repo_semantic_embedding_policy_from_policy;
+use super::settings::{RepoSemanticEmbeddingPolicy, repo_semantic_embedding_policy_from_policy};
 use super::store_config_utils::{
     current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
     normalize_sqlite_path, read_any_string, read_any_u64, read_non_empty_env,
@@ -330,85 +330,159 @@ pub fn resolve_provider_config_for_repo(repo_root: &Path) -> Result<ProviderConf
     resolve_provider_from_unified(&settings, |key| env::var(key).ok())
 }
 pub fn resolve_semantic_clones_config_for_repo(repo_root: &Path) -> SemanticClonesConfig {
-    let (settings, repo_policy_present) =
+    let (settings, repo_env_policy) =
         preferred_daemon_settings_with_repo_semantic_policy(repo_root)
-            .map(|(_, settings, repo_policy_present)| (settings, repo_policy_present))
+            .map(|(_, settings, repo_env_policy)| (settings, repo_env_policy))
             .unwrap_or_default();
     resolve_semantic_clones_from_unified(&settings, |key| {
-        repo_effective_semantic_env(key, repo_policy_present)
+        repo_effective_semantic_env(key, repo_env_policy)
     })
 }
 
 fn preferred_daemon_settings_with_repo_semantic_policy(
     repo_root: &Path,
-) -> Result<(PathBuf, UnifiedSettings, bool)> {
+) -> Result<(PathBuf, UnifiedSettings, RepoSemanticEnvPolicy)> {
     let (config_root, mut settings) = preferred_daemon_settings_for_repo(repo_root)?;
+    strip_repo_local_semantic_choices_from_daemon(&mut settings.semantic_clones);
     let repo_policy = discover_repo_policy_optional(repo_root)?;
-    let semantic_policy = repo_semantic_embedding_policy_from_policy(&repo_policy)?;
+    let semantic_policy = match repo_semantic_embedding_policy_from_policy(&repo_policy) {
+        Ok(policy) => policy,
+        Err(_) => return Ok((config_root, settings, RepoSemanticEnvPolicy::default())),
+    };
+    let repo_env_policy = RepoSemanticEnvPolicy::from_policy(&semantic_policy);
     if semantic_policy.present {
         settings.semantic_clones = Some(apply_repo_semantic_embedding_policy(
             settings.semantic_clones.take(),
+            semantic_policy.summary_mode,
             semantic_policy.embedding_mode,
             semantic_policy.inference,
         ));
     }
 
-    Ok((config_root, settings, semantic_policy.present))
+    Ok((config_root, settings, repo_env_policy))
+}
+
+fn strip_repo_local_semantic_choices_from_daemon(semantic_clones: &mut Option<Value>) {
+    let Some(root) = semantic_clones.as_mut().and_then(Value::as_object_mut) else {
+        return;
+    };
+
+    root.remove("summary_mode");
+    root.remove("embedding_mode");
+    if let Some(inference) = root.get_mut("inference").and_then(Value::as_object_mut) {
+        inference.remove("summary_generation");
+        inference.remove("code_embeddings");
+        inference.remove("summary_embeddings");
+    }
+    if root
+        .get("inference")
+        .and_then(Value::as_object)
+        .is_some_and(serde_json::Map::is_empty)
+    {
+        root.remove("inference");
+    }
+    if root.is_empty() {
+        *semantic_clones = None;
+    }
 }
 
 fn apply_repo_semantic_embedding_policy(
     daemon_semantic_clones: Option<Value>,
+    summary_mode: Option<SemanticSummaryMode>,
     embedding_mode: Option<SemanticCloneEmbeddingMode>,
     repo_inference: SemanticClonesInferenceBindings,
 ) -> Value {
     let mut root = daemon_semantic_clones
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
-    let repo_supplied_embedding_bindings = repo_inference.code_embeddings.as_ref().is_some()
-        || repo_inference.summary_embeddings.as_ref().is_some();
-    let daemon_embedding_mode = root
-        .get("embedding_mode")
-        .and_then(|value| value.as_str())
-        .map(parse_embedding_mode);
-    let effective_embedding_mode = embedding_mode
-        .or_else(|| {
-            repo_supplied_embedding_bindings
-                .then_some(daemon_embedding_mode)
-                .flatten()
-        })
-        .unwrap_or(SemanticCloneEmbeddingMode::Off);
-    root.remove("embedding_mode");
-    root.insert(
-        "embedding_mode".to_string(),
-        Value::String(effective_embedding_mode.to_string()),
-    );
+    if let Some(mode) = summary_mode {
+        root.remove("summary_mode");
+        root.insert("summary_mode".to_string(), Value::String(mode.to_string()));
+    }
 
     let mut inference = root
         .remove("inference")
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
-    inference.remove("code_embeddings");
-    inference.remove("summary_embeddings");
-    if effective_embedding_mode != SemanticCloneEmbeddingMode::Off {
-        if let Some(profile) = repo_inference.code_embeddings {
-            inference.insert("code_embeddings".to_string(), Value::String(profile));
+    let repo_controls_summaries =
+        summary_mode.is_some() || repo_inference.summary_generation.as_ref().is_some();
+    if repo_controls_summaries {
+        inference.remove("summary_generation");
+        if summary_mode != Some(SemanticSummaryMode::Off)
+            && let Some(profile) = repo_inference.summary_generation
+        {
+            inference.insert("summary_generation".to_string(), Value::String(profile));
         }
-        if let Some(profile) = repo_inference.summary_embeddings {
-            inference.insert("summary_embeddings".to_string(), Value::String(profile));
+    }
+
+    let repo_controls_embeddings = embedding_mode.is_some()
+        || repo_inference.code_embeddings.is_some()
+        || repo_inference.summary_embeddings.is_some();
+    if repo_controls_embeddings {
+        let repo_supplied_embedding_bindings = repo_inference.code_embeddings.as_ref().is_some()
+            || repo_inference.summary_embeddings.as_ref().is_some();
+        let daemon_embedding_mode = root
+            .get("embedding_mode")
+            .and_then(|value| value.as_str())
+            .map(parse_embedding_mode);
+        let effective_embedding_mode = embedding_mode
+            .or_else(|| {
+                repo_supplied_embedding_bindings
+                    .then_some(daemon_embedding_mode)
+                    .flatten()
+            })
+            .or_else(|| {
+                repo_supplied_embedding_bindings
+                    .then_some(SemanticCloneEmbeddingMode::SemanticAwareOnce)
+            })
+            .unwrap_or(SemanticCloneEmbeddingMode::Off);
+
+        root.remove("embedding_mode");
+        root.insert(
+            "embedding_mode".to_string(),
+            Value::String(effective_embedding_mode.to_string()),
+        );
+        inference.remove("code_embeddings");
+        inference.remove("summary_embeddings");
+        if effective_embedding_mode != SemanticCloneEmbeddingMode::Off {
+            if let Some(profile) = repo_inference.code_embeddings {
+                inference.insert("code_embeddings".to_string(), Value::String(profile));
+            }
+            if let Some(profile) = repo_inference.summary_embeddings {
+                inference.insert("summary_embeddings".to_string(), Value::String(profile));
+            }
         }
     }
     root.insert("inference".to_string(), Value::Object(inference));
     Value::Object(root)
 }
 
-fn repo_effective_semantic_env(key: &str, repo_policy_present: bool) -> Option<String> {
-    if repo_policy_present
-        && matches!(
-            key,
-            "BITLOOPS_SEMANTIC_CLONES_EMBEDDING_MODE" | "BITLOOPS_SEMANTIC_CLONES_CODE_EMBEDDINGS"
-        )
-    {
-        return None;
+#[derive(Debug, Clone, Copy, Default)]
+struct RepoSemanticEnvPolicy {
+    summary_mode: bool,
+    embedding_mode: bool,
+    code_embeddings: bool,
+}
+
+impl RepoSemanticEnvPolicy {
+    fn from_policy(policy: &RepoSemanticEmbeddingPolicy) -> Self {
+        Self {
+            summary_mode: policy.summary_mode.is_some()
+                || policy.inference.summary_generation.is_some(),
+            embedding_mode: policy.embedding_mode.is_some()
+                || policy.inference.code_embeddings.is_some()
+                || policy.inference.summary_embeddings.is_some(),
+            code_embeddings: policy.inference.code_embeddings.is_some(),
+        }
+    }
+}
+
+fn repo_effective_semantic_env(key: &str, policy: RepoSemanticEnvPolicy) -> Option<String> {
+    match key {
+        "BITLOOPS_SEMANTIC_CLONES_SUMMARY_MODE" if policy.summary_mode => return None,
+        "BITLOOPS_SEMANTIC_CLONES_EMBEDDING_MODE" if policy.embedding_mode => return None,
+        "BITLOOPS_SEMANTIC_CLONES_CODE_EMBEDDINGS" if policy.code_embeddings => return None,
+        _ => {}
     }
 
     env::var(key).ok()
@@ -433,10 +507,10 @@ pub fn resolve_embeddings_config_for_repo(repo_root: &Path) -> EmbeddingsConfig 
 }
 
 pub fn resolve_inference_capability_config_for_repo(repo_root: &Path) -> InferenceCapabilityConfig {
-    let (config_root, settings, repo_policy_present) =
+    let (config_root, settings, repo_env_policy) =
         preferred_daemon_settings_with_repo_semantic_policy(repo_root).unwrap_or_default();
     resolve_inference_capability_from_unified(&settings, &config_root, |key| {
-        repo_effective_semantic_env(key, repo_policy_present)
+        repo_effective_semantic_env(key, repo_env_policy)
     })
 }
 

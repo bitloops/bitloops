@@ -121,10 +121,12 @@ pub(crate) async fn run_async(args: EmbeddingsArgs) -> Result<()> {
                 let local_plan = prepare_daemon_local_embeddings_profile_install(&config_path)?;
                 local_plan.apply()?;
                 let install_result = async {
-                    set_repo_semantic_embedding_policy(
-                        &settings_local_path(&repo_root),
-                        &RepoSemanticEmbeddingPolicy::enabled_with_profile("local_code"),
-                    )?;
+                    let policy =
+                        RepoSemanticEmbeddingPolicy::enabled_with_profile_preserving_summaries(
+                            "local_code",
+                            &previous_policy,
+                        );
+                    set_repo_semantic_embedding_policy(&settings_local_path(&repo_root), &policy)?;
                     activate_embedding_pipeline_mailboxes(&repo_root, "embeddings_install")
                         .context(
                             "activating semantic clones embedding mailboxes for embeddings install",

@@ -3,9 +3,12 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Item, Table};
 
+use crate::config::settings::settings_local_path;
 use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, InferenceTask, SemanticSummaryMode,
+    InferenceTask, RepoSemanticEmbeddingPolicy, SemanticClonesInferenceBindings,
+    SemanticSummaryMode, repo_semantic_embedding_policy,
     resolve_inference_capability_config_for_repo, resolve_preferred_daemon_config_path_for_repo,
+    set_repo_semantic_embedding_policy,
 };
 use crate::host::inference::{BITLOOPS_INFERENCE_RUNTIME_ID, BITLOOPS_PLATFORM_CHAT_DRIVER};
 
@@ -252,9 +255,8 @@ pub(super) fn write_summary_profile(repo_root: &Path, model_name: &str) -> Resul
         profile.remove("cache_dir");
     }
 
-    update_summary_generation_binding(&mut doc, &profile_name);
     write_daemon_config_document(&config_path, &doc)?;
-    maybe_sync_repo_local_summary_mode(repo_root, "auto")
+    write_repo_summary_generation_binding(repo_root, &profile_name)
 }
 
 pub(super) fn write_context_guidance_profile(repo_root: &Path, model_name: &str) -> Result<()> {
@@ -340,9 +342,8 @@ fn write_platform_summary_profile_with_api_key(
         profile.remove("cache_dir");
     }
 
-    update_summary_generation_binding(&mut doc, &profile_name);
     write_daemon_config_document(&config_path, &doc)?;
-    maybe_sync_repo_local_summary_mode(repo_root, "auto")
+    write_repo_summary_generation_binding(repo_root, &profile_name)
 }
 
 pub(super) fn write_platform_context_guidance_profile(
@@ -569,31 +570,57 @@ fn write_daemon_config_document(config_path: &Path, doc: &DocumentMut) -> Result
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating Bitloops config directory {}", parent.display()))?;
     }
+    let mut doc = doc.clone();
+    strip_daemon_semantic_enablement(&mut doc);
     std::fs::write(config_path, doc.to_string())
         .with_context(|| format!("writing Bitloops daemon config {}", config_path.display()))
 }
 
-fn maybe_sync_repo_local_summary_mode(repo_root: &Path, mode: &str) -> Result<()> {
-    let repo_config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    if !repo_config_path.exists() {
-        return Ok(());
+fn strip_daemon_semantic_enablement(doc: &mut DocumentMut) {
+    let Some(semantic_item) = doc.as_table_mut().get_mut("semantic_clones") else {
+        return;
+    };
+    let Some(semantic) = semantic_item.as_table_mut() else {
+        return;
+    };
+
+    for key in ["summary_mode", "embedding_mode"] {
+        semantic.remove(key);
     }
-    write_summary_mode(&repo_config_path, mode)
-}
-
-fn write_summary_mode(config_path: &Path, mode: &str) -> Result<()> {
-    let mut doc = read_daemon_config_document(config_path)?;
-    let semantic_clones = ensure_table(&mut doc, "semantic_clones");
-    semantic_clones["summary_mode"] = Item::Value(mode.into());
-    write_daemon_config_document(config_path, &doc)
-}
-
-fn update_summary_generation_binding(doc: &mut DocumentMut, profile_name: &str) {
+    if let Some(inference) = semantic.get_mut("inference").and_then(Item::as_table_mut) {
+        for key in [
+            "summary_generation",
+            "code_embeddings",
+            "summary_embeddings",
+        ] {
+            inference.remove(key);
+        }
+    }
+    if semantic
+        .get("inference")
+        .and_then(Item::as_table)
+        .is_some_and(Table::is_empty)
     {
-        let semantic_clones = ensure_table(doc, "semantic_clones");
-        semantic_clones["summary_mode"] = Item::Value("auto".into());
+        semantic.remove("inference");
     }
-    update_text_generation_binding(doc, "semantic_clones", "summary_generation", profile_name);
+    if semantic.is_empty() {
+        doc.as_table_mut().remove("semantic_clones");
+    }
+}
+
+fn write_repo_summary_generation_binding(repo_root: &Path, profile_name: &str) -> Result<()> {
+    let existing_policy = repo_semantic_embedding_policy(repo_root)?;
+    let policy = RepoSemanticEmbeddingPolicy {
+        present: true,
+        summary_mode: Some(SemanticSummaryMode::Auto),
+        embedding_mode: existing_policy.embedding_mode,
+        inference: SemanticClonesInferenceBindings {
+            summary_generation: Some(profile_name.to_string()),
+            code_embeddings: existing_policy.inference.code_embeddings,
+            summary_embeddings: existing_policy.inference.summary_embeddings,
+        },
+    };
+    set_repo_semantic_embedding_policy(&settings_local_path(repo_root), &policy)
 }
 
 fn update_context_guidance_generation_binding(doc: &mut DocumentMut, profile_name: &str) {

@@ -97,6 +97,7 @@ fn load_daemon_settings_accepts_architecture_inference_binding() {
         r#"
 [architecture.inference]
 fact_synthesis = "local_agent"
+role_adjudication = "architecture_role_adjudication_codex"
 
 [inference.runtimes.codex]
 command = "codex"
@@ -112,6 +113,15 @@ model = "gpt-5.4-mini"
 temperature = "0.1"
 max_output_tokens = 4096
 thinking_level = "xhigh"
+
+[inference.profiles.architecture_role_adjudication_codex]
+task = "structured_generation"
+driver = "codex_exec"
+runtime = "codex"
+model = "gpt-5.4-mini"
+temperature = "0.1"
+max_output_tokens = 1024
+thinking_level = "high"
 "#,
     )
     .expect("write temp config");
@@ -121,18 +131,21 @@ thinking_level = "xhigh"
         loaded.settings.architecture,
         Some(serde_json::json!({
             "inference": {
-                "fact_synthesis": "local_agent"
+                "fact_synthesis": "local_agent",
+                "role_adjudication": "architecture_role_adjudication_codex"
             }
         }))
     );
+    let inference = loaded.settings.inference.expect("inference settings");
     assert_eq!(
-        loaded
-            .settings
-            .inference
-            .as_ref()
-            .and_then(|value| value.pointer("/profiles/local_agent/thinking_level"))
+        inference
+            .pointer("/profiles/local_agent/thinking_level")
             .and_then(serde_json::Value::as_str),
         Some("xhigh")
+    );
+    assert_eq!(
+        inference["profiles"]["architecture_role_adjudication_codex"]["thinking_level"],
+        serde_json::json!("high")
     );
 }
 
@@ -170,6 +183,44 @@ local_path = "stores/blob"
     );
     assert!(dir.path().join("stores/relational/relational.db").is_file());
     assert!(dir.path().join("stores/event/events.duckdb").is_file());
+    assert!(dir.path().join("stores/blob").is_dir());
+}
+
+#[test]
+fn ensure_daemon_store_artifacts_does_not_reopen_existing_duckdb_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let config_path = dir.path().join("config.toml");
+    let duckdb_path = dir.path().join("stores/event/events.duckdb");
+    fs::create_dir_all(duckdb_path.parent().expect("duckdb parent")).expect("create event dir");
+    fs::write(&duckdb_path, b"existing daemon-owned duckdb file").expect("write duckdb file");
+    fs::write(
+        &config_path,
+        r#"
+[runtime]
+local_dev = false
+cli_version = "0.0.12"
+
+[stores.relational]
+sqlite_path = "stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "stores/event/events.duckdb"
+
+[stores.blob]
+local_path = "stores/blob"
+"#,
+    )
+    .expect("write daemon config");
+
+    ensure_daemon_store_artifacts(Some(config_path.as_path()))
+        .expect("bootstrap stores should not reopen an existing DuckDB file");
+
+    assert!(duckdb_path.is_file());
+    assert_eq!(
+        fs::read(&duckdb_path).expect("read duckdb file"),
+        b"existing daemon-owned duckdb file"
+    );
+    assert!(dir.path().join("stores/relational/relational.db").is_file());
     assert!(dir.path().join("stores/blob").is_dir());
 }
 
@@ -258,7 +309,6 @@ request_timeout_secs = 300
 
     let plan =
         prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
-    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::Bootstrap);
     plan.apply().expect("apply staged embeddings config");
 
     let rendered = fs::read_to_string(config.path()).expect("read updated config");
@@ -312,7 +362,6 @@ request_timeout_secs = 300
 
     let plan =
         prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
-    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::Bootstrap);
 
     fs::write(
         config.path(),
@@ -346,8 +395,8 @@ max_output_tokens = 200
 
     let rendered = fs::read_to_string(config.path()).expect("read updated config");
     assert!(
-        rendered.contains("summary_generation = \"summary_local\""),
-        "expected embeddings apply to preserve summary binding:\n{rendered}"
+        !rendered.contains("summary_generation = \"summary_local\""),
+        "expected embeddings apply to remove daemon semantic binding:\n{rendered}"
     );
     assert!(
         rendered.contains("[inference.profiles.summary_local]"),
@@ -382,7 +431,6 @@ local_dev = false
         "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
     )
     .expect("prepare platform embeddings install");
-    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::Bootstrap);
     plan.apply()
         .expect("apply staged platform embeddings config");
 
@@ -427,7 +475,7 @@ local_dev = false
 }
 
 #[test]
-fn prepare_daemon_embeddings_install_skips_existing_platform_ipc_profile() {
+fn prepare_daemon_embeddings_install_ignores_daemon_platform_semantic_binding() {
     let config = NamedTempFile::new().expect("create temp config");
     fs::write(
         config.path(),
@@ -457,13 +505,12 @@ model = "bge-m3"
     let plan =
         prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
 
-    assert_eq!(plan.profile_name, "platform_code");
-    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::SkipHosted);
-    assert!(!plan.config_modified);
+    assert_eq!(plan.profile_name, "local_code");
+    assert!(plan.config_modified);
 }
 
 #[test]
-fn prepare_daemon_embeddings_install_warms_legacy_daemon_bound_profile() {
+fn prepare_daemon_embeddings_install_ignores_daemon_local_semantic_binding() {
     let config = NamedTempFile::new().expect("create temp config");
     fs::write(
         config.path(),
@@ -494,8 +541,7 @@ model = "bge-m3"
         prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
 
     assert_eq!(plan.profile_name, "local_code");
-    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::WarmExisting);
-    assert!(!plan.config_modified);
+    assert!(plan.config_modified);
 }
 
 #[test]

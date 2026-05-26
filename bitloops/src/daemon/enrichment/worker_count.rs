@@ -317,7 +317,32 @@ mod tests {
     use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
     use crate::test_support::process_state::enter_process_state;
     use std::fs;
+    use std::path::Path;
     use tempfile::tempdir;
+
+    fn write_repo_semantic_policy(
+        repo_root: &Path,
+        summary_generation: Option<&str>,
+        code_embeddings: Option<&str>,
+        summary_embeddings: Option<&str>,
+    ) {
+        crate::config::set_repo_semantic_embedding_policy(
+            &crate::config::settings::settings_local_path(repo_root),
+            &crate::config::RepoSemanticEmbeddingPolicy {
+                present: true,
+                summary_mode: summary_generation
+                    .is_some()
+                    .then_some(crate::config::SemanticSummaryMode::Auto),
+                embedding_mode: Some(crate::config::SemanticCloneEmbeddingMode::SemanticAwareOnce),
+                inference: crate::config::SemanticClonesInferenceBindings {
+                    summary_generation: summary_generation.map(str::to_string),
+                    code_embeddings: code_embeddings.map(str::to_string),
+                    summary_embeddings: summary_embeddings.map(str::to_string),
+                },
+            },
+        )
+        .expect("write repo semantic policy");
+    }
 
     #[test]
     fn worker_budgets_default_to_one_for_missing_or_invalid_values() {
@@ -491,11 +516,6 @@ mod tests {
             &config_path,
             r#"[semantic_clones]
 
-[semantic_clones.inference]
-summary_generation = "summary_local"
-code_embeddings = "local_code"
-summary_embeddings = "local_summary"
-
 [inference.profiles.summary_local]
 task = "text_generation"
 driver = "ollama_chat"
@@ -516,6 +536,12 @@ model = "local-summary"
 "#,
         )
         .expect("write semantic clones config with local code and summary embeddings");
+        write_repo_semantic_policy(
+            temp.path(),
+            Some("summary_local"),
+            Some("local_code"),
+            Some("local_summary"),
+        );
 
         let _guard = enter_process_state(
             Some(temp.path()),
@@ -549,11 +575,6 @@ model = "local-summary"
             r#"[semantic_clones]
 embedding_workers = 2
 
-[semantic_clones.inference]
-summary_generation = "summary_local"
-code_embeddings = "local_code"
-summary_embeddings = "local_summary"
-
 [inference.profiles.summary_local]
 task = "text_generation"
 driver = "ollama_chat"
@@ -574,6 +595,12 @@ model = "local-summary"
 "#,
         )
         .expect("write semantic clones config with explicit local embedding worker override");
+        write_repo_semantic_policy(
+            temp.path(),
+            Some("summary_local"),
+            Some("local_code"),
+            Some("local_summary"),
+        );
 
         let _guard = enter_process_state(
             Some(temp.path()),
@@ -607,9 +634,6 @@ model = "local-summary"
             &config_path,
             r#"[semantic_clones]
 
-[semantic_clones.inference]
-code_embeddings = "local_code"
-
 [inference.profiles.local_code]
 task = "embeddings"
 driver = "bitloops_embeddings_ipc"
@@ -618,6 +642,7 @@ model = "local-code"
 "#,
         )
         .expect("write semantic clones config with local code embeddings only");
+        write_repo_semantic_policy(temp.path(), None, Some("local_code"), None);
 
         let _guard = enter_process_state(
             Some(temp.path()),

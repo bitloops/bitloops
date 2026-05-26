@@ -125,6 +125,127 @@ ORDER BY path ASC
         })
     }
 
+    pub fn load_current_canonical_file_batch(
+        &self,
+        repo_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<CurrentCanonicalFileRecord>> {
+        let repo_id = repo_id.to_string();
+        let offset = i64::try_from(offset).unwrap_or_default();
+        let limit = i64::try_from(limit).unwrap_or_default();
+        self.sqlite.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+SELECT
+  repo_id,
+  path,
+  analysis_mode,
+  file_role,
+  language,
+  resolved_language,
+  effective_content_id,
+  parser_version,
+  extractor_version,
+  exists_in_head,
+  exists_in_index,
+  exists_in_worktree
+FROM current_file_state
+WHERE repo_id = ?1
+ORDER BY path ASC
+LIMIT ?2 OFFSET ?3
+"#,
+                )
+                .map_err(|err| map_missing_sync_table(err, "current_file_state"))
+                .context("failed preparing current canonical file batch query")?;
+
+            let rows = stmt
+                .query_map(params![repo_id, limit, offset], |row| {
+                    Ok(CurrentCanonicalFileRecord {
+                        repo_id: row.get(0)?,
+                        path: row.get(1)?,
+                        analysis_mode: row.get(2)?,
+                        file_role: row.get(3)?,
+                        language: row.get(4)?,
+                        resolved_language: row.get(5)?,
+                        effective_content_id: row.get(6)?,
+                        parser_version: row.get(7)?,
+                        extractor_version: row.get(8)?,
+                        exists_in_head: sqlite_bool(row.get::<_, i64>(9)?),
+                        exists_in_index: sqlite_bool(row.get::<_, i64>(10)?),
+                        exists_in_worktree: sqlite_bool(row.get::<_, i64>(11)?),
+                    })
+                })
+                .map_err(|err| map_missing_sync_table(err, "current_file_state"))
+                .context("failed querying current canonical file batch")?;
+
+            let mut files = Vec::new();
+            for row in rows {
+                files.push(row.context("failed decoding current canonical file batch row")?);
+            }
+            Ok(files)
+        })
+    }
+
+    pub fn visit_current_canonical_files(
+        &self,
+        repo_id: &str,
+        visitor: &mut dyn FnMut(CurrentCanonicalFileRecord) -> Result<()>,
+    ) -> Result<()> {
+        let repo_id = repo_id.to_string();
+        self.sqlite.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+SELECT
+  repo_id,
+  path,
+  analysis_mode,
+  file_role,
+  language,
+  resolved_language,
+  effective_content_id,
+  parser_version,
+  extractor_version,
+  exists_in_head,
+  exists_in_index,
+  exists_in_worktree
+FROM current_file_state
+WHERE repo_id = ?1
+ORDER BY path ASC
+"#,
+                )
+                .map_err(|err| map_missing_sync_table(err, "current_file_state"))
+                .context("failed preparing current canonical file visitor query")?;
+
+            let rows = stmt
+                .query_map(params![repo_id], |row| {
+                    Ok(CurrentCanonicalFileRecord {
+                        repo_id: row.get(0)?,
+                        path: row.get(1)?,
+                        analysis_mode: row.get(2)?,
+                        file_role: row.get(3)?,
+                        language: row.get(4)?,
+                        resolved_language: row.get(5)?,
+                        effective_content_id: row.get(6)?,
+                        parser_version: row.get(7)?,
+                        extractor_version: row.get(8)?,
+                        exists_in_head: sqlite_bool(row.get::<_, i64>(9)?),
+                        exists_in_index: sqlite_bool(row.get::<_, i64>(10)?),
+                        exists_in_worktree: sqlite_bool(row.get::<_, i64>(11)?),
+                    })
+                })
+                .map_err(|err| map_missing_sync_table(err, "current_file_state"))
+                .context("failed querying current canonical files for visitor")?;
+
+            for row in rows {
+                visitor(row.context("failed decoding current canonical file row")?)?;
+            }
+            Ok(())
+        })
+    }
+
     pub fn load_current_canonical_artefacts(
         &self,
         repo_id: &str,
@@ -470,6 +591,48 @@ ORDER BY path ASC, start_line ASC
         })
     }
 
+    pub fn load_current_artefacts_for_file_lines(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<(String, i64, i64)>> {
+        let repo_id = repo_id.to_string();
+        let file_path = file_path.to_string();
+        self.sqlite.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+SELECT DISTINCT
+  COALESCE(NULLIF(a.symbol_id, ''), a.artefact_id) AS production_symbol_id,
+  a.start_line,
+  a.end_line
+FROM artefacts_current a
+WHERE a.repo_id = ?1
+  AND a.canonical_kind != 'file'
+  AND (a.path = ?2 OR substr(?2, -length(a.path)) = a.path)
+ORDER BY a.path ASC, a.start_line ASC
+"#,
+                )
+                .context("failed preparing current artefacts-for-file query")?;
+
+            let rows = stmt
+                .query_map(params![repo_id, file_path], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })
+                .context("failed querying current artefacts for file")?;
+
+            let mut result = Vec::new();
+            for row in rows {
+                result.push(row.context("failed mapping current artefact-for-file row")?);
+            }
+            Ok(result)
+        })
+    }
+
     pub fn load_artefacts_for_file_lines(
         &self,
         commit_sha: &str,
@@ -577,6 +740,23 @@ impl RelationalGateway for SqliteRelationalGateway {
         SqliteRelationalGateway::load_current_canonical_files(self, repo_id)
     }
 
+    fn visit_current_canonical_files(
+        &self,
+        repo_id: &str,
+        visitor: &mut dyn FnMut(CurrentCanonicalFileRecord) -> Result<()>,
+    ) -> Result<()> {
+        SqliteRelationalGateway::visit_current_canonical_files(self, repo_id, visitor)
+    }
+
+    fn load_current_canonical_file_batch(
+        &self,
+        repo_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<CurrentCanonicalFileRecord>> {
+        SqliteRelationalGateway::load_current_canonical_file_batch(self, repo_id, offset, limit)
+    }
+
     fn load_current_canonical_artefacts(
         &self,
         repo_id: &str,
@@ -609,6 +789,14 @@ impl RelationalGateway for SqliteRelationalGateway {
 
     fn load_current_production_artefacts(&self, repo_id: &str) -> Result<Vec<ProductionArtefact>> {
         SqliteRelationalGateway::load_current_production_artefacts(self, repo_id)
+    }
+
+    fn load_current_artefacts_for_file_lines(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<(String, i64, i64)>> {
+        SqliteRelationalGateway::load_current_artefacts_for_file_lines(self, repo_id, file_path)
     }
 
     fn load_production_artefacts(&self, commit_sha: &str) -> Result<Vec<ProductionArtefact>> {
@@ -656,217 +844,5 @@ fn is_valid_artefact_id(id: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use anyhow::Result;
-    use tempfile::TempDir;
-
-    use super::SqliteRelationalGateway;
-    use crate::storage::{SqliteConnectionPool, init::init_database};
-
-    #[test]
-    fn current_canonical_loaders_return_sync_shaped_rows() -> Result<()> {
-        let temp = TempDir::new()?;
-        let db_path = temp.path().join("runtime.sqlite");
-        init_database(&db_path, false, "seed-commit")?;
-        let sqlite = SqliteConnectionPool::connect_existing(db_path)?;
-        let gateway = SqliteRelationalGateway::new(sqlite.clone());
-
-        sqlite.with_write_connection(|conn| {
-            conn.execute(
-                "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
-                 VALUES (?1, 'local', 'bitloops', 'demo', 'main')",
-                rusqlite::params!["repo-1"],
-            )?;
-            conn.execute(
-                "INSERT INTO current_file_state (
-                    repo_id, path, analysis_mode, file_role, language, resolved_language,
-                    effective_content_id, effective_source, parser_version, extractor_version,
-                    exists_in_head, exists_in_index, exists_in_worktree, last_synced_at
-                ) VALUES (
-                    ?1, ?2, 'code', 'source_code', 'typescript', 'typescript',
-                    'content-a', 'worktree', 'parser-v1', 'extractor-v1',
-                    1, 0, 1, '2026-04-28T10:00:00Z'
-                )",
-                rusqlite::params!["repo-1", "packages/api/src/caller.ts"],
-            )?;
-            conn.execute(
-                "INSERT INTO artefacts_current (
-                    repo_id, path, content_id, symbol_id, artefact_id, language,
-                    extraction_fingerprint, canonical_kind, language_kind, symbol_fqn,
-                    parent_symbol_id, parent_artefact_id, start_line, end_line,
-                    start_byte, end_byte, signature, modifiers, docstring, updated_at
-                ) VALUES (
-                    ?1, ?2, 'content-a', 'sym::caller', 'artefact::caller', 'typescript',
-                    'fingerprint-a', 'function', 'function_declaration',
-                    'packages/api/src/caller.ts::caller', NULL, NULL, 4, 8,
-                    0, 40, NULL, '[]', 'Doc', '2026-04-28T10:00:00Z'
-                )",
-                rusqlite::params!["repo-1", "packages/api/src/caller.ts"],
-            )?;
-            conn.execute(
-                "INSERT INTO artefact_edges_current (
-                    repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
-                    to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
-                    start_line, end_line, metadata, updated_at
-                ) VALUES (
-                    ?1, 'edge-1', ?2, 'content-a', 'sym::caller', 'artefact::caller',
-                    NULL, NULL, 'packages/api/src/target.ts::target', 'calls', 'typescript',
-                    6, 6, '{\"resolution\":\"fixture\"}', '2026-04-28T10:00:00Z'
-                )",
-                rusqlite::params!["repo-1", "packages/api/src/caller.ts"],
-            )?;
-            Ok(())
-        })?;
-
-        let files = gateway.load_current_canonical_files("repo-1")?;
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].path, "packages/api/src/caller.ts");
-        assert_eq!(files[0].analysis_mode, "code");
-        assert!(!files[0].exists_in_index);
-        assert!(files[0].exists_in_head);
-        assert!(files[0].exists_in_worktree);
-
-        let artefacts = gateway.load_current_canonical_artefacts("repo-1")?;
-        assert_eq!(artefacts.len(), 1);
-        assert_eq!(artefacts[0].artefact_id, "artefact::caller");
-        assert_eq!(artefacts[0].canonical_kind.as_deref(), Some("function"));
-        assert_eq!(
-            artefacts[0].symbol_fqn.as_deref(),
-            Some("packages/api/src/caller.ts::caller")
-        );
-
-        let edges = gateway.load_current_canonical_edges("repo-1")?;
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].edge_id, "edge-1");
-        assert_eq!(edges[0].edge_kind, "calls");
-        assert_eq!(
-            edges[0].to_symbol_ref.as_deref(),
-            Some("packages/api/src/target.ts::target")
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn current_canonical_visitors_preserve_loader_order() -> Result<()> {
-        let temp = TempDir::new()?;
-        let db_path = temp.path().join("runtime.sqlite");
-        init_database(&db_path, false, "seed-commit")?;
-        let sqlite = SqliteConnectionPool::connect_existing(db_path)?;
-        let gateway = SqliteRelationalGateway::new(sqlite.clone());
-
-        sqlite.with_write_connection(|conn| {
-            conn.execute(
-                "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
-                 VALUES (?1, 'local', 'bitloops', 'demo', 'main')",
-                rusqlite::params!["repo-1"],
-            )?;
-            conn.execute(
-                "INSERT INTO artefacts_current (
-                    repo_id, path, content_id, symbol_id, artefact_id, language,
-                    extraction_fingerprint, canonical_kind, language_kind, symbol_fqn,
-                    parent_symbol_id, parent_artefact_id, start_line, end_line,
-                    start_byte, end_byte, signature, modifiers, docstring, updated_at
-                ) VALUES (
-                    ?1, 'src/a.rs', 'content-a', 'sym::a', 'artefact::a', 'rust',
-                    'fingerprint-a', 'function', 'function_item',
-                    'src/a.rs::a', NULL, NULL, 1, 2,
-                    0, 12, NULL, '[]', NULL, '2026-04-28T10:00:00Z'
-                )",
-                rusqlite::params!["repo-1"],
-            )?;
-            conn.execute(
-                "INSERT INTO artefacts_current (
-                    repo_id, path, content_id, symbol_id, artefact_id, language,
-                    extraction_fingerprint, canonical_kind, language_kind, symbol_fqn,
-                    parent_symbol_id, parent_artefact_id, start_line, end_line,
-                    start_byte, end_byte, signature, modifiers, docstring, updated_at
-                ) VALUES (
-                    ?1, 'src/b.rs', 'content-b', 'sym::b', 'artefact::b', 'rust',
-                    'fingerprint-b', 'function', 'function_item',
-                    'src/b.rs::b', NULL, NULL, 3, 4,
-                    12, 24, NULL, '[]', NULL, '2026-04-28T10:00:00Z'
-                )",
-                rusqlite::params!["repo-1"],
-            )?;
-            conn.execute(
-                "INSERT INTO artefact_edges_current (
-                    repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
-                    to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
-                    start_line, end_line, metadata, updated_at
-                ) VALUES (
-                    ?1, 'edge-a', 'src/a.rs', 'content-a', 'sym::a', 'artefact::a',
-                    'sym::b', 'artefact::b', NULL, 'calls', 'rust',
-                    1, 1, '{}', '2026-04-28T10:00:00Z'
-                )",
-                rusqlite::params!["repo-1"],
-            )?;
-            conn.execute(
-                "INSERT INTO artefact_edges_current (
-                    repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
-                    to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
-                    start_line, end_line, metadata, updated_at
-                ) VALUES (
-                    ?1, 'edge-b', 'src/b.rs', 'content-b', 'sym::b', 'artefact::b',
-                    NULL, NULL, 'external::c', 'calls', 'rust',
-                    3, 3, '{}', '2026-04-28T10:00:00Z'
-                )",
-                rusqlite::params!["repo-1"],
-            )?;
-            Ok(())
-        })?;
-
-        let mut artefact_ids = Vec::new();
-        gateway.visit_current_canonical_artefacts("repo-1", &mut |artefact| {
-            artefact_ids.push(artefact.artefact_id);
-            Ok(())
-        })?;
-        assert_eq!(artefact_ids, vec!["artefact::a", "artefact::b"]);
-
-        let mut edge_ids = Vec::new();
-        gateway.visit_current_canonical_edges("repo-1", &mut |edge| {
-            edge_ids.push(edge.edge_id);
-            Ok(())
-        })?;
-        assert_eq!(edge_ids, vec!["edge-a", "edge-b"]);
-
-        Ok(())
-    }
-
-    #[test]
-    fn current_canonical_visitors_propagate_visitor_errors() -> Result<()> {
-        let temp = TempDir::new()?;
-        let db_path = temp.path().join("runtime.sqlite");
-        init_database(&db_path, false, "seed-commit")?;
-        let sqlite = SqliteConnectionPool::connect_existing(db_path)?;
-        let gateway = SqliteRelationalGateway::new(sqlite.clone());
-
-        sqlite.with_write_connection(|conn| {
-            conn.execute(
-                "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
-                 VALUES (?1, 'local', 'bitloops', 'demo', 'main')",
-                rusqlite::params!["repo-1"],
-            )?;
-            conn.execute(
-                "INSERT INTO artefact_edges_current (
-                    repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
-                    to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
-                    start_line, end_line, metadata, updated_at
-                ) VALUES (
-                    ?1, 'edge-a', 'src/a.rs', 'content-a', 'sym::a', 'artefact::a',
-                    NULL, NULL, 'external::b', 'calls', 'rust',
-                    1, 1, '{}', '2026-04-28T10:00:00Z'
-                )",
-                rusqlite::params!["repo-1"],
-            )?;
-            Ok(())
-        })?;
-
-        let error = gateway
-            .visit_current_canonical_edges("repo-1", &mut |_edge| Err(anyhow::anyhow!("stop here")))
-            .expect_err("visitor failure should bubble up");
-        assert!(error.to_string().contains("stop here"));
-
-        Ok(())
-    }
-}
+#[path = "sqlite_relational/tests.rs"]
+mod tests;

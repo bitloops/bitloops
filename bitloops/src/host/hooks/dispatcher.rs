@@ -7,11 +7,6 @@ use std::time::{Instant, SystemTime};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
-#[cfg(test)]
-use crate::adapters::agents::cursor::types::{
-    CursorAfterShellExecutionRaw, CursorBeforeShellExecutionRaw, CursorBeforeSubmitPromptRaw,
-    CursorSessionInfoRaw,
-};
 use crate::adapters::agents::{
     AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR,
     AGENT_NAME_GEMINI, AGENT_NAME_OPEN_CODE,
@@ -19,29 +14,16 @@ use crate::adapters::agents::{
 use crate::config::settings;
 use crate::host::checkpoints::lifecycle::adapters::{
     CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_POST_TOOL_USE, CLAUDE_HOOK_PRE_TASK,
-    CLAUDE_HOOK_PRE_TOOL_USE, COPILOT_HOOK_POST_TOOL_USE, COPILOT_HOOK_PRE_TOOL_USE,
-    GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_TOOL, route_hook_command_to_lifecycle,
+    CLAUDE_HOOK_PRE_TOOL_USE, CLAUDE_HOOK_STOP, CODEX_HOOK_STOP, COPILOT_HOOK_POST_TOOL_USE,
+    COPILOT_HOOK_PRE_TOOL_USE, GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_TOOL,
+    route_hook_command_to_lifecycle,
 };
-#[cfg(test)]
-use crate::host::checkpoints::session::backend::SessionBackend;
 use crate::host::checkpoints::session::create_session_backend_or_local;
-#[cfg(test)]
-use crate::host::checkpoints::session::phase::SessionPhase;
-#[cfg(test)]
-use crate::host::checkpoints::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL;
-#[cfg(test)]
-use crate::host::checkpoints::strategy::Strategy;
 use crate::host::checkpoints::strategy::registry::{self, StrategyRegistry};
 use crate::telemetry::logging;
 use crate::utils::paths;
 
 use super::git;
-#[cfg(test)]
-use crate::adapters::agents::claude_code::hooks_cmd::{
-    SessionInfoInput, UserPromptSubmitInput, handle_session_end_with_profile_and_model,
-    handle_session_start_with_profile_and_model, handle_stop_with_profile_and_model,
-    handle_user_prompt_submit_with_strategy_and_profile_and_model,
-};
 
 #[derive(Args)]
 pub struct HooksArgs {
@@ -551,6 +533,76 @@ fn emit_hook_stdout_if_present(
     Ok(())
 }
 
+fn should_spool_lifecycle_stop_hook(agent_name: &str, hook_name: &str) -> bool {
+    matches!(
+        (agent_name, hook_name),
+        (AGENT_NAME_CODEX, CODEX_HOOK_STOP)
+            | (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_STOP)
+            | (
+                AGENT_NAME_GEMINI,
+                crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_AGENT,
+            )
+            | (
+                AGENT_NAME_CURSOR,
+                crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP,
+            )
+            | (
+                AGENT_NAME_COPILOT,
+                crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP,
+            )
+            | (
+                AGENT_NAME_OPEN_CODE,
+                crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END,
+            )
+    )
+}
+
+fn enqueue_lifecycle_stop_from_hook(
+    repo_root: &Path,
+    agent_name: &str,
+    hook_name: &str,
+    stdin: &str,
+) -> Result<crate::host::checkpoints::lifecycle::spool::LifecycleStopHookEnqueueResult> {
+    let repo = crate::host::devql::resolve_repo_identity(repo_root)
+        .context("resolving repo identity for lifecycle stop hook spool")?;
+    let config_root = crate::config::resolve_bound_daemon_config_root_for_repo(repo_root)
+        .context("resolving daemon config root for lifecycle stop hook spool")?;
+    let db_path = crate::config::resolve_repo_runtime_db_path_for_config_root(&config_root);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
+    let workspace_snapshot =
+        crate::host::checkpoints::lifecycle::capture_workspace_snapshot_for_lifecycle_stop(
+            repo_root,
+        );
+    let insert = crate::host::checkpoints::lifecycle::spool::LifecycleStopJobInsert {
+        repo_id: repo.repo_id,
+        repo_root: repo_root.to_path_buf(),
+        config_root,
+        agent_name: agent_name.to_string(),
+        hook_name: hook_name.to_string(),
+        raw_stdin: stdin.to_string(),
+        workspace_snapshot,
+        cwd,
+        received_at_unix: crate::host::checkpoints::lifecycle::spool::unix_timestamp_now(),
+    };
+    crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_stop_job_hook_safe_at(
+        &db_path, insert,
+    )
+}
+
+fn route_or_enqueue_lifecycle_hook(
+    repo_root: &Path,
+    agent_name: &str,
+    hook_name: &str,
+    stdin: &str,
+) -> Result<crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome> {
+    if should_spool_lifecycle_stop_hook(agent_name, hook_name) {
+        enqueue_lifecycle_stop_from_hook(repo_root, agent_name, hook_name, stdin)
+            .map(|_| crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome::default())
+    } else {
+        route_hook_command_to_lifecycle(repo_root, agent_name, hook_name, stdin)
+    }
+}
+
 pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Result<()> {
     let agent = match args.agent {
         HooksAgent::Git(git_args) => return git::run(git_args, strategy_registry).await,
@@ -587,7 +639,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 hook_name,
                 &strategy_name,
                 || {
-                    route_hook_command_to_lifecycle(
+                    route_or_enqueue_lifecycle_hook(
                         &repo_root,
                         AGENT_NAME_CLAUDE_CODE,
                         hook_name,
@@ -614,7 +666,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 AGENT_NAME_CODEX,
                 hook_name,
                 &strategy_name,
-                || route_hook_command_to_lifecycle(&repo_root, AGENT_NAME_CODEX, hook_name, &stdin),
+                || route_or_enqueue_lifecycle_hook(&repo_root, AGENT_NAME_CODEX, hook_name, &stdin),
             );
             track_hook_action(
                 &repo_root,
@@ -636,7 +688,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 hook_name,
                 &strategy_name,
                 || {
-                    route_hook_command_to_lifecycle(
+                    route_or_enqueue_lifecycle_hook(
                         &repo_root,
                         AGENT_NAME_GEMINI,
                         hook_name,
@@ -664,7 +716,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 hook_name,
                 &strategy_name,
                 || {
-                    route_hook_command_to_lifecycle(
+                    route_or_enqueue_lifecycle_hook(
                         &repo_root,
                         AGENT_NAME_CURSOR,
                         hook_name,
@@ -692,7 +744,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 hook_name,
                 &strategy_name,
                 || {
-                    route_hook_command_to_lifecycle(
+                    route_or_enqueue_lifecycle_hook(
                         &repo_root,
                         AGENT_NAME_COPILOT,
                         hook_name,
@@ -720,7 +772,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 hook_name,
                 &strategy_name,
                 || {
-                    route_hook_command_to_lifecycle(
+                    route_or_enqueue_lifecycle_hook(
                         &repo_root,
                         AGENT_NAME_OPEN_CODE,
                         hook_name,
@@ -742,219 +794,6 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
     }
 }
 
-#[cfg(test)]
-pub(crate) fn dispatch_cursor_hook(
-    verb: &CursorHookVerb,
-    stdin: &str,
-    backend: &dyn SessionBackend,
-    strategy: &dyn Strategy,
-    repo_root: &Path,
-    hook_name: &str,
-) -> Result<()> {
-    match verb {
-        CursorHookVerb::SessionStart => {
-            let raw: CursorSessionInfoRaw =
-                serde_json::from_str(stdin).context("parsing session-start input")?;
-            let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
-                &raw.conversation_id,
-                crate::host::checkpoints::lifecycle::SessionIdPolicy::Strict,
-            )?;
-            let input = SessionInfoInput {
-                session_id: session_id.clone(),
-                transcript_path: crate::adapters::agents::cursor::lifecycle::resolve_transcript_ref(
-                    &session_id,
-                    raw.transcript_path.as_deref(),
-                ),
-            };
-            handle_session_start_with_profile_and_model(
-                input,
-                backend,
-                Some(repo_root),
-                Some(crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE),
-                &raw.model,
-            )
-        }
-        CursorHookVerb::BeforeSubmitPrompt => {
-            let raw: CursorBeforeSubmitPromptRaw =
-                serde_json::from_str(stdin).context("parsing before-submit-prompt input")?;
-            let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
-                &raw.conversation_id,
-                crate::host::checkpoints::lifecycle::SessionIdPolicy::Strict,
-            )?;
-            let input = UserPromptSubmitInput {
-                session_id: session_id.clone(),
-                transcript_path: crate::adapters::agents::cursor::lifecycle::resolve_transcript_ref(
-                    &session_id,
-                    raw.transcript_path.as_deref(),
-                ),
-                prompt: raw.prompt,
-            };
-            handle_user_prompt_submit_with_strategy_and_profile_and_model(
-                input,
-                backend,
-                strategy,
-                Some(repo_root),
-                crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE,
-                &raw.model,
-            )
-        }
-        CursorHookVerb::BeforeShellExecution => {
-            let raw: CursorBeforeShellExecutionRaw =
-                serde_json::from_str(stdin).context("parsing before-shell-execution input")?;
-            let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
-                &raw.conversation_id,
-                crate::host::checkpoints::lifecycle::SessionIdPolicy::Strict,
-            )?;
-
-            if backend.load_pre_prompt(&session_id)?.is_some() {
-                return Ok(());
-            }
-
-            let input = UserPromptSubmitInput {
-                session_id: session_id.clone(),
-                transcript_path: crate::adapters::agents::cursor::lifecycle::resolve_transcript_ref(
-                    &session_id,
-                    raw.transcript_path.as_deref(),
-                ),
-                prompt: shell_command_to_prompt(&raw.command),
-            };
-            handle_user_prompt_submit_with_strategy_and_profile_and_model(
-                input,
-                backend,
-                strategy,
-                Some(repo_root),
-                crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE,
-                &raw.model,
-            )?;
-
-            if let Some(mut pre_prompt) = backend.load_pre_prompt(&session_id)? {
-                pre_prompt.source = PRE_PROMPT_SOURCE_CURSOR_SHELL.to_string();
-                backend.save_pre_prompt(&pre_prompt)?;
-            }
-            Ok(())
-        }
-        CursorHookVerb::AfterShellExecution => {
-            let raw: CursorAfterShellExecutionRaw =
-                serde_json::from_str(stdin).context("parsing after-shell-execution input")?;
-            let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
-                &raw.conversation_id,
-                crate::host::checkpoints::lifecycle::SessionIdPolicy::PreserveEmpty,
-            )?;
-
-            let Some(pre_prompt) = backend.load_pre_prompt(&session_id)? else {
-                return Ok(());
-            };
-            if pre_prompt.source != PRE_PROMPT_SOURCE_CURSOR_SHELL {
-                return Ok(());
-            }
-
-            let input = SessionInfoInput {
-                session_id: session_id.clone(),
-                transcript_path: crate::adapters::agents::cursor::lifecycle::resolve_transcript_ref(
-                    &session_id,
-                    raw.transcript_path.as_deref(),
-                ),
-            };
-            handle_stop_with_profile_and_model(
-                input,
-                backend,
-                strategy,
-                Some(repo_root),
-                crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE,
-                &raw.model,
-            )
-        }
-        CursorHookVerb::Stop => {
-            let raw: CursorSessionInfoRaw =
-                serde_json::from_str(stdin).context("parsing stop input")?;
-            let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
-                &raw.conversation_id,
-                crate::host::checkpoints::lifecycle::SessionIdPolicy::PreserveEmpty,
-            )?;
-            let input = SessionInfoInput {
-                session_id: session_id.clone(),
-                transcript_path: crate::adapters::agents::cursor::lifecycle::resolve_transcript_ref(
-                    &session_id,
-                    raw.transcript_path.as_deref(),
-                ),
-            };
-            handle_stop_with_profile_and_model(
-                input,
-                backend,
-                strategy,
-                Some(repo_root),
-                crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE,
-                &raw.model,
-            )
-        }
-        CursorHookVerb::SessionEnd => {
-            let raw: CursorSessionInfoRaw =
-                serde_json::from_str(stdin).context("parsing session-end input")?;
-            let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
-                &raw.conversation_id,
-                crate::host::checkpoints::lifecycle::SessionIdPolicy::PreserveEmpty,
-            )?;
-            let transcript_path =
-                crate::adapters::agents::cursor::lifecycle::resolve_transcript_ref(
-                    &session_id,
-                    raw.transcript_path.as_deref(),
-                );
-
-            let pre_prompt = backend.load_pre_prompt(&session_id)?;
-            let session = backend.load_session(&session_id)?;
-            let should_finalize_turn = !session_id.is_empty()
-                && (pre_prompt.is_some()
-                    || session.is_none()
-                    || session.as_ref().is_some_and(|state| {
-                        state.phase == SessionPhase::Active
-                            || (state.phase == SessionPhase::Idle && state.pending.step_count == 0)
-                    }));
-
-            if should_finalize_turn {
-                handle_stop_with_profile_and_model(
-                    SessionInfoInput {
-                        session_id: session_id.clone(),
-                        transcript_path: transcript_path.clone(),
-                    },
-                    backend,
-                    strategy,
-                    Some(repo_root),
-                    crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE,
-                    &raw.model,
-                )?;
-            }
-
-            let input = SessionInfoInput {
-                session_id,
-                transcript_path,
-            };
-            handle_session_end_with_profile_and_model(
-                input,
-                backend,
-                Some(repo_root),
-                Some(crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE),
-                &raw.model,
-            )
-        }
-        CursorHookVerb::PreCompact
-        | CursorHookVerb::SubagentStart
-        | CursorHookVerb::SubagentStop => {
-            route_hook_command_to_lifecycle(repo_root, AGENT_NAME_CURSOR, hook_name, stdin)
-                .map(|_| ())
-        }
-    }
-}
-
-#[cfg(test)]
-fn shell_command_to_prompt(command: &str) -> String {
-    let trimmed = command.trim();
-    if trimmed.is_empty() {
-        "Run shell command".to_string()
-    } else {
-        format!("Run shell command: {trimmed}")
-    }
-}
-
 fn read_stdin() -> Result<String> {
     let mut buf = String::new();
     io::stdin()
@@ -964,28 +803,10 @@ fn read_stdin() -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::host::hooks::{BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV, agent_hooks_suppressed_by_env};
-    use crate::test_support::process_state::enter_process_state;
+mod tests;
 
-    #[test]
-    fn agent_hooks_suppressed_env_accepts_truthy_values() {
-        let _guard = enter_process_state(None, &[(BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV, Some("1"))]);
-        assert!(agent_hooks_suppressed_by_env());
-    }
-
-    #[test]
-    fn agent_hooks_suppressed_env_rejects_false_values() {
-        for value in ["", "0", "false", "no", "off"] {
-            let _guard =
-                enter_process_state(None, &[(BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV, Some(value))]);
-            assert!(
-                !agent_hooks_suppressed_by_env(),
-                "value `{value}` should not suppress hooks"
-            );
-        }
-    }
-}
+#[cfg(test)]
+pub(crate) use tests::dispatch_cursor_hook;
 
 #[cfg(test)]
 #[path = "dispatcher_telemetry_tests.rs"]

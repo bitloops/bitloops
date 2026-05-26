@@ -89,7 +89,7 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
             }
 
             let facts = builder.finish();
-            let metrics = json!({
+            let base_metrics = json!({
                 "nodes": facts.nodes.len(),
                 "edges": facts.edges.len(),
                 "synthesised_nodes": synthesised_nodes,
@@ -101,15 +101,32 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
                 "impacted_nodes": change_metrics.impacted_nodes,
                 "reconcile_mode": format!("{:?}", request.reconcile_mode),
             });
-            replace_computed_graph(
+            let write_outcome = replace_computed_graph(
                 &context.storage,
                 &request.repo_id,
                 facts,
                 request.to_generation_seq_inclusive,
                 &warnings,
-                metrics.clone(),
+                base_metrics.clone(),
             )
             .await?;
+            let metrics = json!({
+                "phase_name": write_outcome.sqlite_phase_metrics.phase_name,
+                "reconcile_mode": format!("{:?}", request.reconcile_mode),
+                "transaction_count": write_outcome.sqlite_phase_metrics.transaction_count,
+                "max_rss_kb": write_outcome.max_rss_kb,
+                "max_sqlite_lock_wait_ms": write_outcome.sqlite_phase_metrics.max_wait_ms,
+                "max_sqlite_lock_hold_ms": write_outcome.sqlite_phase_metrics.max_hold_ms,
+                "nodes": base_metrics["nodes"].clone(),
+                "edges": base_metrics["edges"].clone(),
+                "synthesised_nodes": base_metrics["synthesised_nodes"].clone(),
+                "synthesised_edges": base_metrics["synthesised_edges"].clone(),
+                "files": base_metrics["files"].clone(),
+                "artefacts": base_metrics["artefacts"].clone(),
+                "dependency_edges": base_metrics["dependency_edges"].clone(),
+                "affected_paths": base_metrics["affected_paths"].clone(),
+                "impacted_nodes": base_metrics["impacted_nodes"].clone(),
+            });
 
             Ok(CurrentStateConsumerResult {
                 applied_to_generation_seq: request.to_generation_seq_inclusive,

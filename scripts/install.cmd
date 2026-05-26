@@ -3,8 +3,30 @@ setlocal enabledelayedexpansion
 
 set "REPO=bitloops/bitloops"
 set "INSTALL_DIR=%USERPROFILE%\.bitloops\bin"
-set "TARGET=%~1"
-if "%TARGET%"=="" set "TARGET=latest"
+set "TARGET=latest"
+set "DEFAULT_CONFIG=0"
+
+:parse_args
+if "%~1"=="" goto :args_done
+if /I "%~1"=="--default-config" (
+  set "DEFAULT_CONFIG=1"
+  shift
+  goto :parse_args
+)
+if /I "%~1"=="/default-config" (
+  set "DEFAULT_CONFIG=1"
+  shift
+  goto :parse_args
+)
+if /I "%TARGET%"=="latest" (
+  set "TARGET=%~1"
+  shift
+  goto :parse_args
+)
+echo Usage: %~nx0 [latest^|vX.Y.Z^|X.Y.Z] [--default-config] >&2
+exit /b 1
+
+:args_done
 
 call :validate_target "%TARGET%"
 if errorlevel 1 exit /b 1
@@ -109,6 +131,21 @@ call :ensure_user_path "%INSTALL_DIR%"
 echo Installed bitloops (%DISPLAY_VERSION%) to %TARGET_PATH%
 if "%PATH_ADDED%"=="1" (
   echo Added %INSTALL_DIR% to user PATH. Restart your terminal for PATH changes to apply.
+)
+
+if "%DEFAULT_CONFIG%"=="1" (
+  set "DEFAULT_CONFIG_PATH=%TMP_DIR%\default-config.toml"
+  "%TARGET_PATH%" curl-bash-post-install --write-default-config "%DEFAULT_CONFIG_PATH%"
+  if errorlevel 1 goto :fail
+  "%TARGET_PATH%" configure --file "%DEFAULT_CONFIG_PATH%"
+  if errorlevel 1 goto :fail
+  echo Configured Bitloops daemon with the default config.
+) else (
+  "%TARGET_PATH%" configure --web
+  if errorlevel 1 (
+    echo Bitloops installed. Run this to configure the daemon:
+    echo   "%TARGET_PATH%" configure --web
+  )
 )
 
 call :cleanup

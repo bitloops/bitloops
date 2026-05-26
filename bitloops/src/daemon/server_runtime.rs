@@ -45,6 +45,8 @@ pub(super) async fn run_server(
     options: RunServerOptions<'_>,
 ) -> Result<()> {
     let _config_override = DaemonConfigPathOverrideGuard::install(&daemon_config.config_path);
+    let _config_reload_watcher =
+        super::config_reload::start_daemon_config_reload_watcher(&daemon_config.config_path)?;
     log::debug!(
         "daemon boot: mode={} config={} host={:?} port={}",
         options.mode,
