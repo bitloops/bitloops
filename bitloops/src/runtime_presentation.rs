@@ -1,3 +1,4 @@
+use crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX;
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
@@ -34,6 +35,7 @@ pub(crate) fn mailbox_label(mailbox_name: &str) -> &'static str {
         SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => "Indexing generated summaries",
         SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => "Generating summaries",
         SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => "Refreshing clone matches",
+        ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX => "Adjudicating architecture roles",
         _ => "Background work",
     }
 }
@@ -185,7 +187,17 @@ pub(crate) fn warning_summary(failed_jobs: u64) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{session_status_label, warning_summary};
+    use super::{mailbox_label, session_status_label, warning_summary};
+
+    #[test]
+    fn mailbox_label_names_architecture_role_adjudication_work() {
+        assert_eq!(
+            mailbox_label(
+                crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX
+            ),
+            "Adjudicating architecture roles"
+        );
+    }
 
     #[test]
     fn warning_status_label_is_not_running() {
