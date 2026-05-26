@@ -660,6 +660,13 @@ async fn execute_ingest_persists_changed_after_side_artefacts_without_hunks_or_f
             |row| row.get(0),
         )
         .expect("count historical artefacts");
+    let total_commit_artefacts: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM commit_artefacts WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count total commit artefacts");
     let historical_snapshot_count: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM artefact_snapshots WHERE repo_id = ?1",
@@ -672,7 +679,113 @@ async fn execute_ingest_persists_changed_after_side_artefacts_without_hunks_or_f
         historical_artefact_count > 0,
         "changed files should still produce artefact metadata rows"
     );
+    assert_eq!(
+        historical_artefact_count, total_commit_artefacts,
+        "without a current mirror, every commit artefact link should have exactly one historical artefact row"
+    );
     assert_eq!(historical_snapshot_count, 0);
+}
+
+#[tokio::test]
+async fn execute_ingest_keeps_distinct_historical_artefact_rows_per_commit_touch() {
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::write(
+        repo.path().join("Cargo.toml"),
+        "[package]\nname = \"commit-versioned-artefacts-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo.toml");
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn value() -> i32 { 0 }\n",
+    )
+    .expect("write initial lib.rs");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add value"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn value() -> i32 { 1 }\n",
+    )
+    .expect("write first value revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "change value to one"]);
+    let first_one_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn value() -> i32 { 2 }\n",
+    )
+    .expect("write second value revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "change value to two"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn value() -> i32 { 1 }\n",
+    )
+    .expect("restore first value revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "restore value to one"]);
+    let second_one_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_init_schema(&cfg, "commit-versioned artefact ingest test")
+        .await
+        .expect("initialise local devql store for commit-versioned artefact test");
+    let summary = execute_ingest_with_observer(&cfg, false, 500, None, None)
+        .await
+        .expect("execute artefact-only ingest");
+    assert!(summary.success, "ingest should succeed");
+
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let touched_value_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*)
+             FROM commit_artefacts ca
+             JOIN artefacts a
+               ON a.repo_id = ca.repo_id
+              AND a.artefact_id = ca.artefact_id
+             WHERE ca.repo_id = ?1
+               AND ca.commit_sha IN (?2, ?3)
+               AND a.symbol_fqn = 'src/lib.rs::value'",
+            rusqlite::params![
+                cfg.repo.repo_id.as_str(),
+                first_one_sha.as_str(),
+                second_one_sha.as_str(),
+            ],
+            |row| row.get(0),
+        )
+        .expect("count touched value artefacts");
+    let distinct_value_artefacts: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(DISTINCT ca.artefact_id)
+             FROM commit_artefacts ca
+             JOIN artefacts a
+               ON a.repo_id = ca.repo_id
+              AND a.artefact_id = ca.artefact_id
+             WHERE ca.repo_id = ?1
+               AND ca.commit_sha IN (?2, ?3)
+               AND a.symbol_fqn = 'src/lib.rs::value'",
+            rusqlite::params![
+                cfg.repo.repo_id.as_str(),
+                first_one_sha.as_str(),
+                second_one_sha.as_str(),
+            ],
+            |row| row.get(0),
+        )
+        .expect("count distinct value artefacts");
+    assert_eq!(
+        touched_value_rows, 2,
+        "both commits that changed value() should be linked"
+    );
+    assert_eq!(
+        distinct_value_artefacts, touched_value_rows,
+        "each commit touch should have its own historical artefact row, even when the after-side blob matches an earlier commit"
+    );
 }
 
 #[tokio::test]
@@ -804,6 +917,11 @@ async fn execute_ingest_mirrors_completed_current_artefacts_and_remains_idempote
     assert!(
         commit_artefacts_after_first > 0,
         "artefact-only ingest should persist commit artefact links"
+    );
+    assert_eq!(
+        artefacts_after_first - current_rows,
+        commit_artefacts_after_first,
+        "canonical artefacts should contain current mirror rows plus one historical artefact row per commit artefact link"
     );
 
     let file_state_rows: i64 = sqlite

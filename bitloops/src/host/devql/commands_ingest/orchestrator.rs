@@ -526,12 +526,14 @@ async fn append_changed_after_side_commit_artefacts(
             &classification.extraction_fingerprint,
             &blob_content,
         );
+        let historical_file_record =
+            commit_scoped_historical_artefact_record(&cfg.repo.repo_id, commit_sha, &file_record);
         sql_batch.push(build_insert_historical_artefact_sql(
             cfg,
             relational,
             &file_artefact.language,
             &file_artefact.extraction_fingerprint,
-            &file_record,
+            &historical_file_record,
         ));
         sql_batch.push(build_insert_commit_artefact_sql(
             relational,
@@ -539,7 +541,7 @@ async fn append_changed_after_side_commit_artefacts(
             commit_sha,
             path,
             blob_sha,
-            &file_record,
+            &historical_file_record,
         ));
         artefacts_appended += 1;
 
@@ -673,12 +675,14 @@ fn append_overlapping_language_artefact_metadata_sql(
         .iter()
         .filter(|record| artefact_overlaps_changed_ranges(record, changed_ranges))
     {
+        let historical_record =
+            commit_scoped_historical_artefact_record(&cfg.repo.repo_id, rev.commit_sha, record);
         sql_batch.push(build_insert_historical_artefact_sql(
             cfg,
             relational,
             &file_artefact.language,
             &file_artefact.extraction_fingerprint,
-            record,
+            &historical_record,
         ));
         sql_batch.push(build_insert_commit_artefact_sql(
             relational,
@@ -686,11 +690,36 @@ fn append_overlapping_language_artefact_metadata_sql(
             rev.commit_sha,
             rev.path,
             rev.blob_sha,
-            record,
+            &historical_record,
         ));
         appended += 1;
     }
     Ok(appended)
+}
+
+fn commit_scoped_historical_artefact_record(
+    repo_id: &str,
+    commit_sha: &str,
+    record: &PersistedArtefactRecord,
+) -> PersistedArtefactRecord {
+    let mut scoped = record.clone();
+    scoped.artefact_id =
+        commit_scoped_historical_artefact_id(repo_id, commit_sha, &record.artefact_id);
+    scoped.parent_artefact_id = record
+        .parent_artefact_id
+        .as_deref()
+        .map(|parent_id| commit_scoped_historical_artefact_id(repo_id, commit_sha, parent_id));
+    scoped
+}
+
+fn commit_scoped_historical_artefact_id(
+    repo_id: &str,
+    commit_sha: &str,
+    revision_artefact_id: &str,
+) -> String {
+    deterministic_uuid(&format!(
+        "historical-commit-artefact|{repo_id}|{commit_sha}|{revision_artefact_id}"
+    ))
 }
 
 fn artefact_overlaps_changed_ranges(
