@@ -115,6 +115,7 @@ const LEGACY_SHARED_SQLITE_TABLES: &[&str] = &[
     "commit_ingest_ledger",
     "commit_file_deltas",
     "commit_hunks",
+    "commit_artefacts",
     "file_state",
     "artefact_snapshots",
     "artefacts",

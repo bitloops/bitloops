@@ -84,6 +84,7 @@ pub(crate) fn parse_commit_hunks_from_git_show(
     Ok(parsed)
 }
 
+#[allow(dead_code)]
 pub(crate) async fn persist_commit_hunks(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -370,6 +371,7 @@ fn delta_is_excluded(delta: &CommitFileDelta, matcher: &RepoExclusionMatcher) ->
     before_excluded && after_excluded
 }
 
+#[allow(dead_code)]
 fn build_upsert_commit_file_delta_sql(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -407,6 +409,7 @@ fn build_upsert_commit_file_delta_sql(
     )
 }
 
+#[allow(dead_code)]
 fn build_upsert_commit_hunk_sql(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -458,6 +461,7 @@ fn build_upsert_commit_hunk_sql(
     ))
 }
 
+#[allow(dead_code)]
 fn bool_sql(relational: &RelationalStorage, value: bool) -> &'static str {
     match relational.dialect_for_role(RelationalStorageRole::SharedRelational) {
         RelationalDialect::Postgres => {

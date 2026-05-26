@@ -115,6 +115,46 @@ pub(super) async fn upsert_file_artefact_row(
     })
 }
 
+pub(super) async fn upsert_file_artefact_metadata_row(
+    repo_id: &str,
+    relational: &RelationalStorage,
+    path: &str,
+    blob_sha: &str,
+    language: &str,
+    extraction_fingerprint: &str,
+    blob_content: &DecodedFileContent,
+) -> Result<FileArtefactRow> {
+    let symbol_id = file_symbol_id(path);
+    let artefact_id = revision_artefact_id(repo_id, blob_sha, &symbol_id);
+    let line_count = blob_content.line_count().max(1);
+    let byte_count = blob_content.byte_count().max(0);
+    let file_docstring = blob_content
+        .text
+        .as_deref()
+        .and_then(|content| extract_file_docstring_for_language_pack(path, language, content));
+    let sql = build_upsert_historical_file_artefact_sql(
+        repo_id,
+        relational,
+        path,
+        blob_sha,
+        language,
+        extraction_fingerprint,
+        file_docstring.as_deref(),
+    );
+
+    relational
+        .exec_for_role(RelationalStorageRole::SharedRelational, &sql)
+        .await?;
+    Ok(FileArtefactRow {
+        artefact_id,
+        symbol_id,
+        language: language.to_string(),
+        extraction_fingerprint: extraction_fingerprint.to_string(),
+        end_line: line_count,
+        end_byte: byte_count,
+    })
+}
+
 pub(super) fn build_file_current_record(
     path: &str,
     blob_sha: &str,
