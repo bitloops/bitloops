@@ -196,6 +196,26 @@ fn init_args_accept_repo_local_flags() {
 }
 
 #[test]
+fn init_args_bare_backfill_defaults_to_ten_commits() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--agent",
+        "codex",
+        "--sync=false",
+        "--ingest=true",
+        "--backfill",
+    ])
+    .expect("bare init backfill flag should parse");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+
+    assert_eq!(DEFAULT_INIT_INGEST_BACKFILL, 10);
+    assert_eq!(args.backfill, Some(10));
+}
+
+#[test]
 fn init_args_accept_embeddings_runtime_flag() {
     let parsed = Cli::try_parse_from([
         "bitloops",

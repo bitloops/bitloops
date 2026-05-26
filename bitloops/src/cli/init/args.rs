@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 
 use crate::cli::embeddings::EmbeddingsRuntime;
 
-pub(crate) const DEFAULT_INIT_INGEST_BACKFILL: usize = 50;
+pub(crate) const DEFAULT_INIT_INGEST_BACKFILL: usize = 10;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum InitCommand {
@@ -59,12 +59,12 @@ pub struct InitArgs {
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
     pub ingest: Option<bool>,
 
-    /// Bound init-triggered historical ingest to the latest N commits (bare flag = 50).
+    /// Bound init-triggered historical ingest to the latest N commits (bare flag = 10).
     #[arg(
         long,
         num_args = 0..=1,
         require_equals = true,
-        default_missing_value = "50",
+        default_missing_value = "10",
         value_parser = parse_backfill_value
     )]
     pub backfill: Option<usize>,
