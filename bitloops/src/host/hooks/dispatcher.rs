@@ -14,9 +14,23 @@ use crate::adapters::agents::{
 use crate::config::settings;
 use crate::host::checkpoints::lifecycle::adapters::{
     CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_POST_TOOL_USE, CLAUDE_HOOK_PRE_TASK,
-    CLAUDE_HOOK_PRE_TOOL_USE, CLAUDE_HOOK_STOP, CODEX_HOOK_STOP, COPILOT_HOOK_POST_TOOL_USE,
-    COPILOT_HOOK_PRE_TOOL_USE, GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_TOOL,
-    route_hook_command_to_lifecycle,
+    CLAUDE_HOOK_PRE_TOOL_USE, CLAUDE_HOOK_SESSION_END, CLAUDE_HOOK_SESSION_START, CLAUDE_HOOK_STOP,
+    CLAUDE_HOOK_USER_PROMPT_SUBMIT, CODEX_HOOK_POST_TOOL_USE, CODEX_HOOK_PRE_TOOL_USE,
+    CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP, CODEX_HOOK_USER_PROMPT_SUBMIT,
+    COPILOT_HOOK_AGENT_STOP, COPILOT_HOOK_POST_TOOL_USE, COPILOT_HOOK_PRE_TOOL_USE,
+    COPILOT_HOOK_SESSION_END, COPILOT_HOOK_SESSION_START, COPILOT_HOOK_SUBAGENT_STOP,
+    COPILOT_HOOK_USER_PROMPT_SUBMITTED, CURSOR_HOOK_BEFORE_SUBMIT_PROMPT, CURSOR_HOOK_PRE_COMPACT,
+    CURSOR_HOOK_SESSION_END, CURSOR_HOOK_SESSION_START, CURSOR_HOOK_STOP,
+    CURSOR_HOOK_SUBAGENT_START, CURSOR_HOOK_SUBAGENT_STOP, ClaudeCodeLifecycleAdapter,
+    CodexLifecycleAdapter, CopilotCliLifecycleAdapter, CursorLifecycleAdapter,
+    GEMINI_HOOK_AFTER_AGENT, GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_AGENT,
+    GEMINI_HOOK_BEFORE_TOOL, GEMINI_HOOK_PRE_COMPRESS, GEMINI_HOOK_SESSION_END,
+    GEMINI_HOOK_SESSION_START, GeminiCliLifecycleAdapter, OPENCODE_HOOK_COMPACTION,
+    OPENCODE_HOOK_SESSION_END, OPENCODE_HOOK_SESSION_START, OPENCODE_HOOK_TURN_END,
+    OPENCODE_HOOK_TURN_START, OpenCodeLifecycleAdapter, route_hook_command_to_lifecycle,
+};
+use crate::host::checkpoints::lifecycle::{
+    LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType,
 };
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::strategy::registry::{self, StrategyRegistry};
@@ -533,68 +547,146 @@ fn emit_hook_stdout_if_present(
     Ok(())
 }
 
-fn should_spool_lifecycle_hook(agent_name: &str, hook_name: &str) -> bool {
-    matches!(
-        (agent_name, hook_name),
-        (AGENT_NAME_CODEX, CODEX_HOOK_STOP)
-            | (
-                AGENT_NAME_CLAUDE_CODE,
-                CLAUDE_HOOK_STOP
-                    | crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_SESSION_END
-                    | crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_PRE_TOOL_USE
-                    | crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_POST_TOOL_USE,
-            )
-            | (
-                AGENT_NAME_GEMINI,
-                crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_AGENT
-                    | crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_SESSION_END
-                    | crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_PRE_COMPRESS,
-            )
-            | (
-                AGENT_NAME_CURSOR,
-                crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP
-                    | crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_PRE_COMPACT
-                    | crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SESSION_END,
-            )
-            | (
-                AGENT_NAME_COPILOT,
-                crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP
-                    | crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_SESSION_END,
-            )
-            | (
-                AGENT_NAME_OPEN_CODE,
-                crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END
-                    | crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_COMPACTION
-                    | crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_SESSION_END,
-            )
-    )
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LifecycleHookDispatchMode {
+    Sync,
+    AsyncNoSnapshot,
+    AsyncPreBoundarySnapshot,
+    AsyncWorkspaceSnapshot,
+    AsyncWorkspaceAndBranchSnapshot,
 }
 
-fn should_capture_workspace_snapshot_for_lifecycle_spool(
+impl LifecycleHookDispatchMode {
+    const fn is_async(self) -> bool {
+        !matches!(self, Self::Sync)
+    }
+}
+
+fn lifecycle_hook_dispatch_mode(agent_name: &str, hook_name: &str) -> LifecycleHookDispatchMode {
+    use LifecycleHookDispatchMode::*;
+
+    match (agent_name, hook_name) {
+        (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_SESSION_START)
+        | (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_SESSION_END)
+        | (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_PRE_TOOL_USE)
+        | (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_POST_TOOL_USE)
+        | (AGENT_NAME_CODEX, CODEX_HOOK_SESSION_START)
+        | (AGENT_NAME_GEMINI, GEMINI_HOOK_SESSION_START)
+        | (AGENT_NAME_GEMINI, GEMINI_HOOK_SESSION_END)
+        | (AGENT_NAME_GEMINI, GEMINI_HOOK_PRE_COMPRESS)
+        | (AGENT_NAME_CURSOR, CURSOR_HOOK_SESSION_START)
+        | (AGENT_NAME_CURSOR, CURSOR_HOOK_PRE_COMPACT)
+        | (AGENT_NAME_COPILOT, COPILOT_HOOK_SESSION_START)
+        | (AGENT_NAME_COPILOT, COPILOT_HOOK_SESSION_END)
+        | (AGENT_NAME_OPEN_CODE, OPENCODE_HOOK_SESSION_START)
+        | (AGENT_NAME_OPEN_CODE, OPENCODE_HOOK_SESSION_END)
+        | (AGENT_NAME_OPEN_CODE, OPENCODE_HOOK_COMPACTION) => AsyncNoSnapshot,
+
+        (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_USER_PROMPT_SUBMIT)
+        | (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_PRE_TASK)
+        | (AGENT_NAME_CODEX, CODEX_HOOK_USER_PROMPT_SUBMIT)
+        | (AGENT_NAME_CODEX, CODEX_HOOK_PRE_TOOL_USE)
+        | (AGENT_NAME_GEMINI, GEMINI_HOOK_BEFORE_AGENT)
+        | (AGENT_NAME_CURSOR, CURSOR_HOOK_BEFORE_SUBMIT_PROMPT)
+        | (
+            AGENT_NAME_CURSOR,
+            crate::adapters::agents::cursor::lifecycle::HOOK_NAME_BEFORE_SHELL_EXECUTION,
+        )
+        | (AGENT_NAME_CURSOR, CURSOR_HOOK_SUBAGENT_START)
+        | (AGENT_NAME_COPILOT, COPILOT_HOOK_USER_PROMPT_SUBMITTED)
+        | (AGENT_NAME_OPEN_CODE, OPENCODE_HOOK_TURN_START) => AsyncPreBoundarySnapshot,
+
+        (AGENT_NAME_CODEX, CODEX_HOOK_STOP)
+        | (AGENT_NAME_CODEX, CODEX_HOOK_POST_TOOL_USE)
+        | (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_STOP)
+        | (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_POST_TASK)
+        | (AGENT_NAME_GEMINI, GEMINI_HOOK_AFTER_AGENT)
+        | (AGENT_NAME_CURSOR, CURSOR_HOOK_STOP)
+        | (
+            AGENT_NAME_CURSOR,
+            crate::adapters::agents::cursor::lifecycle::HOOK_NAME_AFTER_SHELL_EXECUTION,
+        )
+        | (AGENT_NAME_CURSOR, CURSOR_HOOK_SESSION_END)
+        | (AGENT_NAME_CURSOR, CURSOR_HOOK_SUBAGENT_STOP)
+        | (AGENT_NAME_COPILOT, COPILOT_HOOK_AGENT_STOP)
+        | (AGENT_NAME_COPILOT, COPILOT_HOOK_SUBAGENT_STOP)
+        | (AGENT_NAME_OPEN_CODE, OPENCODE_HOOK_TURN_END) => AsyncWorkspaceSnapshot,
+
+        (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_POST_TODO) => AsyncWorkspaceAndBranchSnapshot,
+
+        _ => Sync,
+    }
+}
+
+fn parse_lifecycle_event_for_enqueue_offset(
+    repo_root: &Path,
+    adapter: &dyn LifecycleAgentAdapter,
+    hook_name: &str,
+    stdin: &str,
+) -> Result<Option<LifecycleEvent>> {
+    let mut input = std::io::Cursor::new(stdin.as_bytes());
+    if adapter.agent_name() == AGENT_NAME_CODEX {
+        crate::adapters::agents::codex::lifecycle::parse_hook_event_for_repo(
+            hook_name, &mut input, repo_root,
+        )
+    } else if adapter.agent_name() == AGENT_NAME_CURSOR {
+        crate::adapters::agents::cursor::lifecycle::parse_hook_event_for_repo(
+            hook_name, &mut input, repo_root,
+        )
+    } else {
+        adapter.parse_hook_event(hook_name, &mut input)
+    }
+}
+
+fn lifecycle_adapter_for_enqueue_offset(
+    agent_name: &str,
+) -> Option<Box<dyn LifecycleAgentAdapter>> {
+    match agent_name {
+        AGENT_NAME_CLAUDE_CODE => Some(Box::new(ClaudeCodeLifecycleAdapter)),
+        AGENT_NAME_CODEX => Some(Box::new(CodexLifecycleAdapter)),
+        AGENT_NAME_COPILOT => Some(Box::new(CopilotCliLifecycleAdapter)),
+        AGENT_NAME_CURSOR => Some(Box::new(CursorLifecycleAdapter)),
+        AGENT_NAME_GEMINI => Some(Box::new(GeminiCliLifecycleAdapter)),
+        AGENT_NAME_OPEN_CODE => Some(Box::new(OpenCodeLifecycleAdapter)),
+        _ => None,
+    }
+}
+
+fn capture_pre_boundary_transcript_offset(
+    repo_root: &Path,
     agent_name: &str,
     hook_name: &str,
-) -> bool {
-    matches!(
-        (agent_name, hook_name),
-        (AGENT_NAME_CODEX, CODEX_HOOK_STOP)
-            | (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_STOP)
-            | (
-                AGENT_NAME_GEMINI,
-                crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_AGENT,
-            )
-            | (
-                AGENT_NAME_CURSOR,
-                crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP,
-            )
-            | (
-                AGENT_NAME_COPILOT,
-                crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP,
-            )
-            | (
-                AGENT_NAME_OPEN_CODE,
-                crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END,
-            )
-    )
+    stdin: &str,
+) -> Option<i64> {
+    let adapter = lifecycle_adapter_for_enqueue_offset(agent_name)?;
+    let event = match parse_lifecycle_event_for_enqueue_offset(
+        repo_root,
+        adapter.as_ref(),
+        hook_name,
+        stdin,
+    ) {
+        Ok(Some(event)) => event,
+        Ok(None) => return None,
+        Err(err) => {
+            log::debug!(
+                "failed to parse lifecycle hook while capturing pre-boundary transcript offset for agent={} hook={}: {err:#}",
+                agent_name,
+                hook_name
+            );
+            return None;
+        }
+    };
+    if event.event_type.as_ref() != Some(&LifecycleEventType::TurnStart) {
+        return None;
+    }
+    let transcript_ref = event.session_ref.trim();
+    if transcript_ref.is_empty() {
+        return None;
+    }
+    adapter
+        .as_transcript_analyzer()
+        .and_then(|analyzer| analyzer.get_transcript_position(transcript_ref).ok())
+        .and_then(|offset| i64::try_from(offset).ok())
 }
 
 fn enqueue_lifecycle_hook_from_hook(
@@ -602,6 +694,7 @@ fn enqueue_lifecycle_hook_from_hook(
     agent_name: &str,
     hook_name: &str,
     stdin: &str,
+    mode: LifecycleHookDispatchMode,
 ) -> Result<crate::host::checkpoints::lifecycle::spool::LifecycleHookEnqueueResult> {
     let repo = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for lifecycle hook spool")?;
@@ -609,10 +702,28 @@ fn enqueue_lifecycle_hook_from_hook(
         .context("resolving daemon config root for lifecycle hook spool")?;
     let db_path = crate::config::resolve_repo_runtime_db_path_for_config_root(&config_root);
     let cwd = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
-    let workspace_snapshot =
-        should_capture_workspace_snapshot_for_lifecycle_spool(agent_name, hook_name).then(|| {
-            crate::host::checkpoints::lifecycle::capture_workspace_snapshot_for_turn_end(repo_root)
-        });
+    let boundary_snapshot = match mode {
+        LifecycleHookDispatchMode::Sync | LifecycleHookDispatchMode::AsyncNoSnapshot => None,
+        LifecycleHookDispatchMode::AsyncPreBoundarySnapshot => {
+            let transcript_offset =
+                capture_pre_boundary_transcript_offset(repo_root, agent_name, hook_name, stdin);
+            Some(
+                crate::host::checkpoints::lifecycle::capture_pre_boundary_snapshot(
+                    repo_root,
+                    transcript_offset,
+                ),
+            )
+        }
+        LifecycleHookDispatchMode::AsyncWorkspaceSnapshot => Some(
+            crate::host::checkpoints::lifecycle::capture_workspace_boundary_snapshot(repo_root),
+        ),
+        LifecycleHookDispatchMode::AsyncWorkspaceAndBranchSnapshot => Some(
+            crate::host::checkpoints::lifecycle::capture_workspace_and_branch_snapshot(repo_root),
+        ),
+    };
+    let workspace_snapshot = boundary_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.workspace.clone());
     let insert = crate::host::checkpoints::lifecycle::spool::LifecycleJobInsert {
         repo_id: repo.repo_id,
         repo_root: repo_root.to_path_buf(),
@@ -621,7 +732,7 @@ fn enqueue_lifecycle_hook_from_hook(
         hook_name: hook_name.to_string(),
         raw_stdin: stdin.to_string(),
         workspace_snapshot,
-        boundary_snapshot: None,
+        boundary_snapshot,
         cwd,
         received_at_unix: crate::host::checkpoints::lifecycle::spool::unix_timestamp_now(),
     };
@@ -634,8 +745,9 @@ fn route_or_enqueue_lifecycle_hook(
     hook_name: &str,
     stdin: &str,
 ) -> Result<crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome> {
-    if should_spool_lifecycle_hook(agent_name, hook_name) {
-        enqueue_lifecycle_hook_from_hook(repo_root, agent_name, hook_name, stdin)
+    let mode = lifecycle_hook_dispatch_mode(agent_name, hook_name);
+    if mode.is_async() {
+        enqueue_lifecycle_hook_from_hook(repo_root, agent_name, hook_name, stdin, mode)
             .map(|_| crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome::default())
     } else {
         route_hook_command_to_lifecycle(repo_root, agent_name, hook_name, stdin)

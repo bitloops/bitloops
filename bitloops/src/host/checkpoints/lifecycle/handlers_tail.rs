@@ -7,6 +7,7 @@ use super::adapter::LifecycleAgentAdapter;
 use super::interaction::{flush_interaction_spool_best_effort, resolve_interaction_spool};
 use super::time_and_ids::{generate_interaction_event_id, now_rfc3339};
 use super::types::{LifecycleEvent, SessionIdPolicy, apply_session_id_policy};
+use crate::host::checkpoints::lifecycle::spool::LifecycleBoundarySnapshot;
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::session::phase::{
     Event as SessionEvent, NoOpActionHandler as SessionNoOpActionHandler,
@@ -21,7 +22,7 @@ use crate::host::checkpoints::transcript::metadata::{
     extract_prompts_from_transcript_bytes,
 };
 use crate::host::hooks::runtime::agent_runtime::helpers::{
-    count_todos_from_tool_input, detect_file_changes, detect_untracked_files,
+    FileChanges, count_todos_from_tool_input, detect_file_changes, detect_untracked_files,
     extract_last_completed_todo_from_tool_input, next_incremental_sequence,
     parse_subagent_type_and_description, resolve_subagent_transcript_path,
 };
@@ -156,6 +157,24 @@ pub fn handle_lifecycle_session_end_for_repo(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
+    handle_lifecycle_session_end_for_repo_inner(repo_root, agent, event, None)
+}
+
+pub(crate) fn handle_lifecycle_session_end_for_repo_with_boundary_snapshot(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+    boundary_snapshot: Option<&LifecycleBoundarySnapshot>,
+) -> Result<()> {
+    handle_lifecycle_session_end_for_repo_inner(repo_root, agent, event, boundary_snapshot)
+}
+
+fn handle_lifecycle_session_end_for_repo_inner(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+    boundary_snapshot: Option<&LifecycleBoundarySnapshot>,
+) -> Result<()> {
     let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::PreserveEmpty)?;
     if session_id.is_empty() {
         return Ok(());
@@ -177,7 +196,12 @@ pub fn handle_lifecycle_session_end_for_repo(
         if should_finalize_turn {
             let mut turn_end = event.clone();
             turn_end.event_type = Some(super::types::LifecycleEventType::TurnEnd);
-            super::turn_end::handle_lifecycle_turn_end_for_repo(repo_root, agent, &turn_end)?;
+            super::turn_end::handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
+                repo_root,
+                agent,
+                &turn_end,
+                boundary_snapshot.and_then(|snapshot| snapshot.workspace.clone()),
+            )?;
         }
     }
     let ended_at = now_rfc3339();
@@ -268,8 +292,30 @@ pub fn handle_lifecycle_subagent_start(
 
 pub fn handle_lifecycle_subagent_start_for_repo(
     repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
+    let pre_untracked_files = detect_untracked_files(Some(repo_root));
+    handle_lifecycle_subagent_start_for_repo_inner(repo_root, agent, event, pre_untracked_files)
+}
+
+pub(crate) fn handle_lifecycle_subagent_start_for_repo_with_boundary_snapshot(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+    boundary_snapshot: Option<&LifecycleBoundarySnapshot>,
+) -> Result<()> {
+    let pre_untracked_files = boundary_snapshot
+        .map(|snapshot| snapshot.pre_untracked_files.clone())
+        .unwrap_or_else(|| detect_untracked_files(Some(repo_root)));
+    handle_lifecycle_subagent_start_for_repo_inner(repo_root, agent, event, pre_untracked_files)
+}
+
+fn handle_lifecycle_subagent_start_for_repo_inner(
+    repo_root: &Path,
     _agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
+    pre_untracked_files: Vec<String>,
 ) -> Result<()> {
     let backend = create_session_backend_or_local(repo_root);
     if let Some(mut state) = backend.load_session(&event.session_id)? {
@@ -281,7 +327,7 @@ pub fn handle_lifecycle_subagent_start_for_repo(
         tool_use_id: event.tool_use_id.clone(),
         session_id: event.session_id.clone(),
         timestamp: now_rfc3339(),
-        untracked_files: detect_untracked_files(Some(repo_root)),
+        untracked_files: pre_untracked_files,
     };
     backend.create_pre_task_marker(&marker)?;
 
@@ -458,6 +504,24 @@ pub fn handle_lifecycle_subagent_end_for_repo(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
+    handle_lifecycle_subagent_end_for_repo_inner(repo_root, agent, event, None)
+}
+
+pub(crate) fn handle_lifecycle_subagent_end_for_repo_with_boundary_snapshot(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+    boundary_snapshot: Option<&LifecycleBoundarySnapshot>,
+) -> Result<()> {
+    handle_lifecycle_subagent_end_for_repo_inner(repo_root, agent, event, boundary_snapshot)
+}
+
+fn handle_lifecycle_subagent_end_for_repo_inner(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+    boundary_snapshot: Option<&LifecycleBoundarySnapshot>,
+) -> Result<()> {
     let backend = create_session_backend_or_local(repo_root);
     let subagent_transcript_path =
         resolve_subagent_transcript_path(&event.session_ref, &event.session_id, &event.subagent_id);
@@ -465,7 +529,22 @@ pub fn handle_lifecycle_subagent_end_for_repo(
         .load_pre_task_marker(&event.tool_use_id)?
         .map(|s| s.untracked_files)
         .unwrap_or_default();
-    let changes = detect_file_changes(Some(repo_root), Some(&pre_untracked));
+    let changes = if let Some((modified, new_files, deleted)) =
+        boundary_snapshot.and_then(|snapshot| {
+            super::git_workspace::workspace_changes_from_boundary_snapshot(
+                repo_root,
+                snapshot,
+                &pre_untracked,
+            )
+        }) {
+        FileChanges {
+            modified,
+            new_files,
+            deleted,
+        }
+    } else {
+        detect_file_changes(Some(repo_root), Some(&pre_untracked))
+    };
     let total_changes = changes.modified.len() + changes.new_files.len() + changes.deleted.len();
     let (subagent_type, task_description) =
         parse_subagent_type_and_description(event.tool_input.as_ref());
@@ -608,6 +687,24 @@ pub fn handle_lifecycle_todo_checkpoint_for_repo(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
+    handle_lifecycle_todo_checkpoint_for_repo_inner(repo_root, agent, event, None)
+}
+
+pub(crate) fn handle_lifecycle_todo_checkpoint_for_repo_with_boundary_snapshot(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+    boundary_snapshot: Option<&LifecycleBoundarySnapshot>,
+) -> Result<()> {
+    handle_lifecycle_todo_checkpoint_for_repo_inner(repo_root, agent, event, boundary_snapshot)
+}
+
+fn handle_lifecycle_todo_checkpoint_for_repo_inner(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+    boundary_snapshot: Option<&LifecycleBoundarySnapshot>,
+) -> Result<()> {
     let backend = create_session_backend_or_local(repo_root);
     let active_task = backend.find_active_pre_task()?;
     let task_tool_use_id = match active_task {
@@ -615,13 +712,25 @@ pub fn handle_lifecycle_todo_checkpoint_for_repo(
         None => return Ok(()),
     };
 
-    let (skip, branch_name) = should_skip_on_default_branch_for_repo(repo_root);
+    let (skip, branch_name) =
+        should_skip_on_default_branch_for_snapshot(repo_root, boundary_snapshot);
     if skip {
         eprintln!("Bitloops: skipping incremental checkpoint on branch '{branch_name}'");
         return Ok(());
     }
 
-    let changes = detect_file_changes(Some(repo_root), None);
+    let changes = if let Some((modified, new_files, deleted)) =
+        boundary_snapshot.and_then(|snapshot| {
+            super::git_workspace::workspace_changes_from_boundary_snapshot(repo_root, snapshot, &[])
+        }) {
+        FileChanges {
+            modified,
+            new_files,
+            deleted,
+        }
+    } else {
+        detect_file_changes(Some(repo_root), None)
+    };
     let total_changes = changes.modified.len() + changes.new_files.len() + changes.deleted.len();
     if total_changes == 0 {
         return Ok(());
@@ -725,6 +834,21 @@ pub fn handle_lifecycle_todo_checkpoint_for_repo(
     }
 
     Ok(())
+}
+
+pub(crate) fn should_skip_on_default_branch_for_snapshot(
+    repo_root: &Path,
+    boundary_snapshot: Option<&LifecycleBoundarySnapshot>,
+) -> (bool, String) {
+    if let Some(snapshot) = boundary_snapshot
+        && let Some(is_default_branch) = snapshot.is_default_branch
+    {
+        return (
+            is_default_branch,
+            snapshot.branch_name.clone().unwrap_or_default(),
+        );
+    }
+    should_skip_on_default_branch_for_repo(repo_root)
 }
 
 fn should_skip_on_default_branch_for_repo(repo_root: &Path) -> (bool, String) {

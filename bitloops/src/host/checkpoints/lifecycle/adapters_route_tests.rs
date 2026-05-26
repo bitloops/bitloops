@@ -151,6 +151,45 @@ fn lifecycle_adapters_expose_usage_capabilities_for_supported_agents() {
 }
 
 #[test]
+fn route_turn_start_uses_boundary_snapshot_transcript_offset() -> Result<()> {
+    let repo = seed_repo();
+    let transcript = repo.path().join("claude-transcript.jsonl");
+    std::fs::write(&transcript, "first line\nsecond line\n")?;
+
+    with_route_test_state(repo.path(), &[], || -> Result<()> {
+        let snapshot = crate::host::checkpoints::lifecycle::spool::LifecycleBoundarySnapshot {
+            transcript_offset: Some(11),
+            pre_untracked_files: vec!["scratch.txt".to_string()],
+            ..Default::default()
+        };
+
+        route_hook_command_to_lifecycle_for_repo_with_boundary_snapshot(
+            repo.path(),
+            AGENT_NAME_CLAUDE_CODE,
+            CLAUDE_HOOK_USER_PROMPT_SUBMIT,
+            &serde_json::json!({
+                "session_id": "session-1",
+                "transcript_path": transcript.to_string_lossy(),
+                "prompt": "hello",
+                "model": "claude-test"
+            })
+            .to_string(),
+            Some(snapshot),
+        )?;
+
+        let backend = create_session_backend_or_local(repo.path());
+        let pre_prompt = backend
+            .load_pre_prompt("session-1")?
+            .expect("pre-prompt should be saved");
+        assert_eq!(pre_prompt.transcript_offset, 11);
+        assert_eq!(pre_prompt.untracked_files, vec!["scratch.txt"]);
+        Ok(())
+    })?;
+
+    Ok(())
+}
+
+#[test]
 fn route_codex_hooks_persist_interactions_to_event_db_when_relational_store_is_absent() -> Result<()>
 {
     let repo = seed_repo();

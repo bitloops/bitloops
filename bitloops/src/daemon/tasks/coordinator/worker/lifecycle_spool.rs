@@ -38,12 +38,12 @@ pub(crate) fn process_lifecycle_spool_once(sqlite: &SqliteConnectionPool) -> Res
 fn process_lifecycle_job(
     job: &crate::host::checkpoints::lifecycle::spool::LifecycleJobRecord,
 ) -> Result<()> {
-    crate::host::checkpoints::lifecycle::adapters::route_hook_command_to_lifecycle_for_repo_with_workspace_snapshot(
+    crate::host::checkpoints::lifecycle::adapters::route_hook_command_to_lifecycle_for_repo_with_boundary_snapshot(
         &job.repo_root,
         &job.agent_name,
         &job.hook_name,
         &job.raw_stdin,
-        job.workspace_snapshot.clone(),
+        job.boundary_snapshot.clone(),
     )
     .with_context(|| {
         format!(

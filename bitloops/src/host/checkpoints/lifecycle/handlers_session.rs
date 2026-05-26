@@ -6,6 +6,7 @@ use super::adapter::LifecycleAgentAdapter;
 use super::canonical::build_phase3_canonical_request;
 use super::git_workspace::collect_untracked_files_for_lifecycle;
 use super::interaction::{flush_interaction_spool_best_effort, resolve_interaction_spool};
+use super::spool::LifecycleBoundarySnapshot;
 use super::time_and_ids::{
     generate_interaction_event_id, generate_lifecycle_turn_id, now_rfc3339,
     truncate_prompt_for_storage,
@@ -165,6 +166,24 @@ pub fn handle_lifecycle_turn_start_for_repo(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
+    handle_lifecycle_turn_start_for_repo_inner(repo_root, agent, event, None)
+}
+
+pub(crate) fn handle_lifecycle_turn_start_for_repo_with_boundary_snapshot(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+    boundary_snapshot: Option<&LifecycleBoundarySnapshot>,
+) -> Result<()> {
+    handle_lifecycle_turn_start_for_repo_inner(repo_root, agent, event, boundary_snapshot)
+}
+
+fn handle_lifecycle_turn_start_for_repo_inner(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+    boundary_snapshot: Option<&LifecycleBoundarySnapshot>,
+) -> Result<()> {
     let canonical_request = build_phase3_canonical_request(agent.agent_name(), event)?;
     let session_id = apply_session_id_policy(
         &canonical_request.session.session_id,
@@ -185,6 +204,12 @@ pub fn handle_lifecycle_turn_start_for_repo(
         .as_transcript_analyzer()
         .and_then(|analyzer| analyzer.get_transcript_position(&event.session_ref).ok())
         .unwrap_or(0);
+    let snapshot_untracked = boundary_snapshot
+        .map(|snapshot| snapshot.pre_untracked_files.clone());
+    let snapshot_offset = boundary_snapshot
+        .and_then(|snapshot| snapshot.transcript_offset)
+        .and_then(|offset| usize::try_from(offset).ok());
+    let transcript_offset = snapshot_offset.unwrap_or(transcript_offset);
 
     let pre_prompt = crate::host::checkpoints::session::state::PrePromptState {
         session_id: session_id.clone(),
@@ -198,7 +223,8 @@ pub fn handle_lifecycle_turn_start_for_repo(
             .session_ref
             .clone()
             .unwrap_or_else(|| event.session_ref.clone()),
-        untracked_files: collect_untracked_files_for_lifecycle(repo_root),
+        untracked_files: snapshot_untracked
+            .unwrap_or_else(|| collect_untracked_files_for_lifecycle(repo_root)),
         transcript_offset: transcript_offset as i64,
         ..crate::host::checkpoints::session::state::PrePromptState::default()
     };
