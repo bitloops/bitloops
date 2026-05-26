@@ -3557,6 +3557,12 @@ struct AgentPreCommitInteractionSnapshot {
     uncheckpointed_turn_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AgentPreCommitObservation {
+    interactions: AgentPreCommitInteractionSnapshot,
+    checkpoint_mapping_count: usize,
+}
+
 fn collect_agent_pre_commit_interactions(
     sessions: &[InteractionSession],
     turns: &[InteractionTurn],
@@ -3609,6 +3615,23 @@ fn load_agent_pre_commit_interactions(
     ))
 }
 
+fn load_agent_pre_commit_observation(
+    world: &QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+) -> Result<AgentPreCommitObservation> {
+    let interactions = load_agent_pre_commit_interactions(world, repo_name, agent_name)?;
+    let checkpoint_mapping_count =
+        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
+            .context("reading Bitloops checkpoint mappings before commit")?
+            .len();
+
+    Ok(AgentPreCommitObservation {
+        interactions,
+        checkpoint_mapping_count,
+    })
+}
+
 pub fn assert_agent_interaction_exists_before_commit_for_repo(
     world: &QatWorld,
     repo_name: &str,
@@ -3616,7 +3639,26 @@ pub fn assert_agent_interaction_exists_before_commit_for_repo(
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let normalised_agent_name = normalise_smoke_agent_name(agent_name);
-    let snapshot = load_agent_pre_commit_interactions(world, repo_name, normalised_agent_name)?;
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("persisted {normalised_agent_name} interaction before commit"),
+        || load_agent_pre_commit_observation(world, repo_name, normalised_agent_name),
+        |observation| {
+            !observation.interactions.session_ids.is_empty()
+                && !observation.interactions.uncheckpointed_turn_ids.is_empty()
+                && observation.checkpoint_mapping_count == 0
+        },
+        |observation| {
+            format!(
+                "sessions={:?}, uncheckpointed_turns={:?}, checkpoint_mappings={}",
+                observation.interactions.session_ids,
+                observation.interactions.uncheckpointed_turn_ids,
+                observation.checkpoint_mapping_count
+            )
+        },
+    )?;
+    let snapshot = observation.interactions;
 
     ensure!(
         !snapshot.session_ids.is_empty(),
@@ -3644,13 +3686,10 @@ pub fn assert_agent_interaction_exists_before_commit_for_repo(
         snapshot.uncheckpointed_turn_ids
     );
 
-    let mappings =
-        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-            .context("reading Bitloops checkpoint mappings before commit")?;
     ensure!(
-        mappings.is_empty(),
+        observation.checkpoint_mapping_count == 0,
         "expected no checkpoint mappings before commit, found {} with interaction sessions {:?} and turns {:?}",
-        mappings.len(),
+        observation.checkpoint_mapping_count,
         snapshot.session_ids,
         snapshot.uncheckpointed_turn_ids
     );
