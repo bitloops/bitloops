@@ -450,6 +450,7 @@ async fn db_facts_reader_loads_facts_and_rule_signals() -> Result<()> {
         lifecycle: RoleRuleLifecycle::Active,
         priority: 10,
         score: 1.0,
+        min_positive_ratio: 1.0,
         candidate_selector: json!({"targetKinds": ["file"]}),
         positive_conditions: json!([]),
         negative_conditions: json!([]),
@@ -513,6 +514,10 @@ fn request(candidate_role_ids: Vec<String>) -> RoleAdjudicationRequest {
     RoleAdjudicationRequest {
             repo_id: "repo-1".to_string(),
             generation: 7,
+            stable_request_key: "target:file".to_string(),
+            facts_hash: "facts".to_string(),
+            rules_hash: "rules".to_string(),
+            cluster_key: None,
             target_kind: Some("artefact".to_string()),
             artefact_id: Some("artefact-1".to_string()),
             symbol_id: Some("symbol-1".to_string()),

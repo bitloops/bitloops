@@ -622,6 +622,10 @@ mod tests {
             request: super::super::roles::RoleAdjudicationRequest {
                 repo_id: "repo-ingester-1".to_string(),
                 generation: 301,
+                stable_request_key: "target:file".to_string(),
+                facts_hash: "facts".to_string(),
+                rules_hash: "rules".to_string(),
+                cluster_key: None,
                 target_kind: Some("artefact".to_string()),
                 artefact_id: Some("artefact-1".to_string()),
                 symbol_id: Some("symbol-1".to_string()),
@@ -687,6 +691,10 @@ mod tests {
             request: super::super::roles::RoleAdjudicationRequest {
                 repo_id: "repo-ingester-1".to_string(),
                 generation: 301,
+                stable_request_key: "target:file".to_string(),
+                facts_hash: "facts".to_string(),
+                rules_hash: "rules".to_string(),
+                cluster_key: None,
                 target_kind: Some("artefact".to_string()),
                 artefact_id: Some("artefact-1".to_string()),
                 symbol_id: Some("symbol-1".to_string()),

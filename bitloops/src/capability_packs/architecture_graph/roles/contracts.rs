@@ -5,6 +5,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::taxonomy::SeededArchitectureRuleCandidate;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdjudicationReason {
@@ -78,6 +80,11 @@ impl RoleAdjudicationAttemptOutcome {
 pub struct RoleAdjudicationRequest {
     pub repo_id: String,
     pub generation: u64,
+    pub stable_request_key: String,
+    pub facts_hash: String,
+    pub rules_hash: String,
+    #[serde(default)]
+    pub cluster_key: Option<String>,
     #[serde(default)]
     pub target_kind: Option<String>,
     #[serde(default)]
@@ -101,6 +108,16 @@ pub struct RoleAdjudicationRequest {
 
 impl RoleAdjudicationRequest {
     pub fn scope_key(&self) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            self.repo_id,
+            self.stable_request_key,
+            self.reason.as_str(),
+            self.facts_hash,
+        ) + &format!(":{}", self.rules_hash)
+    }
+
+    pub fn target_stable_request_key(&self) -> String {
         let target_kind = self.target_kind.as_deref().unwrap_or("target");
         let target = self
             .symbol_id
@@ -108,15 +125,23 @@ impl RoleAdjudicationRequest {
             .or(self.artefact_id.as_deref())
             .or(self.path.as_deref())
             .unwrap_or("<unknown>");
-        format!(
-            "{}:{}:{}:{}:{}",
-            self.repo_id,
-            self.generation,
-            target_kind,
-            target,
-            self.reason.as_str()
-        )
+        format!("{target_kind}:{target}")
     }
+}
+
+pub fn role_adjudication_stable_request_key(
+    target_kind: Option<&str>,
+    artefact_id: Option<&str>,
+    symbol_id: Option<&str>,
+    path: Option<&str>,
+) -> String {
+    let target_kind = target_kind.unwrap_or("target");
+    let target = symbol_id.or(artefact_id).or(path).unwrap_or("<unknown>");
+    format!("{target_kind}:{target}")
+}
+
+pub fn placeholder_request_hash() -> String {
+    "unhashed".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -160,10 +185,12 @@ pub struct RoleAssignmentDecision {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoleAdjudicationRuleSuggestion {
+    pub target_role_id: String,
     pub title: String,
     pub summary: String,
+    pub rule_candidate: SeededArchitectureRuleCandidate,
     #[serde(default)]
-    pub rationale: Option<String>,
+    pub source_cluster_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

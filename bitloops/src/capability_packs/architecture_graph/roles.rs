@@ -11,6 +11,7 @@ pub mod migrations;
 pub mod orchestrator;
 pub mod queue_store;
 pub mod response_validator;
+pub mod rule_mining;
 pub mod rules;
 pub mod schema;
 pub mod seed_evidence;
@@ -82,7 +83,8 @@ mod tests {
             "queue_store",
             "response_validator",
             "seed_evidence",
+            "rule_mining",
         ];
-        assert_eq!(submodules.len(), 16);
+        assert_eq!(submodules.len(), 17);
     }
 }

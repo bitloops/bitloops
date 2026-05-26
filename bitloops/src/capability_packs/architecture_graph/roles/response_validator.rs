@@ -6,6 +6,7 @@ use serde_json::Value;
 use super::contracts::{
     AdjudicationOutcome, RoleAdjudicationResult, RoleAdjudicationValidationError,
 };
+use super::taxonomy::{role_rule_condition_contract, validate_supported_fact_condition};
 
 pub fn validate_adjudication_result(
     raw: Value,
@@ -60,6 +61,30 @@ pub fn validate_adjudication_result(
         return Err(RoleAdjudicationValidationError::InvalidOutcome(
             "at most one assignment can be marked primary".to_string(),
         ));
+    }
+
+    for suggestion in &parsed.rule_suggestions {
+        if !active_role_ids.contains(&suggestion.target_role_id) {
+            return Err(RoleAdjudicationValidationError::UnknownRoleId(
+                suggestion.target_role_id.clone(),
+            ));
+        }
+        if suggestion.rule_candidate.target_role_key != suggestion.target_role_id {
+            return Err(RoleAdjudicationValidationError::InvalidOutcome(
+                "rule suggestion target_role_key must match target_role_id".to_string(),
+            ));
+        }
+        for condition in suggestion
+            .rule_candidate
+            .positive_conditions
+            .iter()
+            .chain(suggestion.rule_candidate.negative_conditions.iter())
+        {
+            let fact_condition = role_rule_condition_contract(condition)
+                .map_err(|err| RoleAdjudicationValidationError::Schema(err.to_string()))?;
+            validate_supported_fact_condition("rule_suggestion.condition", &fact_condition)
+                .map_err(|err| RoleAdjudicationValidationError::Schema(err.to_string()))?;
+        }
     }
 
     Ok(parsed)
@@ -157,5 +182,103 @@ mod tests {
         .expect("valid response should pass");
 
         assert_eq!(result.assignments.len(), 1);
+    }
+
+    #[test]
+    fn adjudication_response_accepts_draftable_rule_suggestion() {
+        let result = validate_adjudication_result(
+            json!({
+                "outcome": "unknown",
+                "assignments": [],
+                "confidence": 0.6,
+                "evidence": [],
+                "reasoning_summary": "similar unresolved storage targets share a suffix.",
+                "rule_suggestions": [{
+                    "target_role_id": "storage_adapter",
+                    "title": "Repository suffix storage adapter",
+                    "summary": "Repository suffixes under storage paths are reusable.",
+                    "rule_candidate": {
+                        "target_role_key": "storage_adapter",
+                        "candidate_selector": {
+                            "target_kinds": ["artefact"],
+                            "path_prefixes": ["src/storage"],
+                            "path_suffixes": [".rs"],
+                            "path_contains": [],
+                            "languages": [],
+                            "canonical_kinds": [],
+                            "symbol_fqn_contains": [],
+                            "required_facts": [],
+                            "required_fact_any_groups": []
+                        },
+                        "positive_conditions": [
+                            { "kind": "symbol", "key": "name_suffix", "op": "eq", "value": "Repository", "score": 1.0 }
+                        ],
+                        "negative_conditions": [],
+                        "score": {
+                            "base_confidence": 0.82,
+                            "priority_hint": 100,
+                            "min_positive_ratio": 1.0
+                        },
+                        "evidence": {},
+                        "metadata": {}
+                    },
+                    "source_cluster_key": null
+                }]
+            }),
+            &active_roles(),
+        )
+        .expect("draftable suggestion should pass");
+
+        assert_eq!(result.rule_suggestions.len(), 1);
+    }
+
+    #[test]
+    fn adjudication_response_rejects_suggestion_for_unknown_role() {
+        let err = validate_adjudication_result(
+            json!({
+                "outcome": "unknown",
+                "assignments": [],
+                "confidence": 0.6,
+                "evidence": [],
+                "reasoning_summary": "suggestion references missing role.",
+                "rule_suggestions": [{
+                    "target_role_id": "missing",
+                    "title": "Missing",
+                    "summary": "Missing",
+                    "rule_candidate": {
+                        "target_role_key": "missing",
+                        "candidate_selector": {
+                            "target_kinds": ["file"],
+                            "path_prefixes": [],
+                            "path_suffixes": [],
+                            "path_contains": [],
+                            "languages": [],
+                            "canonical_kinds": [],
+                            "symbol_fqn_contains": [],
+                            "required_facts": [],
+                            "required_fact_any_groups": []
+                        },
+                        "positive_conditions": [
+                            { "kind": "path", "key": "segment", "op": "eq", "value": "storage", "score": 1.0 }
+                        ],
+                        "negative_conditions": [],
+                        "score": {
+                            "base_confidence": 0.82,
+                            "priority_hint": 100,
+                            "min_positive_ratio": 1.0
+                        },
+                        "evidence": {},
+                        "metadata": {}
+                    },
+                    "source_cluster_key": null
+                }]
+            }),
+            &active_roles(),
+        )
+        .expect_err("unknown suggestion role must fail");
+
+        assert!(
+            matches!(err, RoleAdjudicationValidationError::UnknownRoleId(role) if role == "missing")
+        );
     }
 }

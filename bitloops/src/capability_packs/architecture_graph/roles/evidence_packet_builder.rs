@@ -239,6 +239,10 @@ mod tests {
         RoleAdjudicationRequest {
             repo_id: "repo".to_string(),
             generation: 7,
+            stable_request_key: "target:file".to_string(),
+            facts_hash: "facts".to_string(),
+            rules_hash: "rules".to_string(),
+            cluster_key: None,
             target_kind: Some("artefact".to_string()),
             artefact_id: Some("a-1".to_string()),
             symbol_id: None,
