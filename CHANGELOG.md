@@ -6,14 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
-### Added
-
-- **Configure can install daemon config without starting the daemon**: `bitloops configure --file <path> --no-start` and `bitloops configure --default-config --no-start` now validate and install daemon configuration without explicitly starting or restarting the daemon.
-- **Commit hunk compatibility fields are available in DevQL GraphQL**: commit queries now expose `hunks(path:)` and ingest progress/result counters include hunk, file-delta, added-line, deleted-line, and binary-delta counters for compatibility with hunk-aware callers.
-
 ### Changed
 
-- **DevQL historical ingest now does less work for bounded backfills**: init-triggered ingest now backfills 25 commits by default instead of 50, and the active historical path uses hunk-derived after-side artefact extraction instead of rebuilding full historical file state, reducing first-run ingest cost while preserving explicit `--backfill=<N>` control.
+- **DevQL historical ingest now does less work for bounded backfills**: init-triggered ingest now backfills 25 commits by default instead of 50, and the active historical path reads hunks in memory to append commit-scoped artefacts instead of persisting hunk/file-delta rows or rebuilding full historical file state, reducing first-run ingest cost while preserving explicit `--backfill=<N>` control.
 
 ### Fixed
 

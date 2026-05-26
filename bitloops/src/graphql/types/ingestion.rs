@@ -19,11 +19,6 @@ pub struct IngestionProgressEvent {
     pub current_commit_sha: Option<String>,
     pub events_inserted: i32,
     pub artefacts_upserted: i32,
-    pub file_deltas_upserted: i32,
-    pub hunks_upserted: i32,
-    pub added_lines_ingested: i32,
-    pub deleted_lines_ingested: i32,
-    pub binary_deltas_upserted: i32,
 }
 
 impl From<crate::host::devql::IngestionProgressUpdate> for IngestionProgressEvent {
@@ -51,11 +46,6 @@ impl From<crate::host::devql::IngestionProgressUpdate> for IngestionProgressEven
             current_commit_sha: value.current_commit_sha,
             events_inserted: to_graphql_count(value.counters.events_inserted),
             artefacts_upserted: to_graphql_count(value.counters.artefacts_upserted),
-            file_deltas_upserted: to_graphql_count(value.counters.file_deltas_upserted),
-            hunks_upserted: to_graphql_count(value.counters.hunks_upserted),
-            added_lines_ingested: to_graphql_count(value.counters.added_lines_ingested),
-            deleted_lines_ingested: to_graphql_count(value.counters.deleted_lines_ingested),
-            binary_deltas_upserted: to_graphql_count(value.counters.binary_deltas_upserted),
         }
     }
 }

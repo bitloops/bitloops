@@ -1466,44 +1466,24 @@ async fn repo_backfill_workplane_inputs_exclude_historical_only_artefacts() {
         )
         .await
         .expect("load current semantic inputs");
-    let historical_legacy_deltas = relational
+    let historical_legacy_artefacts = relational
         .query_rows(&format!(
             "SELECT COUNT(*) AS count \
-             FROM commit_file_deltas \
+             FROM commit_artefacts \
              WHERE repo_id = '{}' \
-               AND (path_before = 'src/legacy.ts' OR path_after = 'src/legacy.ts')",
+               AND path = 'src/legacy.ts'",
             crate::host::devql::esc_pg(&cfg.repo.repo_id),
         ))
         .await
-        .expect("count historical legacy file deltas");
+        .expect("count historical legacy commit artefacts");
     assert!(
-        historical_legacy_deltas
+        historical_legacy_artefacts
             .first()
             .and_then(|row| row.get("count"))
             .and_then(serde_json::Value::as_i64)
             .unwrap_or_default()
             > 0,
-        "fixture must include hunk-only historical delta evidence"
-    );
-    let deleted_legacy_hunks = relational
-        .query_rows(&format!(
-            "SELECT COUNT(*) AS count \
-             FROM commit_hunks \
-             WHERE repo_id = '{}' \
-               AND path_before = 'src/legacy.ts' \
-               AND deleted_lines_json <> '[]'",
-            crate::host::devql::esc_pg(&cfg.repo.repo_id),
-        ))
-        .await
-        .expect("count deleted legacy hunks");
-    assert!(
-        deleted_legacy_hunks
-            .first()
-            .and_then(|row| row.get("count"))
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or_default()
-            > 0,
-        "fixture must include before-side deleted hunk evidence"
+        "fixture must include historical commit artefact evidence"
     );
     assert!(
         current_inputs

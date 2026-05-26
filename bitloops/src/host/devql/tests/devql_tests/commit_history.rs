@@ -304,30 +304,6 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
     let sqlite =
         rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
 
-    let file_delta_count: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_file_deltas WHERE repo_id = ?1 AND commit_sha = ?2",
-            rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count commit_file_deltas rows");
-    assert_eq!(
-        file_delta_count, 0,
-        "artefact-only ingest must not write historical commit_file_deltas rows"
-    );
-
-    let hunk_count: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_hunks WHERE repo_id = ?1 AND commit_sha = ?2",
-            rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count commit_hunks rows");
-    assert_eq!(
-        hunk_count, 0,
-        "artefact-only ingest must not write historical commit_hunks rows"
-    );
-
     let commit_artefact_count: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM commit_artefacts WHERE repo_id = ?1 AND commit_sha = ?2",
@@ -477,7 +453,7 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
 }
 
 #[tokio::test]
-async fn execute_ingest_persists_changed_after_side_artefacts_without_hunks_or_file_deltas() {
+async fn execute_ingest_persists_changed_after_side_commit_artefacts() {
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
     std::fs::write(
@@ -526,33 +502,9 @@ async fn execute_ingest_persists_changed_after_side_artefacts_without_hunks_or_f
         "artefact-only ingest should append artefact metadata for changed files"
     );
     assert_eq!(summary.commits_processed, 4);
-    assert_eq!(
-        summary.file_deltas_upserted, 0,
-        "artefact-only ingest should not report persisted file deltas"
-    );
-    assert_eq!(
-        summary.hunks_upserted, 0,
-        "artefact-only ingest should not report persisted hunks"
-    );
 
     let sqlite =
         rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
-    let file_delta_count: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_file_deltas WHERE repo_id = ?1",
-            rusqlite::params![cfg.repo.repo_id.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count commit file deltas");
-    let hunk_count: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_hunks WHERE repo_id = ?1",
-            rusqlite::params![cfg.repo.repo_id.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count commit hunks");
-    assert_eq!(file_delta_count, 0);
-    assert_eq!(hunk_count, 0);
 
     let added_commit_artefacts: i64 = sqlite
         .query_row(
@@ -885,20 +837,6 @@ async fn execute_ingest_mirrors_completed_current_artefacts_and_remains_idempote
             |row| row.get(0),
         )
         .expect("count artefacts after first ingest");
-    let file_deltas_after_first: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_file_deltas WHERE repo_id = ?1",
-            rusqlite::params![cfg.repo.repo_id.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count file deltas after first ingest");
-    let hunks_after_first: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_hunks WHERE repo_id = ?1",
-            rusqlite::params![cfg.repo.repo_id.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count hunks after first ingest");
     let commit_artefacts_after_first: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM commit_artefacts WHERE repo_id = ?1",
@@ -906,14 +844,6 @@ async fn execute_ingest_mirrors_completed_current_artefacts_and_remains_idempote
             |row| row.get(0),
         )
         .expect("count commit artefacts after first ingest");
-    assert_eq!(
-        file_deltas_after_first, 0,
-        "artefact-only ingest should not persist commit file deltas"
-    );
-    assert_eq!(
-        hunks_after_first, 0,
-        "artefact-only ingest should not persist textual hunks"
-    );
     assert!(
         commit_artefacts_after_first > 0,
         "artefact-only ingest should persist commit artefact links"
@@ -959,20 +889,6 @@ async fn execute_ingest_mirrors_completed_current_artefacts_and_remains_idempote
             |row| row.get(0),
         )
         .expect("count artefacts after replay ingest");
-    let file_deltas_after_replay: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_file_deltas WHERE repo_id = ?1",
-            rusqlite::params![cfg.repo.repo_id.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count file deltas after replay ingest");
-    let hunks_after_replay: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_hunks WHERE repo_id = ?1",
-            rusqlite::params![cfg.repo.repo_id.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count hunks after replay ingest");
     let commit_artefacts_after_replay: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM commit_artefacts WHERE repo_id = ?1",
@@ -981,8 +897,6 @@ async fn execute_ingest_mirrors_completed_current_artefacts_and_remains_idempote
         )
         .expect("count commit artefacts after replay ingest");
     assert_eq!(artefacts_after_replay, artefacts_after_first);
-    assert_eq!(file_deltas_after_replay, file_deltas_after_first);
-    assert_eq!(hunks_after_replay, hunks_after_first);
     assert_eq!(commit_artefacts_after_replay, commit_artefacts_after_first);
 }
 
@@ -1063,13 +977,6 @@ async fn execute_ingest_skips_current_mirror_when_completed_sync_state_is_not_fo
             |row| row.get(0),
         )
         .expect("count stale current-only canonical rows");
-    let hunk_rows: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_hunks WHERE repo_id = ?1",
-            rusqlite::params![cfg.repo.repo_id.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count hunk rows after stale mirror skip");
     let commit_artefact_rows: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM commit_artefacts WHERE repo_id = ?1",
@@ -1082,10 +989,6 @@ async fn execute_ingest_skips_current_mirror_when_completed_sync_state_is_not_fo
         current_only_mirrored, 0,
         "stale completed sync state must not mirror current-only artefacts"
     );
-    assert_eq!(
-        hunk_rows, 0,
-        "artefact-only ingest should not persist hunks"
-    );
     assert!(
         commit_artefact_rows > 0,
         "artefact-only ingest should still persist historical commit artefacts"
@@ -1093,7 +996,7 @@ async fn execute_ingest_skips_current_mirror_when_completed_sync_state_is_not_fo
 }
 
 #[tokio::test]
-async fn execute_ingest_skips_binary_file_delta_without_textual_hunks() {
+async fn execute_ingest_skips_binary_file_without_extractable_after_side_artefacts() {
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
     std::fs::create_dir_all(repo.path().join("assets")).expect("create assets");
@@ -1120,27 +1023,6 @@ async fn execute_ingest_skips_binary_file_delta_without_textual_hunks() {
 
     let sqlite =
         rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
-    let binary_file_delta_rows: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_file_deltas \
-             WHERE repo_id = ?1 \
-               AND commit_sha = ?2 \
-               AND path_after = 'assets/blob.bin' \
-               AND is_binary = 1",
-            rusqlite::params![cfg.repo.repo_id.as_str(), binary_sha.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count binary file deltas");
-    let binary_hunk_rows: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_hunks \
-             WHERE repo_id = ?1 \
-               AND commit_sha = ?2 \
-               AND path_after = 'assets/blob.bin'",
-            rusqlite::params![cfg.repo.repo_id.as_str(), binary_sha.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count binary hunk rows");
     let file_state_rows: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1",
@@ -1166,14 +1048,6 @@ async fn execute_ingest_skips_binary_file_delta_without_textual_hunks() {
         )
         .expect("count binary commit artefact rows");
 
-    assert_eq!(
-        binary_file_delta_rows, 0,
-        "binary files should not produce commit_file_deltas rows"
-    );
-    assert_eq!(
-        binary_hunk_rows, 0,
-        "binary file deltas should not produce textual hunk rows"
-    );
     assert_eq!(
         binary_commit_artefact_rows, 0,
         "binary files without extractable after-side artefacts should not produce commit artefact rows"
@@ -1217,17 +1091,6 @@ async fn execute_ingest_materialises_invalid_utf8_commit_as_file_artefact_only()
     let sqlite =
         rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
 
-    let file_delta_rows: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) \
-             FROM commit_file_deltas \
-             WHERE repo_id = ?1 \
-               AND commit_sha = ?2 \
-               AND path_after = ?3",
-            rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str(), "src/bad.rs"],
-            |row| row.get(0),
-        )
-        .expect("count commit_file_deltas rows for src/bad.rs");
     let bad_file_commit_artefact_rows: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) \
@@ -1283,10 +1146,6 @@ async fn execute_ingest_materialises_invalid_utf8_commit_as_file_artefact_only()
         )
         .expect("count historical edge rows");
 
-    assert_eq!(
-        file_delta_rows, 0,
-        "artefact-only ingest should not persist a file delta for src/bad.rs"
-    );
     assert_eq!(
         bad_file_commit_artefact_rows, 1,
         "artefact-only ingest should link the file artefact for decode-degraded files"
@@ -1415,13 +1274,6 @@ async fn execute_ingest_skips_events_backend_for_unmapped_commits_when_events_st
 
     let sqlite =
         rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
-    let file_delta_count: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_file_deltas WHERE repo_id = ?1",
-            rusqlite::params![cfg.repo.repo_id.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count commit_file_deltas rows");
     let commit_artefact_count: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM commit_artefacts WHERE repo_id = ?1",
@@ -1429,10 +1281,6 @@ async fn execute_ingest_skips_events_backend_for_unmapped_commits_when_events_st
             |row| row.get(0),
         )
         .expect("count commit_artefacts rows");
-    assert_eq!(
-        file_delta_count, 0,
-        "artefact-only ingest should not persist hunk-delta rows when no checkpoint companions are present"
-    );
     assert!(
         commit_artefact_count > 0,
         "historical ingest should still persist commit artefacts when no checkpoint companions are present"
@@ -1674,24 +1522,6 @@ async fn execute_ingest_records_after_side_file_artefact_for_blob_only_changes_w
 
     let sqlite =
         rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
-    let file_delta_count: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) \
-             FROM commit_file_deltas \
-             WHERE repo_id = ?1 AND commit_sha = ?2 AND path_after = 'src/lib.rs'",
-            rusqlite::params![cfg.repo.repo_id.as_str(), comment_sha.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count artefact-only file deltas");
-    let hunk_count: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) \
-             FROM commit_hunks \
-             WHERE repo_id = ?1 AND commit_sha = ?2",
-            rusqlite::params![cfg.repo.repo_id.as_str(), comment_sha.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count artefact-only hunks");
     let comment_commit_file_links: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) \
@@ -1721,14 +1551,6 @@ async fn execute_ingest_records_after_side_file_artefact_for_blob_only_changes_w
             |row| row.get(0),
         )
         .expect("count historical snapshots");
-    assert_eq!(
-        file_delta_count, 0,
-        "artefact-only ingest should not persist file deltas for the blob-only change"
-    );
-    assert_eq!(
-        hunk_count, 0,
-        "artefact-only ingest should not persist hunks for the blob-only change"
-    );
     assert_eq!(
         comment_commit_file_links, 1,
         "comment-only changes should still link the after-side file artefact"
@@ -1790,13 +1612,6 @@ async fn execute_ingest_repairs_completed_commit_history_missing_artefact_metada
         "repair ingest should restore artefact metadata"
     );
 
-    let file_delta_rows: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM commit_file_deltas WHERE repo_id = ?1 AND commit_sha = ?2",
-            rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count repaired commit file deltas");
     let commit_artefact_rows: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM commit_artefacts WHERE repo_id = ?1 AND commit_sha = ?2",
@@ -1826,7 +1641,6 @@ async fn execute_ingest_repairs_completed_commit_history_missing_artefact_metada
         )
         .expect("count repaired snapshots");
 
-    assert_eq!(file_delta_rows, 0);
     assert!(commit_artefact_rows > 0);
     assert!(artefact_rows > 0);
     assert_eq!(file_state_rows, 0);
