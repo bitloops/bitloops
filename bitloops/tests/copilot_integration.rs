@@ -356,6 +356,13 @@ fn temporary_checkpoint_count(repo_root: &Path, home: &Path, session_id: &str) -
     })
 }
 
+fn drain_lifecycle_stop_spool_with_home(repo_root: &Path, home: &Path) {
+    with_home_env(home, || {
+        bitloops::daemon::drain_lifecycle_stop_spool_for_repo_for_tests(repo_root)
+            .expect("drain lifecycle stop spool for Copilot integration repo");
+    });
+}
+
 #[test]
 fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
     let dir = tempfile::tempdir().unwrap();
@@ -422,6 +429,7 @@ fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
         ),
         "hooks copilot agent-stop",
     );
+    drain_lifecycle_stop_spool_with_home(dir.path(), home.path());
     assert_eq!(temporary_checkpoint_count(dir.path(), home.path(), sid), 1);
 
     assert_success(
@@ -567,6 +575,7 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
         ),
         "hooks copilot agent-stop first",
     );
+    drain_lifecycle_stop_spool_with_home(dir.path(), home.path());
 
     assert_success(
         &run_cmd_with_home(
@@ -600,6 +609,7 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
         ),
         "hooks copilot agent-stop second",
     );
+    drain_lifecycle_stop_spool_with_home(dir.path(), home.path());
 
     assert_success(
         &run_cmd_with_home(

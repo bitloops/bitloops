@@ -113,7 +113,7 @@ pub(crate) use self::server_runtime::{
     RepoWatcherReconcileAction, RepoWatcherReconcileResult, reconcile_bound_repo_watcher,
     reconcile_bound_repo_watcher_explicit,
 };
-#[cfg(feature = "slow-tests")]
+#[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
 pub use self::tasks::drain_lifecycle_stop_spool_for_repo_for_tests;
 pub use self::tasks::{DevqlTaskCoordinator, DevqlTaskEnqueueResult};
 pub(crate) use self::types::BlockedMailboxStatus;

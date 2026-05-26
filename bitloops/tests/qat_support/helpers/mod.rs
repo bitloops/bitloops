@@ -135,6 +135,19 @@ fn with_scenario_app_env<T>(world: &QatWorld, f: impl FnOnce() -> T) -> T {
     f()
 }
 
+fn drain_lifecycle_stop_spool_for_scenario(world: &QatWorld) -> Result<()> {
+    with_scenario_app_env(world, || {
+        bitloops::daemon::drain_lifecycle_stop_spool_for_repo_for_tests(world.repo_dir())
+    })
+    .with_context(|| {
+        format!(
+            "draining lifecycle stop spool for QAT repo {}",
+            world.repo_dir().display()
+        )
+    })?;
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 struct RunMetadata<'a> {
     scenario_name: &'a str,

@@ -162,6 +162,7 @@ pub fn with_repo_app_env<T>(repo: &Path, f: impl FnOnce() -> T) -> T {
 }
 
 #[cfg(feature = "slow-tests")]
+#[allow(dead_code)]
 pub fn drain_lifecycle_stop_spool(repo: &Path) {
     with_repo_app_env(repo, || {
         bitloops::daemon::drain_lifecycle_stop_spool_for_repo_for_tests(repo)
