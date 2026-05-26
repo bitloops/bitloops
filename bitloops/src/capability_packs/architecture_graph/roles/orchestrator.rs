@@ -16,6 +16,7 @@ use super::contracts::{
     AdjudicationOutcome, RoleAdjudicationAttemptEvent, RoleAdjudicationAttemptOutcome,
     RoleAdjudicationFailure, RoleAdjudicationMailboxPayload, RoleAdjudicationProvenance,
     RoleAdjudicationRequest, RoleAdjudicationResult, RoleAssignmentWriteOutcome,
+    placeholder_request_hash, role_adjudication_stable_request_key,
 };
 use super::evidence_packet_builder::{
     EvidencePacketLimits, RoleEvidencePacket, RoleEvidencePacketBuilder,
@@ -104,9 +105,19 @@ fn role_requests_from_delta(
         .filter_map(|artefact| {
             let deterministic = infer_deterministic_outcome(artefact);
             let reason = select_adjudication_reason(&deterministic)?;
+            let stable_request_key = role_adjudication_stable_request_key(
+                Some("artefact"),
+                Some(&artefact.artefact_id),
+                Some(&artefact.symbol_id),
+                Some(&artefact.path),
+            );
             Some(RoleAdjudicationRequest {
                 repo_id: repo_id.to_string(),
                 generation,
+                stable_request_key,
+                facts_hash: placeholder_request_hash(),
+                rules_hash: placeholder_request_hash(),
+                cluster_key: None,
                 target_kind: Some("artefact".to_string()),
                 artefact_id: Some(artefact.artefact_id.clone()),
                 symbol_id: Some(artefact.symbol_id.clone()),
