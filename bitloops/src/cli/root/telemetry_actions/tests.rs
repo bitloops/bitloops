@@ -123,6 +123,59 @@ fn telemetry_action_for_init_with_summary_embeddings_mode_records_flag() {
 }
 
 #[test]
+fn telemetry_action_for_enable_with_summaries_flags_records_flags() {
+    let cli = crate::cli::Cli::try_parse_from([
+        "bitloops",
+        "enable",
+        "--capture",
+        "--install-summaries",
+        "--summaries-runtime",
+        "platform",
+        "--summaries-gateway-url",
+        "https://gateway.example/v1/chat/completions",
+        "--summaries-api-key-env",
+        "CUSTOM_SUMMARIES_TOKEN",
+    ])
+    .expect("enable command should parse");
+    let action = telemetry_action_for_command(
+        cli.command
+            .as_ref()
+            .expect("enable command should produce a subcommand"),
+    )
+    .expect("enable telemetry action should be emitted");
+
+    let flags = action
+        .properties
+        .get("flags")
+        .and_then(Value::as_array)
+        .expect("flags array");
+    assert!(
+        flags
+            .iter()
+            .any(|flag| flag.as_str() == Some("install_summaries")),
+        "expected telemetry flags to include install_summaries"
+    );
+    assert!(
+        flags
+            .iter()
+            .any(|flag| flag.as_str() == Some("summaries_runtime")),
+        "expected telemetry flags to include summaries_runtime"
+    );
+    assert!(
+        flags
+            .iter()
+            .any(|flag| flag.as_str() == Some("summaries_gateway_url")),
+        "expected telemetry flags to include summaries_gateway_url"
+    );
+    assert!(
+        flags
+            .iter()
+            .any(|flag| flag.as_str() == Some("summaries_api_key_env")),
+        "expected telemetry flags to include summaries_api_key_env"
+    );
+}
+
+#[test]
 fn telemetry_action_for_devql_tasks_enqueue_ingest_has_no_legacy_checkpoint_limit_property() {
     let cli = crate::cli::Cli::try_parse_from([
         "bitloops", "devql", "tasks", "enqueue", "--kind", "ingest",

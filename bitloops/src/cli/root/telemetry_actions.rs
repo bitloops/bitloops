@@ -453,6 +453,18 @@ fn enable_action(
     if args.install_embeddings {
         flags.push("install_embeddings");
     }
+    if args.install_summaries {
+        flags.push("install_summaries");
+    }
+    if args.summaries_runtime.is_some() {
+        flags.push("summaries_runtime");
+    }
+    if args.summaries_gateway_url.is_some() {
+        flags.push("summaries_gateway_url");
+    }
+    if args.summaries_api_key_env.is_some() {
+        flags.push("summaries_api_key_env");
+    }
     if args.install_context_guidance {
         flags.push("install_context_guidance");
     }

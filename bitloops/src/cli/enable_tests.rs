@@ -73,6 +73,10 @@ fn default_enable_args() -> EnableArgs {
         embeddings_runtime: None,
         embeddings_gateway_url: None,
         embeddings_api_key_env: None,
+        install_summaries: false,
+        summaries_runtime: None,
+        summaries_gateway_url: None,
+        summaries_api_key_env: None,
         install_context_guidance: false,
         context_guidance_runtime: None,
         context_guidance_gateway_url: None,
@@ -1303,6 +1307,83 @@ fn enable_args_support_install_embeddings_flag() {
 }
 
 #[test]
+fn enable_args_support_install_summaries_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "enable",
+        "--capture",
+        "--install-summaries",
+        "--summaries-runtime",
+        "platform",
+        "--summaries-gateway-url",
+        "https://gateway.example/v1/chat/completions",
+        "--summaries-api-key-env",
+        "CUSTOM_SUMMARIES_TOKEN",
+    ])
+    .expect("enable install-summaries flags should parse");
+    let Some(Commands::Enable(args)) = parsed.command else {
+        panic!("expected enable command");
+    };
+
+    assert!(args.install_summaries);
+    assert_eq!(
+        args.summaries_runtime,
+        Some(crate::cli::inference::TextGenerationRuntime::Platform)
+    );
+    assert_eq!(
+        args.summaries_gateway_url.as_deref(),
+        Some("https://gateway.example/v1/chat/completions")
+    );
+    assert_eq!(
+        args.summaries_api_key_env.as_deref(),
+        Some("CUSTOM_SUMMARIES_TOKEN")
+    );
+}
+
+#[test]
+fn enable_summaries_flags_require_capture() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    setup_git_repo(&repo);
+    setup_settings(
+        &repo,
+        r#"
+[agents]
+supported = ["claude-code"]
+"#,
+    );
+
+    with_repo_cwd(repo.path(), || {
+        let err = run_enable_command(EnableArgs {
+            local: false,
+            project: false,
+            force: false,
+            agent: None,
+            capture: false,
+            devql_guidance: true,
+            telemetry: None,
+            no_telemetry: false,
+            install_embeddings: false,
+            embeddings_runtime: None,
+            embeddings_gateway_url: None,
+            embeddings_api_key_env: None,
+            install_summaries: true,
+            summaries_runtime: Some(crate::cli::inference::TextGenerationRuntime::Local),
+            summaries_gateway_url: None,
+            summaries_api_key_env: None,
+            install_context_guidance: false,
+            context_guidance_runtime: None,
+            context_guidance_gateway_url: None,
+            context_guidance_api_key_env: None,
+        })
+        .expect_err("summaries flags without capture should be rejected");
+
+        assert!(
+            format!("{err:#}").contains("`--install-summaries`, `--summaries-runtime`, `--summaries-gateway-url`, and `--summaries-api-key-env` require `--capture`")
+        );
+    });
+}
+
+#[test]
 fn enable_args_support_install_context_guidance_flags() {
     let parsed = Cli::try_parse_from([
         "bitloops",
@@ -1443,6 +1524,10 @@ supported = ["claude-code"]
                                             embeddings_api_key_env: Some(
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                             ),
+                                            install_summaries: false,
+                                            summaries_runtime: None,
+                                            summaries_gateway_url: None,
+                                            summaries_api_key_env: None,
                                             install_context_guidance: false,
                                             context_guidance_runtime: None,
                                             context_guidance_gateway_url: None,
@@ -1553,6 +1638,10 @@ summary_embeddings = "openai"
                                     embeddings_api_key_env: Some(
                                         "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                     ),
+                                    install_summaries: false,
+                                    summaries_runtime: None,
+                                    summaries_gateway_url: None,
+                                    summaries_api_key_env: None,
                                     install_context_guidance: false,
                                     context_guidance_runtime: None,
                                     context_guidance_gateway_url: None,
@@ -1660,6 +1749,10 @@ code_embeddings = "openai"
                                 embeddings_api_key_env: Some(
                                     "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                 ),
+                                install_summaries: false,
+                                summaries_runtime: None,
+                                summaries_gateway_url: None,
+                                summaries_api_key_env: None,
                                 install_context_guidance: false,
                                 context_guidance_runtime: None,
                                 context_guidance_gateway_url: None,
@@ -1696,6 +1789,10 @@ fn run_enable_without_agent_installs_default_agent_and_git_hooks() {
             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
             embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+            install_summaries: false,
+            summaries_runtime: None,
+            summaries_gateway_url: None,
+            summaries_api_key_env: None,
             install_context_guidance: false,
             context_guidance_runtime: None,
             context_guidance_gateway_url: None,
@@ -1736,6 +1833,10 @@ enabled = false
             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
             embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+            install_summaries: false,
+            summaries_runtime: None,
+            summaries_gateway_url: None,
+            summaries_api_key_env: None,
             install_context_guidance: false,
             context_guidance_runtime: None,
             context_guidance_gateway_url: None,
@@ -1783,6 +1884,10 @@ supported = ["cursor", "gemini"]
                     embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                     embeddings_gateway_url: None,
                     embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+                    install_summaries: false,
+                    summaries_runtime: None,
+                    summaries_gateway_url: None,
+                    summaries_api_key_env: None,
                     install_context_guidance: false,
                     context_guidance_runtime: None,
                     context_guidance_gateway_url: None,
@@ -2164,6 +2269,10 @@ fn run_enable_with_legacy_agent_flag_returns_guidance_error() {
             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
             embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+            install_summaries: false,
+            summaries_runtime: None,
+            summaries_gateway_url: None,
+            summaries_api_key_env: None,
             install_context_guidance: false,
             context_guidance_runtime: None,
             context_guidance_gateway_url: None,
@@ -2267,6 +2376,10 @@ fn enable_does_not_create_shared_repo_policy_file() {
             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
             embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+            install_summaries: false,
+            summaries_runtime: None,
+            summaries_gateway_url: None,
+            summaries_api_key_env: None,
             install_context_guidance: false,
             context_guidance_runtime: None,
             context_guidance_gateway_url: None,
@@ -2298,6 +2411,10 @@ fn enable_with_local_flag_does_not_create_local_repo_policy_file() {
             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
             embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+            install_summaries: false,
+            summaries_runtime: None,
+            summaries_gateway_url: None,
+            summaries_api_key_env: None,
             install_context_guidance: false,
             context_guidance_runtime: None,
             context_guidance_gateway_url: None,
@@ -2347,6 +2464,10 @@ supported = ["claude-code"]
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+                install_summaries: false,
+                summaries_runtime: None,
+                summaries_gateway_url: None,
+                summaries_api_key_env: None,
                 install_context_guidance: false,
                 context_guidance_runtime: None,
                 context_guidance_gateway_url: None,
@@ -2407,6 +2528,10 @@ supported = ["claude-code"]
                         embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+                        install_summaries: false,
+                        summaries_runtime: None,
+                        summaries_gateway_url: None,
+                        summaries_api_key_env: None,
                         install_context_guidance: false,
                         context_guidance_runtime: None,
                         context_guidance_gateway_url: None,

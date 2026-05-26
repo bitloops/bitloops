@@ -307,12 +307,13 @@ async fn configure_init_semantic_policy(
         SummarySetupSelection::Cloud => {
             login_required = true;
             let gateway_url = platform_summary_gateway_url_override();
-            let message = configure_cloud_summary_generation(project_root, gateway_url.as_deref())
-                .map_err(|err| {
-                    anyhow::anyhow!(
-                        "Bitloops init completed, but semantic summary setup failed: {err:#}"
-                    )
-                })?;
+            let message =
+                configure_cloud_summary_generation(project_root, gateway_url.as_deref(), None)
+                    .map_err(|err| {
+                        anyhow::anyhow!(
+                            "Bitloops init completed, but semantic summary setup failed: {err:#}"
+                        )
+                    })?;
             writeln!(out, "{message}")?;
             selected_summary_generation = current_summary_generation_profile(project_root);
         }
