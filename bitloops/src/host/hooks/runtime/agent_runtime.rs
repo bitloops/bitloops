@@ -17,7 +17,7 @@ use crate::telemetry::logging;
 
 mod handlers;
 pub(crate) mod helpers;
-mod interactions;
+pub(crate) mod interactions;
 mod types;
 
 #[cfg(test)]

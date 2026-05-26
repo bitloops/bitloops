@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{Mutex, Notify};
@@ -137,9 +137,6 @@ impl EnrichmentCoordinator {
     }
 
     pub(crate) fn ensure_worker_capacity(self: &Arc<Self>) {
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
         let budgets = effective_worker_budgets(&self.workplane_store, &self.daemon_config_root)
             .unwrap_or_else(|err| {
                 log::warn!(
@@ -148,6 +145,35 @@ impl EnrichmentCoordinator {
                 );
                 configured_enrichment_worker_budgets_for_repo(&self.daemon_config_root)
             });
+        self.ensure_worker_capacity_for_budgets(budgets);
+    }
+
+    pub(crate) fn ensure_worker_capacity_for_repo(self: &Arc<Self>, repo_root: &Path) {
+        let fallback_budgets =
+            effective_worker_budgets(&self.workplane_store, &self.daemon_config_root)
+                .unwrap_or_else(|err| {
+                    log::warn!(
+                        "failed to resolve effective enrichment worker budgets from `{}`: {err:#}",
+                        self.daemon_config_root.display()
+                    );
+                    configured_enrichment_worker_budgets_for_repo(&self.daemon_config_root)
+                });
+        let repo_budgets = configured_enrichment_worker_budgets_for_repo(repo_root);
+        self.ensure_worker_capacity_for_budgets(EnrichmentWorkerBudgets {
+            summary_refresh: fallback_budgets
+                .summary_refresh
+                .max(repo_budgets.summary_refresh),
+            embeddings: fallback_budgets.embeddings.max(repo_budgets.embeddings),
+            clone_rebuild: fallback_budgets
+                .clone_rebuild
+                .max(repo_budgets.clone_rebuild),
+        });
+    }
+
+    fn ensure_worker_capacity_for_budgets(self: &Arc<Self>, budgets: EnrichmentWorkerBudgets) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
         let Ok(mut started_worker_counts) = self.started_worker_counts.lock() else {
             log::warn!("failed to lock enrichment worker counts; skipping worker-capacity update");
             return;

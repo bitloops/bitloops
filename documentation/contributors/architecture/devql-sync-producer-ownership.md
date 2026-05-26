@@ -10,7 +10,7 @@ After a user runs `bitloops init`, normal repository activity should keep DevQL 
 
 The expected steady-state lifecycle is:
 
-1. `bitloops init` binds the repo, installs the default daemon setup, installs managed Git hooks, runs the initial sync work, and records enough repo-local state for the daemon to know the repo exists.
+1. `bitloops configure` prepares the global daemon setup; `bitloops init` binds the repo, installs managed Git hooks, runs the initial sync work when requested, reconciles the watcher when the daemon is running, and records enough repo-local state for the daemon to know the repo exists.
 2. Daemon startup rehydrates watchers for initialized repo bindings.
 3. The watcher tracks ordinary working-tree file edits while the daemon is alive.
 4. Git hooks queue semantic safety work for Git lifecycle transitions.
@@ -22,7 +22,7 @@ DevQL query commands are read-only from a producer-lifecycle perspective. Runnin
 
 | Producer | Ownership | Expected behavior |
 | --- | --- | --- |
-| `init` | Bootstrap producer | Establishes repo binding, daemon installation, managed hooks, initial current-state materialization, and watcher eligibility. |
+| `init` | Bootstrap producer | Establishes repo binding, managed hooks, initial current-state materialization when requested, watcher reconciliation, and watcher eligibility. |
 | Daemon startup | Watcher lifecycle owner | Rehydrates watchers for initialized repo bindings. This is the normal way a watcher should come back after daemon restart. |
 | Watcher | Primary worktree edit producer | Queues path sync work for file add, change, delete, rename, and reset effects observed through filesystem events. |
 | `post-checkout` hook | Branch transition safety producer | Queues full sync work for branch checkouts. It covers semantic HEAD changes and final branch state even when filesystem events are incomplete or already handled. |

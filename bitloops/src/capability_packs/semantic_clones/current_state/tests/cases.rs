@@ -134,6 +134,46 @@ async fn reconcile_delta_clears_paths_and_enqueues_expected_jobs() -> Result<()>
 }
 
 #[tokio::test]
+async fn reconcile_delta_with_semantic_policy_off_enqueues_no_semantic_jobs() -> Result<()> {
+    let repo = tempdir().expect("temp repo");
+    let repo_id = "repo-semantic-off";
+    let request = request(
+        repo.path(),
+        repo_id,
+        ReconcileMode::MergedDelta,
+        vec![ChangedFile {
+            path: "src/alpha.ts".to_string(),
+            language: "typescript".to_string(),
+            content_id: "content-alpha".to_string(),
+        }],
+        Vec::new(),
+        vec![ChangedArtefact {
+            artefact_id: "artefact-alpha".to_string(),
+            symbol_id: "symbol-alpha".to_string(),
+            path: "src/alpha.ts".to_string(),
+            canonical_kind: Some("function".to_string()),
+            name: "alpha".to_string(),
+        }],
+        Vec::new(),
+    );
+    let workplane = CapturingWorkplaneGateway::default();
+    let ctx = test_context(config_root(None, None, None), workplane, request).await?;
+
+    let result = SemanticClonesCurrentStateConsumer
+        .reconcile(&ctx.request, &ctx.context)
+        .await?;
+    let metrics = metrics_map(&result);
+
+    assert!(ctx.workplane.jobs().is_empty());
+    assert_eq!(metrics["enqueued_summary_jobs"], json!(0));
+    assert_eq!(metrics["enqueued_code_embedding_jobs"], json!(0));
+    assert_eq!(metrics["enqueued_identity_embedding_jobs"], json!(0));
+    assert_eq!(metrics["enqueued_summary_embedding_jobs"], json!(0));
+    assert_eq!(metrics["enqueued_clone_rebuild"], json!(0));
+    Ok(())
+}
+
+#[tokio::test]
 async fn reconcile_clears_current_projection_rows_for_affected_paths_in_bulk() -> Result<()> {
     let repo = tempdir().expect("temp repo");
     let repo_id = "repo-bulk-clear";

@@ -11,7 +11,7 @@ mod validation;
 
 use std::fs;
 
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 use async_graphql::ID;
 use toml_edit::DocumentMut;
 
@@ -24,6 +24,7 @@ use patch::apply_patch_to_document;
 use persistence::write_atomic;
 use snapshot::build_snapshot;
 use targets::{discover_config_targets, resolve_target};
+use types::{ConfigTarget, ConfigTargetKind};
 pub(crate) use types::{
     RuntimeConfigSnapshotObject, RuntimeConfigTargetObject, UpdateRuntimeConfigInput,
     UpdateRuntimeConfigResult,
@@ -95,11 +96,31 @@ pub(crate) async fn update_config(
     write_atomic(&target.path, next.as_bytes()).map_err(internal_config_error)?;
 
     let snapshot = build_snapshot(&target).map_err(map_snapshot_error)?;
+    let apply_report =
+        apply_saved_config_change(&target, &original, &next).map_err(internal_config_error)?;
     Ok(UpdateRuntimeConfigResult {
-        restart_required: snapshot.restart_required,
+        restart_required: apply_report.restart_required,
         reload_required: snapshot.reload_required,
+        reload_applied: apply_report.reload_applied,
+        restart_scheduled: apply_report.restart_scheduled,
+        apply_message: apply_report.apply_message.clone(),
         path: target.path.display().to_string(),
         snapshot,
-        message: "Configuration saved.".to_string(),
+        message: apply_report.apply_message,
     })
+}
+
+fn apply_saved_config_change(
+    target: &ConfigTarget,
+    original: &str,
+    next: &str,
+) -> Result<crate::daemon::DaemonConfigApplyReport> {
+    match target.kind {
+        ConfigTargetKind::Daemon => {
+            crate::daemon::apply_daemon_config_change_after_save(&target.path, original, next)
+        }
+        ConfigTargetKind::RepoShared | ConfigTargetKind::RepoLocal => {
+            Ok(crate::daemon::DaemonConfigApplyReport::repo_reload())
+        }
+    }
 }

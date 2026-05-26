@@ -4,6 +4,7 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result, anyhow};
 
+use super::repo_lifecycle_spool::initialise_lifecycle_stop_spool_schema;
 use crate::host::interactions::db_store::initialise_interaction_spool_schema;
 use crate::storage::SqliteConnectionPool;
 
@@ -13,6 +14,8 @@ pub(crate) fn initialise_repo_runtime_schema(sqlite: &SqliteConnectionPool) -> R
         .context("initialising runtime checkpoint schema")?;
     initialise_interaction_spool_schema(sqlite)
         .context("initialising interaction spool schema in runtime db")?;
+    initialise_lifecycle_stop_spool_schema(sqlite)
+        .context("initialising lifecycle stop spool schema in runtime db")?;
     sqlite
         .execute_batch(crate::host::devql::producer_spool_schema_sql_sqlite())
         .context("initialising DevQL producer spool schema in runtime db")?;

@@ -26,6 +26,15 @@ pub const HOOK_NAME_POST_TOOL_USE: &str =
 pub const HOOK_NAME_STOP: &str = crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP;
 
 pub fn resolve_transcript_ref(session_id: &str, raw_path: Option<&str>) -> String {
+    let repo_root = crate::utils::paths::repo_root().ok();
+    resolve_transcript_ref_with_repo(session_id, raw_path, repo_root.as_deref())
+}
+
+fn resolve_transcript_ref_with_repo(
+    session_id: &str,
+    raw_path: Option<&str>,
+    repo_root: Option<&Path>,
+) -> String {
     if let Some(path) = raw_path
         && !path.trim().is_empty()
     {
@@ -39,13 +48,13 @@ pub fn resolve_transcript_ref(session_id: &str, raw_path: Option<&str>) -> Strin
         return String::new();
     }
 
-    if let Some(path) = resolve_transcript_ref_from_state(session_id) {
+    if let Some(repo_root) = repo_root
+        && let Some(path) = resolve_transcript_ref_from_state_for_repo(session_id, repo_root)
+    {
         return path;
     }
 
-    let repo_root = crate::utils::paths::repo_root().ok();
     let repo_path = repo_root
-        .as_ref()
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_default();
 
@@ -62,6 +71,23 @@ pub fn resolve_transcript_ref(session_id: &str, raw_path: Option<&str>) -> Strin
 }
 
 pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<LifecycleEvent>> {
+    let repo_root = crate::utils::paths::repo_root().ok();
+    parse_hook_event_with_repo(hook_name, stdin, repo_root.as_deref())
+}
+
+pub fn parse_hook_event_for_repo(
+    hook_name: &str,
+    stdin: &mut dyn Read,
+    repo_root: &Path,
+) -> Result<Option<LifecycleEvent>> {
+    parse_hook_event_with_repo(hook_name, stdin, Some(repo_root))
+}
+
+fn parse_hook_event_with_repo(
+    hook_name: &str,
+    stdin: &mut dyn Read,
+    repo_root: Option<&Path>,
+) -> Result<Option<LifecycleEvent>> {
     // Codex Desktop fires hooks for its own background rollouts — title
     // generation, ambient suggestions, internal probes — but never writes a
     // JSONL transcript for those session_ids. It signals this by sending
@@ -85,7 +111,11 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::SessionStart),
                 session_id: session_id.clone(),
-                session_ref: resolve_transcript_ref(&session_id, Some(&raw.transcript_path)),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    Some(&raw.transcript_path),
+                    repo_root,
+                ),
                 model: raw.model,
                 is_auxiliary,
                 ..LifecycleEvent::default()
@@ -98,7 +128,11 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::TurnStart),
                 session_id: session_id.clone(),
-                session_ref: resolve_transcript_ref(&session_id, Some(&raw.transcript_path)),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    Some(&raw.transcript_path),
+                    repo_root,
+                ),
                 prompt: raw.prompt,
                 model: raw.model,
                 is_auxiliary,
@@ -119,7 +153,11 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
             Ok(Some(LifecycleEvent {
                 event_type: Some(event_type),
                 session_id: session_id.clone(),
-                session_ref: resolve_transcript_ref(&session_id, Some(&raw.transcript_path)),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    Some(&raw.transcript_path),
+                    repo_root,
+                ),
                 tool_name: raw.tool_name.clone(),
                 tool_use_id: raw.tool_use_id,
                 tool_input: raw.tool_input,
@@ -137,7 +175,11 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::TurnEnd),
                 session_id: session_id.clone(),
-                session_ref: resolve_transcript_ref(&session_id, Some(&raw.transcript_path)),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    Some(&raw.transcript_path),
+                    repo_root,
+                ),
                 model: raw.model,
                 is_auxiliary,
                 ..LifecycleEvent::default()
@@ -204,9 +246,11 @@ fn parse_tool_hook_input(stdin: &mut dyn Read) -> Result<CodexToolHookRaw> {
     parse_codex_tool_hook(&raw)
 }
 
-fn resolve_transcript_ref_from_state(session_id: &str) -> Option<String> {
-    let repo_root = crate::utils::paths::repo_root().ok()?;
-    let backend = create_session_backend_or_local(&repo_root);
+fn resolve_transcript_ref_from_state_for_repo(
+    session_id: &str,
+    repo_root: &Path,
+) -> Option<String> {
+    let backend = create_session_backend_or_local(repo_root);
 
     if let Ok(Some(pre_prompt)) = backend.load_pre_prompt(session_id)
         && !pre_prompt.transcript_path.trim().is_empty()

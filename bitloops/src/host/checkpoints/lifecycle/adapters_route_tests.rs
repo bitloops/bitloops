@@ -407,6 +407,73 @@ fn route_codex_stop_without_transcript_path_uses_saved_state_and_persists_checkp
 }
 
 #[test]
+fn codex_stop_route_uses_explicit_repo_root_for_transcript_fallback() -> Result<()> {
+    let repo = seed_repo();
+    let other_cwd = TempDir::new().expect("temp dir");
+    let session_id = "codex-explicit-repo-stop-fallback";
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())?.repo_id;
+    let transcript_path = repo.path().join("codex-explicit-repo-rollout.jsonl");
+    let transcript_path_str = transcript_path.to_string_lossy().to_string();
+    std::fs::write(
+        &transcript_path,
+        format!(
+            "{}\n{}\n",
+            codex_response_item_line("user", "input_text", "Explain tracked.txt"),
+            codex_response_item_line("assistant", "output_text", "tracked.txt contains one"),
+        ),
+    )
+    .expect("write transcript payload");
+
+    let state_dir = repo.path().join(".explicit-route-test-state");
+    let state_dir_str = state_dir.to_string_lossy().to_string();
+    with_process_state(
+        Some(other_cwd.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir_str.as_str()),
+        )],
+        || -> Result<()> {
+            let backend = create_session_backend_or_local(repo.path());
+            backend.save_pre_prompt(&crate::host::checkpoints::session::state::PrePromptState {
+                session_id: session_id.to_string(),
+                transcript_path: transcript_path_str.clone(),
+                prompt: "Explain tracked.txt".to_string(),
+                ..Default::default()
+            })?;
+
+            let stop_payload = serde_json::json!({
+                "sessionId": session_id,
+                "transcriptPath": "",
+            })
+            .to_string();
+            route_hook_command_to_lifecycle(
+                repo.path(),
+                AGENT_NAME_CODEX,
+                CODEX_HOOK_STOP,
+                &stop_payload,
+            )?;
+
+            let spool = rusqlite::Connection::open(
+                interaction_spool_db_path(repo.path()).expect("resolve interaction spool path"),
+            )
+            .expect("open interaction spool");
+            let saved_transcript_path: String = spool
+                .query_row(
+                    "SELECT transcript_path FROM interaction_sessions WHERE repo_id = ?1 AND session_id = ?2",
+                    rusqlite::params![&repo_id, session_id],
+                    |row| row.get(0),
+                )
+                .expect("load saved interaction session");
+            assert_eq!(saved_transcript_path, transcript_path_str);
+
+            Ok(())
+        },
+    )?;
+
+    Ok(())
+}
+
+#[test]
 fn route_codex_user_prompt_submit_emits_no_turn_guidance_when_skill_exists() -> Result<()> {
     let repo = seed_repo();
     let session_id = "codex-session-prompt";

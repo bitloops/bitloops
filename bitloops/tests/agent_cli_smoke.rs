@@ -427,6 +427,13 @@ fn temporary_checkpoint_count(repo_root: &Path, home: &Path, session_id: &str) -
     })
 }
 
+fn drain_lifecycle_stop_spool_with_home(repo_root: &Path, home: &Path) {
+    with_home_env(home, || {
+        bitloops::daemon::drain_lifecycle_stop_spool_for_repo_for_tests(repo_root)
+            .expect("drain lifecycle stop spool for Copilot smoke repo");
+    });
+}
+
 fn ensure_relational_store_file(repo_root: &Path, _home: &Path) {
     let cfg = resolve_store_backend_config_for_repo(repo_root).expect("resolve backend config");
     let sqlite_path = if let Some(path) = cfg.relational.sqlite_path.as_deref() {
@@ -528,6 +535,7 @@ fn copilot_cli_smoke_maps_basic_workflow_commit() {
         Some(&stop_input),
     );
     assert_home_success(&out, "hooks copilot agent-stop");
+    drain_lifecycle_stop_spool_with_home(dir.path(), home.path());
 
     assert_eq!(
         temporary_checkpoint_count(dir.path(), home.path(), sid),

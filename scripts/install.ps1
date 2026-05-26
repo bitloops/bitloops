@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$Repo = $(if ($env:BITLOOPS_REPO) { $env:BITLOOPS_REPO } else { "bitloops/bitloops" }),
-  [string]$InstallDir = $(if ($env:BITLOOPS_INSTALL_DIR) { $env:BITLOOPS_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".bitloops\bin" })
+  [string]$InstallDir = $(if ($env:BITLOOPS_INSTALL_DIR) { $env:BITLOOPS_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".bitloops\bin" }),
+  [switch]$DefaultConfig
 )
 
 $ErrorActionPreference = "Stop"
@@ -124,6 +125,30 @@ try {
   Write-Host "Installed bitloops $tag to $targetPath"
   if ($pathChanged) {
     Write-Host "Added $InstallDir to user PATH. Restart your terminal for PATH changes to apply."
+  }
+
+  if ($DefaultConfig) {
+    $defaultConfigPath = Join-Path $tempDir "default-config.toml"
+    & $targetPath curl-bash-post-install --write-default-config $defaultConfigPath
+    if ($LASTEXITCODE -ne 0) {
+      throw "Failed to create default daemon config template"
+    }
+    & $targetPath configure --file $defaultConfigPath
+    if ($LASTEXITCODE -ne 0) {
+      throw "Failed to configure Bitloops daemon from the default config"
+    }
+    Write-Host "Configured Bitloops daemon with the default config."
+  }
+  elseif ([Environment]::UserInteractive) {
+    & $targetPath configure --web
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "Bitloops installed. Run this to configure the daemon:"
+      Write-Host "  $targetPath configure --web"
+    }
+  }
+  else {
+    Write-Host "Bitloops installed. Run this to configure the daemon:"
+    Write-Host "  $targetPath configure --web"
   }
 }
 finally {

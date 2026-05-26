@@ -23,6 +23,16 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run the installer default-config configure flow$"),
+            step_fn(given_installer_default_config_configure_flow),
+        )
+        .given(
+            None,
+            regex(r"^I run bitloops configure --default-config$"),
+            step_fn(given_configure_default_config),
+        )
+        .given(
+            None,
             regex(r"^I run InitCommit for (\S+)$"),
             step_fn(given_init_commit),
         )

@@ -133,6 +133,9 @@ pub(crate) struct UpdateRuntimeConfigResult {
     pub(crate) snapshot: RuntimeConfigSnapshotObject,
     pub(crate) restart_required: bool,
     pub(crate) reload_required: bool,
+    pub(crate) reload_applied: bool,
+    pub(crate) restart_scheduled: bool,
+    pub(crate) apply_message: String,
     pub(crate) path: String,
     pub(crate) message: String,
 }

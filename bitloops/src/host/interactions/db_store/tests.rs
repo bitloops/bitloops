@@ -891,3 +891,81 @@ fn tool_projection_ids_fall_back_to_session_scope_without_double_prefixing() {
             .expect("query session-scoped tool projection");
     }
 }
+
+#[test]
+fn turn_inherits_agent_type_from_parent_session() {
+    // Invariant: a turn's stored agent_type must equal its parent session's
+    // agent_type, even when the caller passes a divergent value. Protects the
+    // dashboard from showing the wrong icon when a second adapter's hook fires
+    // for the same session (e.g. Cursor bridging Claude Code hooks).
+    let (_dir, spool) = test_spool();
+
+    let mut session = sample_session();
+    session.agent_type = "cursor".into();
+    spool.record_session(&session).expect("record session");
+
+    let mut turn = sample_turn();
+    turn.agent_type = "claude-code".into();
+    spool.record_turn(&turn).expect("record turn");
+
+    let turns = spool
+        .list_turns_for_session(&session.session_id, 10)
+        .expect("list turns");
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0].agent_type, "cursor",
+        "stored turn agent_type must be derived from the parent session"
+    );
+}
+
+#[test]
+fn session_agent_type_is_sticky_on_subsequent_upsert() {
+    // Invariant: once a session has a non-empty agent_type, later upserts with
+    // a different value must not overwrite it. The first adapter to register a
+    // session owns its identity for the rest of its lifetime.
+    let (_dir, spool) = test_spool();
+
+    let mut first = sample_session();
+    first.agent_type = "cursor".into();
+    spool.record_session(&first).expect("record first session");
+
+    let mut second = sample_session();
+    second.agent_type = "claude-code".into();
+    spool
+        .record_session(&second)
+        .expect("record second session");
+
+    let stored = spool
+        .load_session(&first.session_id)
+        .expect("load session")
+        .expect("session exists");
+    assert_eq!(
+        stored.agent_type, "cursor",
+        "session agent_type must be sticky after first non-empty write"
+    );
+}
+
+#[test]
+fn event_inherits_agent_type_from_parent_session() {
+    // Same invariant as turns: derived events (transcript_derivation, etc.)
+    // must not be able to leak a different agent_type onto rows tied to a
+    // session that already has an identity.
+    let (_dir, spool) = test_spool();
+
+    let mut session = sample_session();
+    session.agent_type = "cursor".into();
+    spool.record_session(&session).expect("record session");
+
+    let mut event = sample_event();
+    event.agent_type = "claude-code".into();
+    spool.record_event(&event).expect("record event");
+
+    let events = spool
+        .list_events(&Default::default(), 10)
+        .expect("list events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].agent_type, "cursor",
+        "stored event agent_type must be derived from the parent session"
+    );
+}

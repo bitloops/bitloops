@@ -93,7 +93,7 @@ bitloops status
 Once the daemon has restarted with the config above, initialise the repository against that active daemon setup:
 
 ```bash
-bitloops init --install-default-daemon
+bitloops init
 ```
 
 ## 6. Stop Or Reset The Stack
