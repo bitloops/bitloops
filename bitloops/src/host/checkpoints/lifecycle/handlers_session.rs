@@ -204,8 +204,7 @@ fn handle_lifecycle_turn_start_for_repo_inner(
         .as_transcript_analyzer()
         .and_then(|analyzer| analyzer.get_transcript_position(&event.session_ref).ok())
         .unwrap_or(0);
-    let snapshot_untracked = boundary_snapshot
-        .map(|snapshot| snapshot.pre_untracked_files.clone());
+    let snapshot_untracked = boundary_snapshot.map(|snapshot| snapshot.pre_untracked_files.clone());
     let snapshot_offset = boundary_snapshot
         .and_then(|snapshot| snapshot.transcript_offset)
         .and_then(|offset| usize::try_from(offset).ok());

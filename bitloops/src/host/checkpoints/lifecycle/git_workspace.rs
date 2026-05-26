@@ -111,9 +111,9 @@ pub(crate) fn capture_workspace_and_branch_snapshot(repo_root: &Path) -> Lifecyc
     let branch_state = super::handlers_tail::is_on_default_branch_for_repo(repo_root).ok();
     LifecycleBoundarySnapshot {
         workspace: Some(capture_workspace_snapshot_for_turn_end(repo_root)),
-        branch_name: branch_state.as_ref().and_then(|(_, branch_name)| {
-            (!branch_name.is_empty()).then(|| branch_name.clone())
-        }),
+        branch_name: branch_state
+            .as_ref()
+            .and_then(|(_, branch_name)| (!branch_name.is_empty()).then(|| branch_name.clone())),
         is_default_branch: branch_state.map(|(is_default_branch, _)| is_default_branch),
         ..LifecycleBoundarySnapshot::default()
     }
