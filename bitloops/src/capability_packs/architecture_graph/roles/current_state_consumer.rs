@@ -444,6 +444,24 @@ impl RoleBatchAggregate {
         self.metrics.assignments_marked_stale += metrics.assignments_marked_stale;
         self.metrics.assignment_history_rows += metrics.assignment_history_rows;
         self.metrics.adjudication_candidates += metrics.adjudication_candidates;
+        self.metrics.unknown_targets_total += metrics.unknown_targets_total;
+        self.metrics.unknown_targets_suppressed_non_role +=
+            metrics.unknown_targets_suppressed_non_role;
+        self.metrics.unknown_targets_rule_mining_eligible +=
+            metrics.unknown_targets_rule_mining_eligible;
+        self.metrics.unknown_targets_adjudication_escalated +=
+            metrics.unknown_targets_adjudication_escalated;
+        self.metrics.role_mining_clusters += metrics.role_mining_clusters;
+        self.metrics.role_mining_representative_targets +=
+            metrics.role_mining_representative_targets;
+        self.metrics.unknown_adjudication_candidates += metrics.unknown_adjudication_candidates;
+        self.metrics.high_impact_adjudication_candidates +=
+            metrics.high_impact_adjudication_candidates;
+        self.metrics.low_confidence_adjudication_candidates +=
+            metrics.low_confidence_adjudication_candidates;
+        self.metrics.conflict_adjudication_candidates += metrics.conflict_adjudication_candidates;
+        self.metrics.repeated_adjudication_suppressed += metrics.repeated_adjudication_suppressed;
+        self.metrics.deterministic_guard_skipped += metrics.deterministic_guard_skipped;
         self.metrics.transaction_count += metrics.transaction_count;
         self.metrics.max_rss_kb = self.metrics.max_rss_kb.max(metrics.max_rss_kb);
         self.metrics.max_sqlite_lock_wait_ms = self

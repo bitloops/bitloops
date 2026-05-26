@@ -4,7 +4,7 @@ use crate::capability_packs::architecture_graph::roles::taxonomy::{
     ArchitectureArtefactFact, ArchitectureRole, ArchitectureRoleAssignment,
     ArchitectureRoleChangeProposal, ArchitectureRoleDetectionRule, ArchitectureRoleRuleSignal,
     AssignmentPriority, AssignmentSource, AssignmentStatus, ProposalStatus, RoleLifecycle,
-    RoleRuleLifecycle, RoleSignalPolarity, RoleTarget, proposal_id, stable_role_id,
+    RoleRuleLifecycle, RoleSignalPolarity, RoleTarget, TargetKind, proposal_id, stable_role_id,
 };
 use crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql;
 use crate::host::devql::RelationalStorage;
@@ -179,6 +179,67 @@ async fn replace_facts_for_paths_removes_stale_facts() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn load_current_role_facts_decodes_file_artefact_and_symbol_targets() -> anyhow::Result<()> {
+    let (_temp, relational) = test_relational()?;
+    let facts = vec![
+        ArchitectureArtefactFact {
+            repo_id: "repo-1".to_string(),
+            fact_id: "fact-file".to_string(),
+            target: RoleTarget::file("src/main.rs"),
+            language: Some("rust".to_string()),
+            fact_kind: "file".to_string(),
+            fact_key: "role".to_string(),
+            fact_value: "source_code".to_string(),
+            source: "test".to_string(),
+            confidence: 1.0,
+            evidence: serde_json::json!([]),
+            generation_seq: 1,
+        },
+        ArchitectureArtefactFact {
+            repo_id: "repo-1".to_string(),
+            fact_id: "fact-symbol".to_string(),
+            target: RoleTarget::symbol("artefact-main", "symbol-main", "src/main.rs"),
+            language: Some("rust".to_string()),
+            fact_kind: "symbol".to_string(),
+            fact_key: "name".to_string(),
+            fact_value: "main".to_string(),
+            source: "test".to_string(),
+            confidence: 1.0,
+            evidence: serde_json::json!([]),
+            generation_seq: 1,
+        },
+    ];
+    replace_role_classification_state(
+        &relational,
+        RoleClassificationStateReplacement {
+            repo_id: "repo-1",
+            fact_and_signal_paths: &["src/main.rs".to_string()],
+            facts: &facts,
+            signals: &[],
+            assignment_paths: &[],
+            assignments: &[],
+            assignment_history_writes: &[],
+            removed_assignment_paths: &[],
+            generation_seq: 1,
+        },
+    )
+    .await?;
+
+    let loaded = load_current_role_facts(&relational, "repo-1").await?;
+    assert!(
+        loaded
+            .iter()
+            .any(|fact| fact.target.target_kind == TargetKind::File)
+    );
+    assert!(
+        loaded
+            .iter()
+            .any(|fact| fact.target.target_kind == TargetKind::Symbol)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn replace_role_classification_state_chunks_large_write_sets() -> anyhow::Result<()> {
     let (_temp, relational) = test_relational()?;
     let path = "src/generated.rs".to_string();
@@ -248,6 +309,7 @@ async fn load_active_detection_rules_ignores_draft_rules() -> anyhow::Result<()>
         lifecycle: RoleRuleLifecycle::Active,
         priority: 10,
         score: 0.8,
+        min_positive_ratio: 1.0,
         candidate_selector: serde_json::json!({ "targetKinds": ["artefact"] }),
         positive_conditions: serde_json::json!([{ "kind": "path", "key": "segment", "op": "eq", "value": "consumer", "score": 0.3 }]),
         negative_conditions: serde_json::json!([]),
@@ -280,6 +342,7 @@ async fn load_active_detection_rules_returns_latest_active_version() -> anyhow::
         lifecycle: RoleRuleLifecycle::Active,
         priority: 10,
         score: 0.5,
+        min_positive_ratio: 1.0,
         candidate_selector: serde_json::json!({ "targetKinds": ["file"] }),
         positive_conditions: serde_json::json!([{ "kind": "path", "key": "segment", "op": "eq", "value": "consumer", "score": 0.5 }]),
         negative_conditions: serde_json::json!([]),

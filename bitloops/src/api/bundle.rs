@@ -69,24 +69,42 @@ pub(super) async fn fetch_bundle(
 ) -> Result<BundleInstallResult, BundleError> {
     let current_cli_version = current_cli_version()?;
     let manifest = fetch_manifest_for_state(state).await?;
-    let Some(resolved) =
-        resolve_latest_applicable_for_state(&manifest.versions, &current_cli_version, state)?
-    else {
+    let candidates =
+        resolve_applicable_versions_for_state(&manifest.versions, &current_cli_version, state)?;
+    if candidates.is_empty() {
         return Err(BundleError::NoCompatibleVersion);
     };
 
+    let mut latest_not_found = None;
+    for (attempt_index, resolved) in candidates.into_iter().take(2).enumerate() {
+        match install_resolved_bundle(&resolved, &state.bundle_dir).await {
+            Ok(()) => {
+                return Ok(BundleInstallResult {
+                    installed_version: resolved.version,
+                    bundle_dir: state.bundle_dir.display().to_string(),
+                    status: "installed".to_string(),
+                    checksum_verified: true,
+                });
+            }
+            Err(BundleError::BundleDownloadNotFound(message)) if attempt_index == 0 => {
+                latest_not_found = Some(BundleError::BundleDownloadNotFound(message));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(latest_not_found.unwrap_or(BundleError::NoCompatibleVersion))
+}
+
+async fn install_resolved_bundle(
+    resolved: &ResolvedBundleVersion,
+    bundle_dir: &Path,
+) -> Result<(), BundleError> {
     let archive_bytes = download_bytes(&resolved.download_url).await?;
     let checksum_payload = download_text(&resolved.checksum_url).await?;
     verify_sha256(&archive_bytes, &checksum_payload)?;
 
-    install_archive_atomically(&archive_bytes, &state.bundle_dir)?;
-
-    Ok(BundleInstallResult {
-        installed_version: resolved.version,
-        bundle_dir: state.bundle_dir.display().to_string(),
-        status: "installed".to_string(),
-        checksum_verified: true,
-    })
+    install_archive_atomically(&archive_bytes, bundle_dir)
 }
 
 fn current_cli_version() -> Result<Version, BundleError> {
@@ -234,6 +252,12 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>, BundleError> {
         .map_err(|err| BundleError::BundleDownloadFailed(format!("GET {url} failed: {err}")))?;
 
     if !response.status().is_success() {
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(BundleError::BundleDownloadNotFound(format!(
+                "GET {url} returned {}",
+                response.status()
+            )));
+        }
         return Err(BundleError::BundleDownloadFailed(format!(
             "GET {url} returned {}",
             response.status()
@@ -271,12 +295,36 @@ fn resolve_latest_applicable_for_state(
     )
 }
 
+fn resolve_applicable_versions_for_state(
+    versions: &[BundleVersionEntry],
+    current_cli_version: &Version,
+    state: &DashboardState,
+) -> Result<Vec<ResolvedBundleVersion>, BundleError> {
+    resolve_applicable_versions_from_overrides(
+        versions,
+        current_cli_version,
+        Some(&state.bundle_source_overrides),
+    )
+}
+
 fn resolve_latest_applicable_from_overrides(
     versions: &[BundleVersionEntry],
     current_cli_version: &Version,
     overrides: Option<&crate::api::DashboardBundleSourceOverrides>,
 ) -> Result<Option<ResolvedBundleVersion>, BundleError> {
-    let mut best: Option<(Version, ResolvedBundleVersion)> = None;
+    Ok(
+        resolve_applicable_versions_from_overrides(versions, current_cli_version, overrides)?
+            .into_iter()
+            .next(),
+    )
+}
+
+fn resolve_applicable_versions_from_overrides(
+    versions: &[BundleVersionEntry],
+    current_cli_version: &Version,
+    overrides: Option<&crate::api::DashboardBundleSourceOverrides>,
+) -> Result<Vec<ResolvedBundleVersion>, BundleError> {
+    let mut compatible = Vec::new();
 
     for entry in versions {
         if !is_entry_compatible(entry, current_cli_version)? {
@@ -299,15 +347,14 @@ fn resolve_latest_applicable_from_overrides(
             checksum_url,
         };
 
-        match &best {
-            Some((best_version, _)) if parsed_version <= *best_version => {}
-            _ => {
-                best = Some((parsed_version, resolved));
-            }
-        }
+        compatible.push((parsed_version, resolved));
     }
 
-    Ok(best.map(|(_, resolved)| resolved))
+    compatible.sort_by(|(left, _), (right, _)| right.cmp(left));
+    Ok(compatible
+        .into_iter()
+        .map(|(_, resolved)| resolved)
+        .collect())
 }
 
 fn resolve_entry_url_from_overrides(

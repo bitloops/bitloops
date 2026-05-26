@@ -5,9 +5,13 @@ use serde_json::Value;
 use crate::host::capability_host::gateways::RelationalGateway;
 use crate::host::devql::RelationalStorage;
 
-use super::storage::{ArchitectureRoleAssignmentMigrationRecord, load_role_proposal_by_id};
+use super::storage::{
+    ArchitectureRoleAssignmentMigrationRecord, load_role_by_id, load_role_proposal_by_id,
+};
 use super::taxonomy::{
-    RoleSplitSpecFile, RuleSpecFile, validate_role_split_spec, validate_rule_spec_file,
+    RoleCandidateSelector, RoleFactCondition, RoleRuleCandidateSelector, RoleRuleCondition,
+    RoleSplitSpecFile, RuleSpecFile, parse_rule_conditions, parse_rule_score, parse_rule_selector,
+    validate_role_split_spec, validate_rule_spec_file,
 };
 
 mod application;
@@ -18,10 +22,10 @@ pub use application::apply_proposal;
 use super::storage::{
     ArchitectureRoleRecord, ArchitectureRoleRuleRecord, deterministic_role_id,
     deterministic_rule_id, insert_role_rule, load_current_assignment_by_id, load_role_by_alias,
-    load_role_by_id, load_role_rules, next_role_rule_version, upsert_assignment, upsert_role,
+    load_role_rules, next_role_rule_version, upsert_assignment, upsert_role,
 };
 #[cfg(test)]
-use super::taxonomy::{self, RoleRuleCandidateSelector};
+use super::taxonomy;
 #[cfg(test)]
 use application::canonical_rule_hash;
 use application::{
@@ -291,7 +295,8 @@ pub async fn create_rule_draft_proposal(
 ) -> Result<ProposalSummary> {
     validate_rule_spec_file(&spec)?;
     let role = resolve_role_ref(relational, repo_id, &spec.role_ref).await?;
-    let preview = preview_rule_spec(gateway, repo_id, &role.role_id, &spec, None).await?;
+    let preview =
+        preview_rule_spec(relational, gateway, repo_id, &role.role_id, &spec, None).await?;
     let request = DraftRuleRequest {
         role_id: role.role_id.clone(),
         spec,
@@ -318,6 +323,7 @@ pub async fn create_rule_edit_proposal(
     validate_rule_spec_file(&spec)?;
     let existing_rule = resolve_rule_ref(relational, repo_id, rule_ref).await?;
     let preview = preview_rule_spec(
+        relational,
         gateway,
         repo_id,
         &existing_rule.role_id,
@@ -361,6 +367,92 @@ pub async fn create_rule_activate_proposal(
         provenance,
     )
     .await
+}
+
+pub async fn preview_rule_activation_safety(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    rule_ref: &str,
+) -> Result<Value> {
+    let rule = resolve_rule_ref(relational, repo_id, rule_ref).await?;
+    preview_rule_lifecycle_change(relational, &rule, "activate").await
+}
+
+pub async fn preview_existing_rule_match_safety(
+    relational: &RelationalStorage,
+    gateway: &dyn RelationalGateway,
+    repo_id: &str,
+    rule_ref: &str,
+) -> Result<Value> {
+    let rule = resolve_rule_ref(relational, repo_id, rule_ref).await?;
+    let role = load_role_by_id(relational, repo_id, &rule.role_id)
+        .await?
+        .ok_or_else(|| anyhow!("role `{}` was not found", rule.role_id))?;
+    let spec = RuleSpecFile {
+        role_ref: role.canonical_key,
+        candidate_selector: stored_rule_candidate_selector(&rule.candidate_selector)?,
+        positive_conditions: stored_rule_conditions(&rule.positive_conditions)?,
+        negative_conditions: stored_rule_conditions(&rule.negative_conditions)?,
+        score: parse_rule_score(&rule.score)?,
+        evidence: rule.evidence.clone(),
+        metadata: rule.metadata.clone(),
+    };
+    preview_rule_spec(
+        relational,
+        gateway,
+        repo_id,
+        &rule.role_id,
+        &spec,
+        Some(&rule),
+    )
+    .await
+}
+
+fn stored_rule_candidate_selector(value: &Value) -> Result<RoleRuleCandidateSelector> {
+    parse_rule_selector(value).or_else(|_| {
+        let selector = serde_json::from_value::<RoleCandidateSelector>(value.clone())?;
+        Ok(RoleRuleCandidateSelector {
+            target_kinds: selector.target_kinds,
+            path_prefixes: selector.path_prefixes,
+            path_suffixes: selector.path_suffixes,
+            required_facts: selector
+                .required_facts
+                .into_iter()
+                .map(role_rule_condition_from_contract)
+                .collect(),
+            required_fact_any_groups: selector
+                .required_fact_any_groups
+                .into_iter()
+                .map(|group| {
+                    group
+                        .into_iter()
+                        .map(role_rule_condition_from_contract)
+                        .collect()
+                })
+                .collect(),
+            ..Default::default()
+        })
+    })
+}
+
+fn stored_rule_conditions(value: &Value) -> Result<Vec<RoleRuleCondition>> {
+    parse_rule_conditions(value).or_else(|_| {
+        let conditions = serde_json::from_value::<Vec<RoleFactCondition>>(value.clone())?;
+        Ok(conditions
+            .into_iter()
+            .map(role_rule_condition_from_contract)
+            .collect())
+    })
+}
+
+fn role_rule_condition_from_contract(condition: RoleFactCondition) -> RoleRuleCondition {
+    RoleRuleCondition {
+        kind: condition.kind,
+        key: Some(condition.key),
+        op: Some(condition.op),
+        value: Value::String(condition.value),
+        score: Some(condition.score),
+    }
 }
 
 pub async fn create_rule_disable_proposal(

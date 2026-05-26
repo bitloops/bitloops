@@ -40,6 +40,7 @@ pub async fn upsert_detection_rule(
             &serde_json::json!({
                 "base_confidence": rule.score,
                 "priority_hint": rule.priority,
+                "min_positive_ratio": rule.min_positive_ratio,
             }),
         ),
         provenance = sql_json_value(relational, &rule.provenance),
@@ -62,7 +63,8 @@ pub async fn load_active_detection_rules(
                 version,
                 lifecycle_status AS lifecycle,
                 CAST(COALESCE(json_extract(score_json, '$.priority_hint'), 100) AS INTEGER) AS priority,
-                CAST(COALESCE(json_extract(score_json, '$.base_confidence'), 1.0) AS REAL) AS score,
+                CAST(COALESCE(json_extract(score_json, '$.base_confidence'), 0.8) AS REAL) AS score,
+                CAST(COALESCE(json_extract(score_json, '$.min_positive_ratio'), 1.0) AS REAL) AS min_positive_ratio,
                 candidate_selector_json, positive_conditions_json, negative_conditions_json,
                 provenance_json
          FROM architecture_role_detection_rules AS rule

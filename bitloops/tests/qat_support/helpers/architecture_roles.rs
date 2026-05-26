@@ -84,13 +84,13 @@ pub fn configure_deterministic_architecture_role_inference(
             "qat-architecture-adjudication-model",
             &adjudication_payload,
         )?;
-    let config = render_architecture_role_inference_config(
+    write_architecture_role_inference_config(
+        world,
         &seed_command,
         &seed_args,
         &adjudication_command,
         &adjudication_args,
-    );
-    append_scenario_capability_config(world, &config)?;
+    )?;
     append_world_log(
         world,
         &format!(
@@ -1725,63 +1725,93 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     ))
 }
 
-fn render_architecture_role_inference_config(
+fn write_architecture_role_inference_config(
+    world: &QatWorld,
     seed_command: &str,
     seed_args: &[String],
     adjudication_command: &str,
     adjudication_args: &[String],
-) -> String {
-    let seed_runtime_args = seed_args
-        .iter()
-        .map(|arg| format!("{arg:?}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let adjudication_runtime_args = adjudication_args
-        .iter()
-        .map(|arg| format!("{arg:?}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        r#"
-[architecture.inference]
-fact_synthesis = "qat_architecture_roles_seed"
-role_adjudication = "qat_architecture_roles_adjudication"
+) -> Result<()> {
+    let mut paths = vec![scenario_repo_config_path(world)];
+    paths.extend(scenario_global_config_paths(world));
+    for path in paths {
+        ensure_parent_dir(&path)?;
+        let rendered = if path.exists() {
+            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?
+        } else {
+            String::new()
+        };
+        let merged = render_architecture_role_inference_config_into(
+            &rendered,
+            seed_command,
+            seed_args,
+            adjudication_command,
+            adjudication_args,
+        )
+        .with_context(|| format!("rendering {}", path.display()))?;
+        fs::write(&path, merged).with_context(|| format!("writing {}", path.display()))?;
+    }
+    Ok(())
+}
 
-[inference.runtimes.qat_architecture_roles_seed_runtime]
-command = {seed_command:?}
-args = [{seed_runtime_args}]
-startup_timeout_secs = 5
-request_timeout_secs = 5
+fn render_architecture_role_inference_config_into(
+    base: &str,
+    seed_command: &str,
+    seed_args: &[String],
+    adjudication_command: &str,
+    adjudication_args: &[String],
+) -> Result<String> {
+    let mut doc = base
+        .parse::<toml_edit::DocumentMut>()
+        .context("parsing scenario architecture config")?;
 
-[inference.runtimes.qat_architecture_roles_adjudication_runtime]
-command = {adjudication_command:?}
-args = [{adjudication_runtime_args}]
-startup_timeout_secs = 5
-request_timeout_secs = 5
+    doc["architecture"]["inference"]["fact_synthesis"] =
+        toml_edit::value("qat_architecture_roles_seed");
+    doc["architecture"]["inference"]["role_adjudication"] =
+        toml_edit::value("qat_architecture_roles_adjudication");
 
-[inference.profiles.qat_architecture_roles_seed]
-task = "structured_generation"
-driver = "ollama_chat"
-runtime = "qat_architecture_roles_seed_runtime"
-model = "qat-architecture-seed-model"
-base_url = "http://127.0.0.1:11434/api/chat"
-temperature = "0.1"
-max_output_tokens = 4096
+    let seed_runtime = &mut doc["inference"]["runtimes"]["qat_architecture_roles_seed_runtime"];
+    seed_runtime["command"] = toml_edit::value(seed_command);
+    seed_runtime["args"] = toml_edit::value(toml_string_array(seed_args));
+    seed_runtime["startup_timeout_secs"] = toml_edit::value(5);
+    seed_runtime["request_timeout_secs"] = toml_edit::value(5);
 
-[inference.profiles.qat_architecture_roles_adjudication]
-task = "structured_generation"
-driver = "ollama_chat"
-runtime = "qat_architecture_roles_adjudication_runtime"
-model = "qat-architecture-adjudication-model"
-base_url = "http://127.0.0.1:11434/api/chat"
-temperature = "0.1"
-max_output_tokens = 1024
-"#,
-        seed_command = seed_command,
-        seed_runtime_args = seed_runtime_args,
-        adjudication_command = adjudication_command,
-        adjudication_runtime_args = adjudication_runtime_args,
-    )
+    let adjudication_runtime =
+        &mut doc["inference"]["runtimes"]["qat_architecture_roles_adjudication_runtime"];
+    adjudication_runtime["command"] = toml_edit::value(adjudication_command);
+    adjudication_runtime["args"] = toml_edit::value(toml_string_array(adjudication_args));
+    adjudication_runtime["startup_timeout_secs"] = toml_edit::value(5);
+    adjudication_runtime["request_timeout_secs"] = toml_edit::value(5);
+
+    let seed_profile = &mut doc["inference"]["profiles"]["qat_architecture_roles_seed"];
+    seed_profile["task"] = toml_edit::value("structured_generation");
+    seed_profile["driver"] = toml_edit::value("ollama_chat");
+    seed_profile["runtime"] = toml_edit::value("qat_architecture_roles_seed_runtime");
+    seed_profile["model"] = toml_edit::value("qat-architecture-seed-model");
+    seed_profile["base_url"] = toml_edit::value("http://127.0.0.1:11434/api/chat");
+    seed_profile["temperature"] = toml_edit::value("0.1");
+    seed_profile["max_output_tokens"] = toml_edit::value(4096);
+
+    let adjudication_profile =
+        &mut doc["inference"]["profiles"]["qat_architecture_roles_adjudication"];
+    adjudication_profile["task"] = toml_edit::value("structured_generation");
+    adjudication_profile["driver"] = toml_edit::value("ollama_chat");
+    adjudication_profile["runtime"] =
+        toml_edit::value("qat_architecture_roles_adjudication_runtime");
+    adjudication_profile["model"] = toml_edit::value("qat-architecture-adjudication-model");
+    adjudication_profile["base_url"] = toml_edit::value("http://127.0.0.1:11434/api/chat");
+    adjudication_profile["temperature"] = toml_edit::value("0.1");
+    adjudication_profile["max_output_tokens"] = toml_edit::value(1024);
+
+    Ok(doc.to_string())
+}
+
+fn toml_string_array(values: &[String]) -> toml_edit::Array {
+    let mut array = toml_edit::Array::default();
+    for value in values {
+        array.push(value.as_str());
+    }
+    array
 }
 
 fn architecture_role_id_for_key(world: &QatWorld, role_key: &str) -> Result<String> {

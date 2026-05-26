@@ -393,10 +393,11 @@ async fn upsert_path_suffix_rule(
             lifecycle:
                 crate::capability_packs::architecture_graph::roles::RoleRuleLifecycle::Active,
             priority: 10,
-            score: 1.0,
+            score,
+            min_positive_ratio: 1.0,
             candidate_selector: json!({ "targetKinds": ["file"] }),
             positive_conditions: json!([
-                { "kind": "path", "key": "full", "op": "suffix", "value": suffix, "score": score }
+                { "kind": "path", "key": "full", "op": "suffix", "value": suffix, "score": 1.0 }
             ]),
             negative_conditions: json!([]),
             provenance: json!({ "source": "test" }),
@@ -530,6 +531,7 @@ async fn current_state_reconcile_includes_role_metrics() -> anyhow::Result<()> {
                 crate::capability_packs::architecture_graph::roles::RoleRuleLifecycle::Active,
             priority: 10,
             score: 1.0,
+            min_positive_ratio: 1.0,
             candidate_selector: json!({ "targetKinds": ["file"] }),
             positive_conditions: json!([
                 { "kind": "path", "key": "segment", "op": "eq", "value": "api", "score": 1.0 }

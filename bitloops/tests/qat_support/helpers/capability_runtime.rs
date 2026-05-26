@@ -56,10 +56,10 @@ fn write_scenario_repo_semantic_clone_policy(world: &QatWorld) -> Result<()> {
     let policy_path = settings_local_path(world.repo_dir());
     let policy = RepoSemanticEmbeddingPolicy {
         present: true,
-        summary_mode: None,
+        summary_mode: Some(SemanticSummaryMode::Auto),
         embedding_mode: Some(SemanticCloneEmbeddingMode::Deterministic),
         inference: SemanticClonesInferenceBindings {
-            summary_generation: None,
+            summary_generation: Some("summary_fake".to_string()),
             code_embeddings: Some("fake".to_string()),
             summary_embeddings: Some("fake".to_string()),
         },
@@ -435,35 +435,55 @@ max_output_tokens = 200
     )
 }
 
-fn render_context_guidance_fake_config(command: &str, args: &[String]) -> String {
-    let runtime_args = args
-        .iter()
-        .map(|arg| format!("{arg:?}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        r#"
-[context_guidance.inference]
-guidance_generation = "guidance_fake"
+fn render_context_guidance_fake_config_into(
+    base: &str,
+    command: &str,
+    args: &[String],
+) -> Result<String> {
+    let mut doc = base
+        .parse::<toml_edit::DocumentMut>()
+        .context("parsing scenario capability config")?;
 
-[inference.runtimes.bitloops_local_text_generation]
-command = {command:?}
-args = [{runtime_args}]
-startup_timeout_secs = 5
-request_timeout_secs = 5
+    doc["context_guidance"]["inference"]["guidance_generation"] =
+        toml_edit::value("guidance_fake");
 
-[inference.profiles.guidance_fake]
-task = "text_generation"
-driver = "ollama_chat"
-runtime = "bitloops_local_text_generation"
-model = "qat-guidance-model"
-base_url = "http://127.0.0.1:11434/api/chat"
-temperature = "0.1"
-max_output_tokens = 400
-"#,
-        command = command,
-        runtime_args = runtime_args,
-    )
+    let runtime = &mut doc["inference"]["runtimes"]["bitloops_local_text_generation"];
+    runtime["command"] = toml_edit::value(command);
+    let mut runtime_args = toml_edit::Array::default();
+    for arg in args {
+        runtime_args.push(arg.as_str());
+    }
+    runtime["args"] = toml_edit::value(runtime_args);
+    runtime["startup_timeout_secs"] = toml_edit::value(5);
+    runtime["request_timeout_secs"] = toml_edit::value(5);
+
+    let profile = &mut doc["inference"]["profiles"]["guidance_fake"];
+    profile["task"] = toml_edit::value("text_generation");
+    profile["driver"] = toml_edit::value("ollama_chat");
+    profile["runtime"] = toml_edit::value("bitloops_local_text_generation");
+    profile["model"] = toml_edit::value("qat-guidance-model");
+    profile["base_url"] = toml_edit::value("http://127.0.0.1:11434/api/chat");
+    profile["temperature"] = toml_edit::value("0.1");
+    profile["max_output_tokens"] = toml_edit::value(400);
+
+    Ok(doc.to_string())
+}
+
+fn write_context_guidance_fake_config(world: &QatWorld, command: &str, args: &[String]) -> Result<()> {
+    let mut paths = vec![scenario_repo_config_path(world)];
+    paths.extend(scenario_global_config_paths(world));
+    for path in paths {
+        ensure_parent_dir(&path)?;
+        let rendered = if path.exists() {
+            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?
+        } else {
+            String::new()
+        };
+        let merged = render_context_guidance_fake_config_into(&rendered, command, args)
+            .with_context(|| format!("rendering {}", path.display()))?;
+        fs::write(&path, merged).with_context(|| format!("writing {}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn semantic_clone_health_rows(value: &serde_json::Value) -> Vec<&serde_json::Value> {
@@ -553,6 +573,10 @@ pub fn configure_semantic_clones_with_guide_aligned_fake_runtime(
     );
     write_scenario_capability_config(world, &config)?;
     write_scenario_repo_semantic_clone_policy(world)?;
+    // Semantic clone QAT config binds scenario-local stores, which requires a
+    // daemon restart. Restart explicitly so the foreground harness does not
+    // race the delayed config-reload restart path.
+    ensure_daemon_for_scenario(world)?;
     append_world_log(
         world,
         &format!(
@@ -570,8 +594,7 @@ pub fn configure_context_guidance_with_fake_runtime(
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let (command, args, script_path) = fake_text_generation_runtime_command_and_args(world)?;
-    let config = render_context_guidance_fake_config(&command, &args);
-    append_scenario_capability_config(world, &config)?;
+    write_context_guidance_fake_config(world, &command, &args)?;
     append_world_log(
         world,
         &format!(
