@@ -6,7 +6,7 @@ Bitloops-managed agent hooks run inside short-lived `bitloops hooks ...` process
 
 The durable handoff uses repo `runtime.sqlite` as an outbox/inbox-style work queue:
 
-1. The hook process records a raw lifecycle hook payload.
+1. The hook process records a raw lifecycle hook payload plus any required boundary snapshot.
 2. The hook process returns quickly.
 3. The daemon claims one job at a time.
 4. The daemon parses the raw payload through the existing agent lifecycle adapter.
@@ -27,47 +27,23 @@ No daemon RPC and no file-inbox fallback are used.
 
 ## Hook Classification
 
-### Already Async
+### Default Async Policy
 
-| Agent | Hook | Event |
+Lifecycle-producing hooks should enqueue through `agent_lifecycle_spool_jobs` unless the hook must synchronously return agent-visible output, allow/deny/modify a tool call, or inject prompt/session content before the agent continues.
+
+### Boundary Snapshot Policy
+
+The hook process captures volatile state before enqueue:
+
+| Snapshot kind | Captures | Used by |
 | --- | --- | --- |
-| Codex | `stop` | `TurnEnd` |
-| Claude Code | `stop` | `TurnEnd` |
-| Gemini | `after-agent` | `TurnEnd` |
-| Cursor | `stop` | `TurnEnd` |
-| Copilot | `agent-stop` | `TurnEnd` |
-| OpenCode | `turn-end` | `TurnEnd` |
+| none | raw hook payload only | SessionStart, SessionEnd, Compaction, pure observation hooks |
+| pre-boundary | untracked files, transcript offset | TurnStart, SubagentStart |
+| workspace | modified/new/deleted files | TurnEnd, SubagentEnd, shell TurnEnd, mixed Codex post-tool hooks |
+| workspace plus branch | workspace plus default-branch decision | TodoCheckpoint |
 
-### First Pilot
+The daemon consumes these snapshots when replaying the raw hook payload. It must not recompute hook-boundary state when a snapshot is present.
 
-| Agent | Hook | Event | Reason |
-| --- | --- | --- | --- |
-| Claude Code | `session-end` | `SessionEnd` | Tail recording only. |
-| Gemini | `session-end` | `SessionEnd` | Tail recording only. |
-| Gemini | `pre-compress` | `Compaction` | Compaction state recording only. |
-| Cursor | `pre-compact` | `Compaction` | Compaction state recording only. |
-| Copilot | `session-end` | `SessionEnd` | Tail recording only. |
-| OpenCode | `compaction` | `Compaction` | Compaction state recording only. |
-| OpenCode | `session-end` | `SessionEnd` | Tail recording only. |
-| Cursor | `session-end` | `SessionEnd` | Safe only with strict FIFO plus explicit failure logging/dead-letter visibility because it may finalize an open turn. |
+### No-Op Pass-Through Hooks
 
-### Observation Hooks Async
-
-| Agent | Hook | Event | Reason |
-| --- | --- | --- | --- |
-| Claude Code | `pre-tool-use` | `ToolInvocationObserved` | Records ordinary tool observation events only. |
-| Claude Code | `post-tool-use` | `ToolResultObserved` | Records ordinary tool result observation events only. |
-
-### Keep Synchronous
-
-Session-start and turn-start/prompt hooks stay synchronous in this phase because they establish state used by later hooks.
-
-Checkpoint-producing hooks also stay synchronous until their file-change boundary can be captured safely in the hook process.
-
-### Later Ordered Candidates
-
-Subagent/task/todo hooks can move after hook-time file-change snapshots exist for their checkpoint boundaries. Codex tool hooks remain synchronous for now because the same hook names also carry `Task` subagent lifecycle events.
-
-### Pass-Through Hooks
-
-Gemini tool/model/notification hooks and Copilot optional tool/error hooks currently parse to no lifecycle event. Do not enqueue them until they do useful lifecycle work.
+Gemini tool/model/notification hooks and Copilot optional tool/error hooks still parse to no lifecycle event. They are not enqueued until they perform actual Bitloops lifecycle work.
