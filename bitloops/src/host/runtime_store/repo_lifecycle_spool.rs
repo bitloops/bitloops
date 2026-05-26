@@ -587,15 +587,14 @@ fn ensure_lifecycle_spool_columns(conn: &rusqlite::Connection) -> Result<()> {
     let columns = rows
         .collect::<rusqlite::Result<HashSet<_>>>()
         .context("collecting lifecycle spool table columns")?;
-    if !columns.contains("boundary_snapshot") {
-        if let Err(err) = conn.execute_batch(
+    if !columns.contains("boundary_snapshot")
+        && let Err(err) = conn.execute_batch(
             r#"ALTER TABLE agent_lifecycle_spool_jobs
                ADD COLUMN boundary_snapshot TEXT"#,
-        ) {
-            if !is_duplicate_column_error(&err, "boundary_snapshot") {
-                return Err(err).context("adding lifecycle spool boundary_snapshot column");
-            }
-        }
+        )
+        && !is_duplicate_column_error(&err, "boundary_snapshot")
+    {
+        return Err(err).context("adding lifecycle spool boundary_snapshot column");
     }
     Ok(())
 }
