@@ -51,13 +51,13 @@ pub fn role_rule_condition_catalog() -> Value {
         },
         {
             "kind": "language_is",
-            "fact": "language.name",
+            "fact": "language.resolved",
             "value": "Language identifier from evidence, such as `rust` or `typescript`.",
             "description": "Use to keep a rule scoped to one language."
         },
         {
             "kind": "canonical_kind_is",
-            "fact": "symbol.canonical_kind",
+            "fact": "artefact.canonical_kind",
             "value": "Canonical artefact kind from evidence, such as `function`, `method`, `class`, or `test`.",
             "description": "Use to constrain rules to specific artefact kinds."
         },

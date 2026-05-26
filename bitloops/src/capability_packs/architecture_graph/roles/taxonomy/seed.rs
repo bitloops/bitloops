@@ -488,24 +488,60 @@ fn decode_seeded_rule_candidate_with_recovery(
         .and_then(Value::as_str)
         .map(str::to_string);
     let mut repairs = Vec::new();
+    let candidate_path = format!("rule_candidates[{candidate_index}]");
     rewrite_seed_candidate_conditions(
         candidate_index,
         role_slug.as_deref(),
         candidate_slug.as_deref(),
         &mut raw_candidate,
         &mut repairs,
-    )?;
+    )
+    .map_err(|(field_path, reason)| {
+        (
+            candidate_scoped_field_path(&candidate_path, &field_path),
+            reason,
+        )
+    })?;
     let candidate = serde_json::from_value::<SeededArchitectureRuleCandidate>(raw_candidate)
-        .map_err(|error| ("rule_candidates".to_string(), error.to_string()))?;
+        .map_err(|error| (candidate_path.clone(), error.to_string()))?;
     validate_rule_shape(
-        &format!("rule_candidates[{candidate_index}]"),
+        &candidate_path,
         &candidate.candidate_selector,
         &candidate.positive_conditions,
         &candidate.negative_conditions,
         &candidate.score,
     )
-    .map_err(|error| ("rule_candidates".to_string(), error.to_string()))?;
+    .map_err(|error| {
+        let message = error.to_string();
+        (
+            validation_error_field_path(&candidate_path, &message),
+            message,
+        )
+    })?;
     Ok((candidate, repairs))
+}
+
+fn candidate_scoped_field_path(candidate_path: &str, field_path: &str) -> String {
+    if field_path.starts_with("rule_candidates[") {
+        return field_path.to_string();
+    }
+    if field_path.is_empty() {
+        candidate_path.to_string()
+    } else {
+        format!("{candidate_path}.{field_path}")
+    }
+}
+
+fn validation_error_field_path(candidate_path: &str, message: &str) -> String {
+    let Some(rest) = message.strip_prefix(candidate_path) else {
+        return candidate_path.to_string();
+    };
+    let suffix = rest.split_whitespace().next().unwrap_or_default();
+    if suffix.is_empty() {
+        candidate_path.to_string()
+    } else {
+        format!("{candidate_path}{suffix}")
+    }
 }
 
 fn rewrite_seed_candidate_conditions(

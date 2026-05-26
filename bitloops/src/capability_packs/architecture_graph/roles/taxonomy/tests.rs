@@ -379,6 +379,16 @@ mod seeded_tests {
             .collect();
 
         assert_eq!(catalog_kinds, allowed);
+        assert!(entries.iter().any(|entry| {
+            entry.get("kind").and_then(serde_json::Value::as_str) == Some("language_is")
+                && entry.get("fact").and_then(serde_json::Value::as_str)
+                    == Some("language.resolved")
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.get("kind").and_then(serde_json::Value::as_str) == Some("canonical_kind_is")
+                && entry.get("fact").and_then(serde_json::Value::as_str)
+                    == Some("artefact.canonical_kind")
+        }));
         for entry in entries {
             assert!(
                 entry
@@ -713,6 +723,10 @@ mod seeded_tests {
         assert_eq!(decoded.accepted.len(), 1);
         assert_eq!(decoded.rejected.len(), 1);
         assert_eq!(decoded.accepted[0].positive_conditions[0].kind, "path");
+        assert_eq!(
+            decoded.rejected[0].field_path,
+            "rule_candidates[1].positive_conditions[0]"
+        );
     }
 
     #[test]
@@ -755,6 +769,73 @@ mod seeded_tests {
         assert!(decoded.repaired.is_empty());
         assert_eq!(decoded.rejected.len(), 1);
         assert!(decoded.rejected[0].reason.contains("unsupported op"));
+    }
+
+    #[test]
+    fn decode_seeded_rule_candidates_reports_candidate_index_for_serde_errors() {
+        let decoded = decode_seeded_rule_candidates_with_recovery(json!({
+            "rule_candidates": [
+                {
+                    "target_role_key": "command_dispatcher",
+                    "candidate_selector": {
+                        "target_kinds": ["file"],
+                        "path_prefixes": [],
+                        "path_suffixes": [],
+                        "path_contains": [],
+                        "languages": [],
+                        "canonical_kinds": [],
+                        "symbol_fqn_contains": [],
+                        "required_facts": [],
+                        "required_fact_any_groups": []
+                    },
+                    "positive_conditions": "not-an-array",
+                    "negative_conditions": [],
+                    "score": { "base_confidence": 0.8, "priority_hint": 100, "min_positive_ratio": 1.0 },
+                    "evidence": {},
+                    "metadata": {}
+                }
+            ]
+        }));
+
+        assert!(decoded.accepted.is_empty());
+        assert_eq!(decoded.rejected.len(), 1);
+        assert_eq!(decoded.rejected[0].field_path, "rule_candidates[0]");
+    }
+
+    #[test]
+    fn decode_seeded_rule_candidates_reports_validation_field_path() {
+        let decoded = decode_seeded_rule_candidates_with_recovery(json!({
+            "rule_candidates": [
+                {
+                    "target_role_key": "command_dispatcher",
+                    "candidate_selector": {
+                        "target_kinds": ["file"],
+                        "path_prefixes": [],
+                        "path_suffixes": [],
+                        "path_contains": [],
+                        "languages": [],
+                        "canonical_kinds": [],
+                        "symbol_fqn_contains": [],
+                        "required_facts": [],
+                        "required_fact_any_groups": []
+                    },
+                    "positive_conditions": [
+                        { "kind": "signature", "key": "contains", "op": "eq", "value": "Result", "score": 1.0 }
+                    ],
+                    "negative_conditions": [],
+                    "score": { "base_confidence": 0.8, "priority_hint": 100, "min_positive_ratio": 1.0 },
+                    "evidence": {},
+                    "metadata": {}
+                }
+            ]
+        }));
+
+        assert!(decoded.accepted.is_empty());
+        assert_eq!(decoded.rejected.len(), 1);
+        assert_eq!(
+            decoded.rejected[0].field_path,
+            "rule_candidates[0].positive_conditions"
+        );
     }
 
     #[test]

@@ -10,11 +10,11 @@ use crate::capability_packs::architecture_graph::roles::rules::{
     compile_detection_rules, evaluate_rules_over_facts,
 };
 use crate::capability_packs::architecture_graph::roles::storage::{
-    ArchitectureRoleRuleRecord, load_current_role_facts,
+    ArchitectureRoleRuleRecord, load_assignments_for_paths, load_current_role_facts,
 };
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
-    ArchitectureArtefactFact, ArchitectureRoleDetectionRule, RoleRuleCondition, RoleRuleLifecycle,
-    RoleSignalPolarity, RoleTarget, RuleSpecFile, TargetKind, parse_rule_score,
+    ArchitectureArtefactFact, ArchitectureRoleDetectionRule, AssignmentStatus, RoleRuleCondition,
+    RoleRuleLifecycle, RoleSignalPolarity, RoleTarget, RuleSpecFile, TargetKind, parse_rule_score,
     role_rule_candidate_selector_contract, role_rule_conditions_contract,
 };
 use crate::host::capability_host::gateways::RelationalGateway;
@@ -42,6 +42,8 @@ pub(in crate::capability_packs::architecture_graph::roles::migrations) async fn 
         BTreeSet::new()
     };
     let current_matches = target_keys(&current_targets);
+    let affected_assignment_ids =
+        active_assignment_ids_for_targets(relational, repo_id, role_id, &current_targets).await?;
     let added_matches = new_matches
         .difference(&current_matches)
         .cloned()
@@ -69,7 +71,7 @@ pub(in crate::capability_packs::architecture_graph::roles::migrations) async fn 
         "affected_rule_ids": existing_rule
             .map(|rule| vec![rule.rule_id.clone()])
             .unwrap_or_default(),
-        "affected_assignment_ids": current_matches.clone().into_iter().collect::<Vec<_>>(),
+        "affected_assignment_ids": affected_assignment_ids,
         "affected_artefact_ids": affected_artefact_ids.clone(),
         "affected_target_keys": affected_target_keys,
         "affected_roles": 1,
@@ -78,13 +80,35 @@ pub(in crate::capability_packs::architecture_graph::roles::migrations) async fn 
         "new_matches": new_matches,
         "added_matches": added_matches,
         "removed_matches": removed_matches,
-        "affected_assignments": current_matches.len() + added_matches.len(),
+        "affected_assignments": affected_assignment_ids.len(),
         "affected_artefacts": affected_artefact_ids.len(),
         "safety": safety,
         "downstream_review_work": {
             "reclassification_required": !removed_matches.is_empty() || !added_matches.is_empty(),
         }
     }))
+}
+
+async fn active_assignment_ids_for_targets(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    role_id: &str,
+    targets: &BTreeSet<RoleTarget>,
+) -> Result<BTreeSet<String>> {
+    let paths = targets
+        .iter()
+        .map(|target| target.path.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    Ok(load_assignments_for_paths(relational, repo_id, &paths)
+        .await?
+        .into_iter()
+        .filter(|assignment| assignment.role_id == role_id)
+        .filter(|assignment| assignment.status == AssignmentStatus::Active)
+        .filter(|assignment| targets.contains(&assignment.target))
+        .map(|assignment| assignment.assignment_id)
+        .collect())
 }
 
 async fn load_preview_role_facts(
@@ -238,6 +262,7 @@ fn preview_target_key(target: &RoleTarget) -> String {
         TargetKind::Artefact => target
             .artefact_id
             .clone()
+            .map(|artefact_id| format!("artefact:{artefact_id}"))
             .unwrap_or_else(|| format!("artefact:{}", target.path)),
         TargetKind::Symbol => target
             .symbol_id

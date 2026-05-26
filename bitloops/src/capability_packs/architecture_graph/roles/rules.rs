@@ -79,6 +79,8 @@ fn compile_detection_rule(
     validate_condition_scores(&positive_conditions, &rule.rule_id)?;
     validate_condition_scores(&negative_conditions, &rule.rule_id)?;
     validate_positive_evidence_shape(&positive_conditions, &rule.rule_id)?;
+    validate_rule_unit_interval("score", rule.score, &rule.rule_id)?;
+    validate_rule_unit_interval("min_positive_ratio", rule.min_positive_ratio, &rule.rule_id)?;
     Ok(CompiledArchitectureRoleRule {
         rule,
         selector,
@@ -96,6 +98,13 @@ fn validate_condition_scores(conditions: &[RoleFactCondition], rule_id: &str) ->
                 condition.key
             );
         }
+    }
+    Ok(())
+}
+
+fn validate_rule_unit_interval(field_name: &str, value: f64, rule_id: &str) -> Result<()> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        bail!("rule {rule_id} {field_name} must be between 0 and 1");
     }
     Ok(())
 }
@@ -575,6 +584,27 @@ mod tests {
         .expect_err("signature-only rule should be rejected");
 
         assert!(err.to_string().contains("signature"));
+    }
+
+    #[test]
+    fn compile_detection_rules_rejects_min_positive_ratio_outside_unit_interval() {
+        let mut too_high = detection_rule_with_conditions(serde_json::json!([
+            { "kind": "path", "key": "segment", "op": "eq", "value": "cli", "score": 1.0 }
+        ]));
+        too_high.min_positive_ratio = 1.01;
+
+        let err = compile_detection_rules(vec![too_high])
+            .expect_err("min_positive_ratio above 1 should be rejected");
+        assert!(err.to_string().contains("min_positive_ratio"));
+
+        let mut too_low = detection_rule_with_conditions(serde_json::json!([
+            { "kind": "path", "key": "segment", "op": "eq", "value": "cli", "score": 1.0 }
+        ]));
+        too_low.min_positive_ratio = -0.01;
+
+        let err = compile_detection_rules(vec![too_low])
+            .expect_err("min_positive_ratio below 0 should be rejected");
+        assert!(err.to_string().contains("min_positive_ratio"));
     }
 
     #[test]

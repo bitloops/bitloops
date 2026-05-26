@@ -456,7 +456,28 @@ mod deterministic_tests {
     -> Result<()> {
         let relational = relational().await?;
         let role = seed_role(&relational).await?;
-        seed_assignment(&relational, "artefact-1", &role.role_id).await?;
+        let assigned_target =
+            taxonomy::RoleTarget::artefact("artefact-1", "symbol-1", "src/cli/commands/run.rs");
+        let assignment_id = taxonomy::assignment_id("repo-1", &role.role_id, &assigned_target);
+        upsert_assignment(
+            &relational,
+            &taxonomy::ArchitectureRoleAssignment {
+                assignment_id: assignment_id.clone(),
+                repo_id: "repo-1".to_string(),
+                role_id: role.role_id.clone(),
+                target: assigned_target,
+                priority: taxonomy::AssignmentPriority::Primary,
+                status: taxonomy::AssignmentStatus::Active,
+                source: taxonomy::AssignmentSource::Rule,
+                confidence: 0.9,
+                evidence: json!([]),
+                provenance: json!({"source": "test"}),
+                classifier_version: "test".to_string(),
+                rule_version: Some(1),
+                generation_seq: 1,
+            },
+        )
+        .await?;
 
         let split = create_split_role_proposal(
             &relational,
@@ -523,11 +544,19 @@ mod deterministic_tests {
         .await?;
         assert_eq!(
             rule_preview.preview_payload["added_matches"],
-            json!(["artefact-2"])
+            json!(["artefact:artefact-2"])
         );
         assert_eq!(
             rule_preview.preview_payload["removed_matches"],
-            json!(["artefact-1"])
+            json!(["artefact:artefact-1"])
+        );
+        assert_eq!(
+            rule_preview.preview_payload["affected_target_keys"],
+            json!(["artefact:artefact-1", "artefact:artefact-2"])
+        );
+        assert_eq!(
+            rule_preview.preview_payload["affected_assignment_ids"],
+            json!([assignment_id])
         );
         Ok(())
     }
