@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **Dashboard bundle install now falls back once when the newest compatible bundle archive 404s** (`CLI-1918`): `fetchBundle` now tries the next compatible `bundle_versions.json` entry when the selected archive returns HTTP 404, while preserving hard failures for checksum mismatches and limiting fallback to one older version.
+
 - **Dashboard config saves now apply safe daemon changes without a manual restart**: daemon `config.toml` saves now validate, atomically write, and immediately hot-reload reloadable fields such as inference profiles and capability bindings for future work. Structural changes still schedule a deduplicated delayed daemon restart, and the daemon watches the config directory so manual TOML edits go through the same reload-or-restart decision path.
 
 - **Init and configure semantic setup now match the repo-local config split**: `bitloops configure` writes the default daemon config, starts or restarts the always-on daemon by default, and avoids opening store databases during configuration so DuckDB event-store locks from a running daemon do not block setup. `bitloops init` now keeps final setup focused on sync/ingest while restoring separate interactive setup choices for code embeddings, semantic summaries, and summary embeddings. Summary embeddings can be configured and run independently of code embeddings, so skipping code embeddings no longer hides the summary-embeddings prompt or lane.

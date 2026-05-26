@@ -68,6 +68,7 @@ pub(super) enum BundleError {
     ManifestFetchFailed(String),
     ManifestParseFailed(String),
     NoCompatibleVersion,
+    BundleDownloadNotFound(String),
     BundleDownloadFailed(String),
     ChecksumMismatch,
     BundleInstallFailed(String),
