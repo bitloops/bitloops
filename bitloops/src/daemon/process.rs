@@ -348,6 +348,28 @@ pub(super) fn terminate_process_and_wait_for_shutdown_cleanup(
     )
 }
 
+pub(super) fn cleanup_spawned_daemon_after_startup_failure(
+    pid: u32,
+    launch_mode: &str,
+) -> Result<()> {
+    if !process_is_running(pid)? {
+        log::debug!("spawned {launch_mode} daemon pid={pid} exited before startup cleanup");
+        if let Err(err) = read_runtime_state(Path::new(".")) {
+            log::warn!(
+                "failed to inspect daemon runtime state after spawned {launch_mode} daemon pid={pid} exited: {err:#}"
+            );
+        }
+        return Ok(());
+    }
+
+    terminate_process_and_wait_for_shutdown_cleanup(
+        pid,
+        STOP_TIMEOUT,
+        STOP_RUNTIME_CLEAN_EXIT_GRACE,
+        FORCE_KILL_TIMEOUT,
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ShutdownCleanupStatus {
     process_exited: bool,

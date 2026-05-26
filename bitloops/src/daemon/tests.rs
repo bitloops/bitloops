@@ -174,6 +174,31 @@ async fn daemon_lifecycle_logs_terminal_restart_failure() {
     );
 }
 
+#[tokio::test]
+async fn spawned_daemon_readiness_timeout_stops_spawned_process() {
+    let cwd = TempDir::new().expect("temp cwd");
+    let state_root = TempDir::new().expect("temp state root");
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(cwd.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_root_str.as_str()),
+        )],
+    );
+
+    let pid = spawn_detached_long_lived_process();
+    let err = lifecycle::wait_until_ready_for_spawned_daemon(pid, "test", Duration::from_millis(1))
+        .await
+        .expect_err("readiness should time out without daemon runtime state");
+    let message = err.to_string();
+    assert!(
+        message.contains("did not become ready"),
+        "expected readiness timeout, got: {message}"
+    );
+    wait_for_pid_exit(pid);
+}
+
 #[test]
 fn supervisor_service_name_is_global_and_stable() {
     assert_eq!(GLOBAL_SUPERVISOR_SERVICE_NAME, "com.bitloops.daemon");

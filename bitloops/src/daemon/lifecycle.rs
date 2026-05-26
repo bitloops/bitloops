@@ -90,8 +90,9 @@ pub(super) async fn start_detached(
                 daemon_config.config_path.display()
             )
         })?;
-        log::debug!("spawned detached daemon pid={}", child.id());
-        wait_until_ready(READY_TIMEOUT).await
+        let child_pid = child.id();
+        log::debug!("spawned detached daemon pid={child_pid}");
+        wait_until_ready_for_spawned_daemon(child_pid, "detached", READY_TIMEOUT).await
     }
     .await;
     if let Err(err) = &result {
@@ -347,6 +348,28 @@ pub(super) async fn wait_until_ready(timeout: Duration) -> Result<DaemonRuntimeS
         }
 
         tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+pub(super) async fn wait_until_ready_for_spawned_daemon(
+    pid: u32,
+    launch_mode: &str,
+    timeout: Duration,
+) -> Result<DaemonRuntimeState> {
+    match wait_until_ready(timeout).await {
+        Ok(state) => Ok(state),
+        Err(err) => {
+            log::warn!(
+                "spawned {launch_mode} daemon pid={pid} failed to become ready; stopping spawned process before returning startup failure: {err:#}"
+            );
+            if let Err(cleanup_err) = cleanup_spawned_daemon_after_startup_failure(pid, launch_mode)
+            {
+                log::error!(
+                    "failed to stop spawned {launch_mode} daemon pid={pid} after startup failure: {cleanup_err:#}"
+                );
+            }
+            Err(err)
+        }
     }
 }
 
