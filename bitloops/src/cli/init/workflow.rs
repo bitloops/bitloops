@@ -1,7 +1,7 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::workflow_output::{
@@ -22,7 +22,8 @@ use crate::cli::embeddings::{
 };
 use crate::cli::inference::{
     SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
-    platform_summary_gateway_url_override, summary_generation_configured,
+    ensure_required_managed_inference_runtime_for_init, platform_summary_gateway_url_override,
+    summary_generation_configured,
 };
 use crate::cli::telemetry_consent;
 use crate::config::REPO_POLICY_LOCAL_FILE_NAME;
@@ -33,7 +34,7 @@ use crate::config::settings::{
 };
 use crate::config::{
     RepoSemanticEmbeddingPolicy, SemanticCloneEmbeddingMode, SemanticClonesInferenceBindings,
-    SemanticSummaryMode,
+    SemanticSummaryMode, resolve_preferred_daemon_config_path_for_repo,
 };
 
 const DEFAULT_INIT_CODE_EMBEDDINGS_PROFILE: &str = "platform_code";
@@ -159,6 +160,24 @@ pub(crate) async fn run_for_project_root(
     let should_ingest = final_setup_selection.ingest;
     set_devql_producer_settings(&local_policy_path, should_sync, should_ingest)?;
     let semantic_selection = init_semantic_runtime_selection(should_sync, &semantic_policy);
+
+    if should_sync || should_ingest {
+        let config_path = resolve_preferred_daemon_config_path_for_repo(project_root)?;
+        if let Some(lines) =
+            ensure_required_managed_inference_runtime_for_init(project_root, &config_path)
+                .with_context(|| {
+                    format!(
+                        "Bitloops init could not install the managed inference runtime required by daemon config: {}",
+                        config_path.display()
+                    )
+                })?
+        {
+            for line in lines {
+                writeln!(out, "{line}")?;
+            }
+            out.flush()?;
+        }
+    }
 
     if crate::daemon::daemon_url()?.is_some() {
         crate::cli::watcher_bootstrap::reconcile_repo_watcher(project_root)

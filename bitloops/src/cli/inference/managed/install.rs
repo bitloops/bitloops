@@ -22,8 +22,9 @@ use super::config::{
     MANAGED_INFERENCE_VERSION_OVERRIDE_ENV, ManagedInferenceInstallMetadata,
     ManagedInferenceMetadataError, load_managed_inference_install_metadata,
     managed_inference_binary_dir, managed_inference_binary_name, managed_inference_binary_path,
-    managed_inference_bundle_is_complete, reset_managed_inference_install_dir,
-    rewrite_managed_runtime_command_if_eligible, save_managed_inference_install_metadata,
+    managed_inference_bundle_is_complete, managed_inference_runtime_required_for_repo,
+    reset_managed_inference_install_dir, rewrite_managed_runtime_command_if_eligible,
+    save_managed_inference_install_metadata,
 };
 
 const MANAGED_INFERENCE_RELEASES_API_BASE: &str =
@@ -130,6 +131,19 @@ pub(crate) fn ensure_managed_inference_runtime(
         &outcome,
         config_path,
     ))
+}
+
+pub(crate) fn ensure_required_managed_inference_runtime_for_init(
+    repo_root: &Path,
+    config_path: &Path,
+) -> Result<Option<Vec<String>>> {
+    if !managed_inference_runtime_required_for_repo(repo_root, config_path)? {
+        return Ok(None);
+    }
+
+    let outcome = ensure_managed_inference_runtime_with_config(repo_root, Some(config_path))?;
+    let lines = format_managed_inference_runtime_lines_for_init(&outcome, config_path);
+    Ok((!lines.is_empty()).then_some(lines))
 }
 
 pub(crate) fn install_or_bootstrap_inference_with_progress<R>(
@@ -243,6 +257,32 @@ fn format_managed_inference_runtime_lines(
     if let Some(config_path) = config_path
         && outcome.command_rewritten
     {
+        lines.push(format!(
+            "Updated inference runtime command and args in {}.",
+            config_path.display()
+        ));
+    }
+
+    lines
+}
+
+fn format_managed_inference_runtime_lines_for_init(
+    outcome: &ManagedInferenceRuntimeEnsureOutcome,
+    config_path: &Path,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if outcome.install.freshly_installed {
+        lines.push(format!(
+            "Installed managed standalone `bitloops-inference` runtime {}.",
+            outcome.install.version
+        ));
+        lines.push(format!(
+            "Binary path: {}",
+            outcome.install.binary_path.display()
+        ));
+    }
+
+    if outcome.command_rewritten {
         lines.push(format!(
             "Updated inference runtime command and args in {}.",
             config_path.display()

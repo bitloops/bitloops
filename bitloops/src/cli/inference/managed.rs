@@ -8,8 +8,8 @@ pub(crate) use config::{
 #[allow(unused_imports)]
 pub(crate) use install::{
     ManagedInferenceInstallPhase, ManagedInferenceInstallProgress,
-    ensure_managed_inference_runtime, install_or_bootstrap_inference,
-    install_or_bootstrap_inference_with_progress,
+    ensure_managed_inference_runtime, ensure_required_managed_inference_runtime_for_init,
+    install_or_bootstrap_inference, install_or_bootstrap_inference_with_progress,
 };
 
 #[cfg(test)]

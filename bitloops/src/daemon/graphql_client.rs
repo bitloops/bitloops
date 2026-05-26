@@ -86,10 +86,16 @@ async fn execute_graphql_request<T: DeserializeOwned>(
             crate::devql_timing::timing_header_value(),
         );
     }
-    let response = request
-        .send()
-        .await
-        .context("sending DevQL request to Bitloops daemon")?;
+    let response = request.send().await.map_err(|err| {
+        if err.is_timeout() {
+            anyhow::anyhow!(
+                "Bitloops daemon did not respond within {} seconds while sending DevQL request to {endpoint_path}. Run `bitloops daemon restart` and retry.",
+                DAEMON_HTTP_REQUEST_TIMEOUT.as_secs()
+            )
+        } else {
+            anyhow::anyhow!(err).context("sending DevQL request to Bitloops daemon")
+        }
+    })?;
     if let Some(trace) = trace.as_ref() {
         trace.record(
             "client.daemon.http_post",
@@ -204,5 +210,106 @@ fn emit_query_timing_debug(
     }
     if let Some(trace) = trace {
         crate::devql_timing::print_summary("client", &trace.summary_value());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::execute_runtime_graphql;
+    use crate::daemon::{DaemonMode, DaemonRuntimeState};
+    use crate::test_support::process_state::enter_process_state;
+    use serde_json::json;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+
+    async fn start_nonresponsive_daemon_socket() -> (String, oneshot::Receiver<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind nonresponsive daemon socket");
+        let port = listener.local_addr().expect("local addr").port();
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept daemon request");
+            let _stream = stream;
+            let _ = accepted_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        (format!("http://127.0.0.1:{port}"), accepted_rx)
+    }
+
+    fn runtime_state_for_repo(repo: &TempDir, url: String) -> DaemonRuntimeState {
+        DaemonRuntimeState {
+            version: 1,
+            config_path: repo.path().join(".bitloops/config.toml"),
+            config_root: repo.path().to_path_buf(),
+            pid: std::process::id(),
+            mode: DaemonMode::Detached,
+            service_name: None,
+            url,
+            host: "127.0.0.1".to_string(),
+            port: 0,
+            bundle_dir: repo.path().join(".bitloops/dashboard"),
+            relational_db_path: repo.path().join(".bitloops/relational.db"),
+            events_db_path: repo.path().join(".bitloops/events.duckdb"),
+            blob_store_path: repo.path().join(".bitloops/blob"),
+            repo_registry_path: repo.path().join(".bitloops/repo-registry.json"),
+            binary_fingerprint: String::new(),
+            updated_at_unix: 0,
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn runtime_graphql_times_out_when_daemon_accepts_without_reply() {
+        let repo = TempDir::new().expect("repo");
+        let state_root = TempDir::new().expect("state root");
+        let state_root_str = state_root.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            Some(repo.path()),
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            )],
+        );
+        let (url, accepted_rx) = start_nonresponsive_daemon_socket().await;
+        super::write_runtime_state(
+            &super::runtime_state_path(repo.path()),
+            &runtime_state_for_repo(&repo, url),
+        )
+        .expect("write daemon runtime state");
+
+        let repo_root = repo.path().to_path_buf();
+        let request = tokio::spawn(async move {
+            execute_runtime_graphql::<serde_json::Value>(
+                repo_root.as_path(),
+                "{ runtimeSnapshot(repoId: \"repo-1\") { repoId } }",
+                json!({}),
+            )
+            .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), accepted_rx)
+            .await
+            .expect("runtime GraphQL request should reach the socket")
+            .expect("daemon socket should report accepted request");
+
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        tokio::task::yield_now().await;
+
+        assert!(
+            request.is_finished(),
+            "runtime GraphQL request should not wait forever when the daemon accepts but never replies"
+        );
+        let err = request
+            .await
+            .expect("runtime GraphQL task should join")
+            .expect_err("nonresponsive daemon should fail the request");
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.contains("Bitloops daemon did not respond"),
+            "timeout error should explain the daemon was nonresponsive: {rendered}"
+        );
     }
 }

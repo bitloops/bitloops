@@ -1,6 +1,10 @@
 use super::types::INTERNAL_DAEMON_COMMAND_NAME;
 use super::*;
 
+pub(super) const DAEMON_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+pub(super) const DAEMON_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const DAEMON_READY_REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ChildTerminationRecord {
     pub(super) pid: u32,
@@ -599,6 +603,7 @@ pub(super) async fn daemon_http_ready(state: &DaemonRuntimeState) -> bool {
     let url = format!("{}/devql/sdl", state.url.trim_end_matches('/'));
     client
         .get(url)
+        .timeout(DAEMON_READY_REQUEST_TIMEOUT)
         .send()
         .await
         .map(|response| response.status().is_success())
@@ -611,6 +616,8 @@ pub(super) fn daemon_http_client(url: &str) -> Result<reqwest::Client> {
         builder = builder.danger_accept_invalid_certs(true);
     }
     builder
+        .connect_timeout(DAEMON_HTTP_CONNECT_TIMEOUT)
+        .timeout(DAEMON_HTTP_REQUEST_TIMEOUT)
         .build()
         .context("building Bitloops daemon HTTP client")
 }
@@ -681,22 +688,60 @@ fn should_accept_invalid_daemon_certs(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::should_accept_invalid_daemon_certs;
     #[cfg(not(windows))]
     use super::unix_kill_zero_indicates_running;
+    use super::{daemon_http_ready, should_accept_invalid_daemon_certs};
     #[cfg(unix)]
     use super::{
         process_is_running, reap_terminated_child_process,
         terminate_process_and_wait_for_shutdown_cleanup, wait_for_shutdown_cleanup,
     };
+    use crate::daemon::{DaemonMode, DaemonRuntimeState};
     #[cfg(unix)]
     use crate::test_support::process_state::enter_process_state;
     #[cfg(unix)]
     use std::process::Command;
-    #[cfg(unix)]
     use std::time::{Duration, Instant};
     #[cfg(unix)]
     use tempfile::TempDir;
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+
+    async fn start_nonresponsive_daemon_socket() -> (String, oneshot::Receiver<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind nonresponsive daemon socket");
+        let port = listener.local_addr().expect("local addr").port();
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept daemon request");
+            let _stream = stream;
+            let _ = accepted_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        (format!("http://127.0.0.1:{port}"), accepted_rx)
+    }
+
+    fn runtime_state_for_url(url: String) -> DaemonRuntimeState {
+        DaemonRuntimeState {
+            version: 1,
+            config_path: "/tmp/bitloops-test-config.toml".into(),
+            config_root: "/tmp/bitloops-test-config-root".into(),
+            pid: std::process::id(),
+            mode: DaemonMode::Detached,
+            service_name: None,
+            url,
+            host: "127.0.0.1".to_string(),
+            port: 0,
+            bundle_dir: "/tmp/bitloops-test-bundle".into(),
+            relational_db_path: "/tmp/bitloops-test-relational.db".into(),
+            events_db_path: "/tmp/bitloops-test-events.duckdb".into(),
+            blob_store_path: "/tmp/bitloops-test-blob".into(),
+            repo_registry_path: "/tmp/bitloops-test-repo-registry.json".into(),
+            binary_fingerprint: String::new(),
+            updated_at_unix: 0,
+        }
+    }
 
     #[test]
     fn daemon_http_client_only_relaxes_loopback_https_urls() {
@@ -708,6 +753,31 @@ mod tests {
             "https://dev.internal:5667"
         ));
         assert!(!should_accept_invalid_daemon_certs("not-a-url"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn daemon_http_ready_times_out_when_daemon_accepts_without_reply() {
+        let (url, accepted_rx) = start_nonresponsive_daemon_socket().await;
+        let ready =
+            tokio::spawn(async move { daemon_http_ready(&runtime_state_for_url(url)).await });
+
+        tokio::time::timeout(Duration::from_secs(5), accepted_rx)
+            .await
+            .expect("daemon readiness request should reach the socket")
+            .expect("daemon socket should report accepted request");
+
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(2)).await;
+        tokio::task::yield_now().await;
+
+        assert!(
+            ready.is_finished(),
+            "daemon readiness probe should not wait forever when the daemon accepts but never replies"
+        );
+        assert!(
+            !ready.await.expect("readiness task should join"),
+            "nonresponsive daemon should not be reported ready"
+        );
     }
 
     #[cfg(not(windows))]
