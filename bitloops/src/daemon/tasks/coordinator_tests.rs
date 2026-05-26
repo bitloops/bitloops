@@ -144,6 +144,7 @@ enabled = true
                 hook_name: hook_name.to_string(),
                 raw_stdin,
                 workspace_snapshot,
+                boundary_snapshot: None,
                 cwd: self.repo_root.clone(),
                 received_at_unix,
             },
@@ -239,6 +240,7 @@ fn daemon_lifecycle_spool_worker_processes_supported_terminal_jobs_one_at_a_time
                     crate::host::checkpoints::lifecycle::spool::LifecycleWorkspaceSnapshot::default(
                     ),
                 ),
+                boundary_snapshot: None,
                 cwd: harness.repo_root.clone(),
                 received_at_unix: 1_778_800_000 + u64::try_from(index).unwrap_or_default(),
             },

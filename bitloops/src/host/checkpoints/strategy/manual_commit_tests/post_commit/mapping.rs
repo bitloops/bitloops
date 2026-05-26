@@ -68,6 +68,7 @@ pub(crate) fn post_commit_defers_derivation_when_lifecycle_spool_work_is_pending
             workspace_snapshot: Some(
                 crate::host::checkpoints::lifecycle::spool::LifecycleWorkspaceSnapshot::default(),
             ),
+            boundary_snapshot: None,
             cwd: dir.path().to_path_buf(),
             received_at_unix: 1_778_800_000,
         },

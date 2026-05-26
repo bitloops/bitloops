@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS agent_lifecycle_spool_jobs (
     hook_name TEXT NOT NULL,
     raw_stdin TEXT NOT NULL,
     workspace_snapshot TEXT,
+    boundary_snapshot TEXT,
     cwd TEXT NOT NULL,
     status TEXT NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
@@ -101,6 +102,16 @@ pub(crate) struct LifecycleWorkspaceSnapshot {
     pub(crate) deleted_files: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct LifecycleBoundarySnapshot {
+    pub(crate) workspace: Option<LifecycleWorkspaceSnapshot>,
+    pub(crate) pre_untracked_files: Vec<String>,
+    pub(crate) transcript_offset: Option<i64>,
+    pub(crate) branch_name: Option<String>,
+    pub(crate) is_default_branch: Option<bool>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LifecycleJobInsert {
     pub(crate) repo_id: String,
@@ -110,6 +121,7 @@ pub(crate) struct LifecycleJobInsert {
     pub(crate) hook_name: String,
     pub(crate) raw_stdin: String,
     pub(crate) workspace_snapshot: Option<LifecycleWorkspaceSnapshot>,
+    pub(crate) boundary_snapshot: Option<LifecycleBoundarySnapshot>,
     pub(crate) cwd: PathBuf,
     pub(crate) received_at_unix: u64,
 }
@@ -125,6 +137,7 @@ pub(crate) struct LifecycleJobRecord {
     pub(crate) hook_name: String,
     pub(crate) raw_stdin: String,
     pub(crate) workspace_snapshot: Option<LifecycleWorkspaceSnapshot>,
+    pub(crate) boundary_snapshot: Option<LifecycleBoundarySnapshot>,
     pub(crate) cwd: PathBuf,
     pub(crate) status: LifecycleJobStatus,
     pub(crate) attempts: u64,
@@ -149,7 +162,10 @@ pub(crate) fn initialise_lifecycle_spool_schema(sqlite: &SqliteConnectionPool) -
     sqlite
         .execute_batch(LIFECYCLE_SPOOL_SCHEMA_SQLITE)
         .context("initialising lifecycle spool schema")?;
-    sqlite.with_write_connection(migrate_legacy_lifecycle_stop_spool_jobs)
+    sqlite.with_write_connection(|conn| {
+        ensure_lifecycle_spool_columns(conn)?;
+        migrate_legacy_lifecycle_stop_spool_jobs(conn)
+    })
 }
 
 pub(crate) fn unix_timestamp_now() -> u64 {
@@ -375,8 +391,8 @@ pub(crate) fn list_lifecycle_jobs_for_tests(
         let mut stmt = conn
             .prepare(
                 "SELECT sequence, job_id, repo_id, repo_root, config_root, agent_name, hook_name,
-                        raw_stdin, workspace_snapshot, cwd, status, attempts, available_at_unix,
-                        received_at_unix, updated_at_unix, last_error
+                        raw_stdin, workspace_snapshot, boundary_snapshot, cwd, status, attempts,
+                        available_at_unix, received_at_unix, updated_at_unix, last_error
                  FROM agent_lifecycle_spool_jobs
                  ORDER BY sequence ASC",
             )
@@ -431,6 +447,7 @@ fn open_hook_safe_sqlite(db_path: &Path) -> Result<rusqlite::Connection> {
         .context("configuring hook-safe lifecycle SQLite pragmas")?;
     conn.execute_batch(LIFECYCLE_SPOOL_SCHEMA_SQLITE)
         .context("initialising hook-safe lifecycle spool schema")?;
+    ensure_lifecycle_spool_columns(&conn)?;
     migrate_legacy_lifecycle_stop_spool_jobs(&conn)?;
     Ok(conn)
 }
@@ -448,15 +465,21 @@ fn insert_lifecycle_job(conn: &rusqlite::Connection, insert: LifecycleJobInsert)
         .map(serde_json::to_string)
         .transpose()
         .context("serialising lifecycle workspace snapshot")?;
+    let boundary_snapshot = insert
+        .boundary_snapshot
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .context("serialising lifecycle boundary snapshot")?;
     conn.execute(
         "INSERT INTO agent_lifecycle_spool_jobs (
             job_id, repo_id, repo_root, config_root, agent_name, hook_name,
-            raw_stdin, workspace_snapshot, cwd, status, attempts, available_at_unix,
+            raw_stdin, workspace_snapshot, boundary_snapshot, cwd, status, attempts, available_at_unix,
             received_at_unix, updated_at_unix, last_error
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6,
-            ?7, ?8, ?9, ?10, 0, ?11,
-            ?12, ?13, NULL
+            ?7, ?8, ?9, ?10, ?11, 0, ?12,
+            ?13, ?14, NULL
          )",
         params![
             format!("lifecycle-job-{}", Uuid::new_v4()),
@@ -467,6 +490,7 @@ fn insert_lifecycle_job(conn: &rusqlite::Connection, insert: LifecycleJobInsert)
             insert.hook_name,
             insert.raw_stdin,
             workspace_snapshot,
+            boundary_snapshot,
             insert.cwd.to_string_lossy().to_string(),
             LifecycleJobStatus::Pending.as_str(),
             sql_i64(now)?,
@@ -483,8 +507,8 @@ fn select_oldest_active_lifecycle_job(
 ) -> Result<Option<LifecycleJobRecord>> {
     conn.query_row(
         "SELECT sequence, job_id, repo_id, repo_root, config_root, agent_name, hook_name,
-                raw_stdin, workspace_snapshot, cwd, status, attempts, available_at_unix,
-                received_at_unix, updated_at_unix, last_error
+                raw_stdin, workspace_snapshot, boundary_snapshot, cwd, status, attempts,
+                available_at_unix, received_at_unix, updated_at_unix, last_error
          FROM agent_lifecycle_spool_jobs
          WHERE status != ?1
          ORDER BY sequence ASC
@@ -499,8 +523,8 @@ fn select_oldest_active_lifecycle_job(
 fn load_lifecycle_job(conn: &rusqlite::Connection, job_id: &str) -> Result<LifecycleJobRecord> {
     conn.query_row(
         "SELECT sequence, job_id, repo_id, repo_root, config_root, agent_name, hook_name,
-                raw_stdin, workspace_snapshot, cwd, status, attempts, available_at_unix,
-                received_at_unix, updated_at_unix, last_error
+                raw_stdin, workspace_snapshot, boundary_snapshot, cwd, status, attempts,
+                available_at_unix, received_at_unix, updated_at_unix, last_error
          FROM agent_lifecycle_spool_jobs
          WHERE job_id = ?1",
         params![job_id],
@@ -513,6 +537,17 @@ fn map_lifecycle_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<LifecycleJobRe
     let workspace_snapshot = row
         .get::<_, Option<String>>("workspace_snapshot")?
         .map(parse_workspace_snapshot);
+    let boundary_snapshot = row
+        .get::<_, Option<String>>("boundary_snapshot")?
+        .map(parse_boundary_snapshot)
+        .or_else(|| {
+            workspace_snapshot
+                .clone()
+                .map(|workspace| LifecycleBoundarySnapshot {
+                    workspace: Some(workspace),
+                    ..LifecycleBoundarySnapshot::default()
+                })
+        });
     Ok(LifecycleJobRecord {
         sequence: row_i64_as_u64(row, "sequence")?,
         job_id: row.get("job_id")?,
@@ -523,6 +558,7 @@ fn map_lifecycle_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<LifecycleJobRe
         hook_name: row.get("hook_name")?,
         raw_stdin: row.get("raw_stdin")?,
         workspace_snapshot,
+        boundary_snapshot,
         cwd: PathBuf::from(row.get::<_, String>("cwd")?),
         status: LifecycleJobStatus::parse(&row.get::<_, String>("status")?),
         attempts: row_i64_as_u64(row, "attempts")?,
@@ -535,6 +571,38 @@ fn map_lifecycle_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<LifecycleJobRe
 
 fn parse_workspace_snapshot(raw: String) -> LifecycleWorkspaceSnapshot {
     serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn parse_boundary_snapshot(raw: String) -> LifecycleBoundarySnapshot {
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn ensure_lifecycle_spool_columns(conn: &rusqlite::Connection) -> Result<()> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(agent_lifecycle_spool_jobs)")
+        .context("preparing lifecycle spool table info query")?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .context("querying lifecycle spool table columns")?;
+    let columns = rows
+        .collect::<rusqlite::Result<HashSet<_>>>()
+        .context("collecting lifecycle spool table columns")?;
+    if !columns.contains("boundary_snapshot") {
+        if let Err(err) = conn.execute_batch(
+            r#"ALTER TABLE agent_lifecycle_spool_jobs
+               ADD COLUMN boundary_snapshot TEXT"#,
+        ) {
+            if !is_duplicate_column_error(&err, "boundary_snapshot") {
+                return Err(err).context("adding lifecycle spool boundary_snapshot column");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_duplicate_column_error(err: &rusqlite::Error, column_name: &str) -> bool {
+    let message = err.to_string();
+    message.contains("duplicate column name") && message.contains(column_name)
 }
 
 fn migrate_legacy_lifecycle_stop_spool_jobs(conn: &rusqlite::Connection) -> Result<()> {
@@ -633,6 +701,7 @@ mod tests {
             raw_stdin: r#"{"session_id":"session-1","transcript_path":"/tmp/session.jsonl"}"#
                 .to_string(),
             workspace_snapshot: Some(LifecycleWorkspaceSnapshot::default()),
+            boundary_snapshot: None,
             cwd: repo_root.to_path_buf(),
             received_at_unix: 1_778_800_000,
         }
@@ -882,6 +951,79 @@ mod tests {
         assert_eq!(workspace_snapshot.modified_files, vec!["src/main.rs"]);
         assert_eq!(workspace_snapshot.new_files, vec!["src/new.rs"]);
         assert_eq!(workspace_snapshot.deleted_files, vec!["old.rs"]);
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_spool_round_trips_boundary_snapshot() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let sqlite = sqlite_at(&dir);
+        initialise_lifecycle_spool_schema(&sqlite)?;
+
+        let mut insert = sample_insert(dir.path(), "user-prompt-submit");
+        insert.boundary_snapshot = Some(LifecycleBoundarySnapshot {
+            workspace: Some(LifecycleWorkspaceSnapshot {
+                modified_files: vec!["src/main.rs".to_string()],
+                new_files: vec!["src/new.rs".to_string()],
+                deleted_files: vec!["old.rs".to_string()],
+            }),
+            pre_untracked_files: vec!["scratch.txt".to_string()],
+            transcript_offset: Some(42),
+            branch_name: Some("feature/async-hooks".to_string()),
+            is_default_branch: Some(false),
+        });
+
+        enqueue_lifecycle_job_sqlite(&sqlite, insert)?;
+        let rows = list_lifecycle_jobs_for_tests(&sqlite)?;
+        let snapshot = rows[0]
+            .boundary_snapshot
+            .clone()
+            .expect("boundary snapshot should round-trip");
+
+        assert_eq!(
+            snapshot.workspace.as_ref().unwrap().modified_files,
+            vec!["src/main.rs"]
+        );
+        assert_eq!(snapshot.pre_untracked_files, vec!["scratch.txt"]);
+        assert_eq!(snapshot.transcript_offset, Some(42));
+        assert_eq!(snapshot.branch_name.as_deref(), Some("feature/async-hooks"));
+        assert_eq!(snapshot.is_default_branch, Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_spool_migrates_legacy_workspace_snapshot_into_boundary_snapshot() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let sqlite = sqlite_at(&dir);
+        sqlite.with_write_connection(|conn| {
+            conn.execute_batch(LIFECYCLE_SPOOL_SCHEMA_SQLITE)?;
+            conn.execute_batch(
+                r#"
+                INSERT INTO agent_lifecycle_spool_jobs (
+                    job_id, repo_id, repo_root, config_root, agent_name, hook_name,
+                    raw_stdin, workspace_snapshot, cwd, status, attempts,
+                    available_at_unix, received_at_unix, updated_at_unix, last_error
+                ) VALUES (
+                    'legacy-job', 'repo-1', '/tmp/repo', '/tmp/config', 'codex', 'stop',
+                    '{}', '{"modified_files":["legacy.rs"],"new_files":[],"deleted_files":[]}',
+                    '/tmp/repo', 'pending', 0, 1, 1, 1, NULL
+                );
+                "#,
+            )?;
+            Ok(())
+        })?;
+
+        initialise_lifecycle_spool_schema(&sqlite)?;
+        let rows = list_lifecycle_jobs_for_tests(&sqlite)?;
+        let snapshot = rows[0]
+            .boundary_snapshot
+            .clone()
+            .expect("legacy workspace snapshot should be exposed as boundary snapshot");
+
+        assert_eq!(
+            snapshot.workspace.as_ref().unwrap().modified_files,
+            vec!["legacy.rs"]
+        );
         Ok(())
     }
 

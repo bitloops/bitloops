@@ -621,6 +621,7 @@ fn enqueue_lifecycle_hook_from_hook(
         hook_name: hook_name.to_string(),
         raw_stdin: stdin.to_string(),
         workspace_snapshot,
+        boundary_snapshot: None,
         cwd,
         received_at_unix: crate::host::checkpoints::lifecycle::spool::unix_timestamp_now(),
     };

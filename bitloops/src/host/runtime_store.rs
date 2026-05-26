@@ -18,11 +18,12 @@ mod util;
 mod tests;
 
 pub(crate) use repo_lifecycle_spool::{
-    LifecycleHookEnqueueResult, LifecycleJobInsert, LifecycleJobRecord, LifecycleJobStatus,
-    LifecycleWorkspaceSnapshot, MAX_LIFECYCLE_JOB_ATTEMPTS, claim_next_lifecycle_job,
-    delete_lifecycle_job, enqueue_lifecycle_job_hook_safe_at, fail_or_requeue_lifecycle_job,
-    lifecycle_spool_has_repo_work, lifecycle_spool_repo_ids_with_work, mark_lifecycle_job_failed,
-    recover_running_lifecycle_jobs, requeue_lifecycle_job, unix_timestamp_now,
+    LifecycleBoundarySnapshot, LifecycleHookEnqueueResult, LifecycleJobInsert, LifecycleJobRecord,
+    LifecycleJobStatus, LifecycleWorkspaceSnapshot, MAX_LIFECYCLE_JOB_ATTEMPTS,
+    claim_next_lifecycle_job, delete_lifecycle_job, enqueue_lifecycle_job_hook_safe_at,
+    fail_or_requeue_lifecycle_job, lifecycle_spool_has_repo_work,
+    lifecycle_spool_repo_ids_with_work, mark_lifecycle_job_failed, recover_running_lifecycle_jobs,
+    requeue_lifecycle_job, unix_timestamp_now,
 };
 #[cfg(test)]
 pub(crate) use repo_lifecycle_spool::{
