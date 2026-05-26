@@ -56,6 +56,8 @@ impl BundleHttpServer {
             while !shutdown_for_thread.load(std::sync::atomic::Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
                         let mut buffer = [0_u8; 8192];
                         let Ok(read) = std::io::Read::read(&mut stream, &mut buffer) else {
                             continue;
