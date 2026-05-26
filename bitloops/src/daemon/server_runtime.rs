@@ -212,12 +212,8 @@ pub(super) async fn ensure_service_managed_repo_runtime(
     let child_pid = child.id();
     log::debug!("spawned service-managed daemon pid={child_pid}");
 
-    super::lifecycle::wait_until_ready_for_spawned_daemon(
-        child_pid,
-        "service-managed",
-        READY_TIMEOUT,
-    )
-    .await
+    super::lifecycle::wait_until_ready_for_spawned_daemon(child, "service-managed", READY_TIMEOUT)
+        .await
 }
 
 pub(super) fn stop_service_managed_repo_runtime() -> Result<()> {
