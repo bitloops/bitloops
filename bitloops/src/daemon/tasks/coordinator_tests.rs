@@ -120,6 +120,7 @@ enabled = true
             crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP,
             raw_stdin,
             Some(crate::host::checkpoints::lifecycle::spool::LifecycleWorkspaceSnapshot::default()),
+            None,
             received_at_unix,
         )
     }
@@ -131,6 +132,9 @@ enabled = true
         raw_stdin: String,
         workspace_snapshot: Option<
             crate::host::checkpoints::lifecycle::spool::LifecycleWorkspaceSnapshot,
+        >,
+        boundary_snapshot: Option<
+            crate::host::checkpoints::lifecycle::spool::LifecycleBoundarySnapshot,
         >,
         received_at_unix: u64,
     ) -> anyhow::Result<()> {
@@ -144,7 +148,7 @@ enabled = true
                 hook_name: hook_name.to_string(),
                 raw_stdin,
                 workspace_snapshot,
-                boundary_snapshot: None,
+                boundary_snapshot,
                 cwd: self.repo_root.clone(),
                 received_at_unix,
             },
@@ -359,6 +363,7 @@ fn daemon_lifecycle_spool_processes_session_end_and_compaction_pilot_jobs() -> a
             hook_name,
             raw_stdin.to_string(),
             None,
+            None,
             1_778_800_000 + u64::try_from(index).unwrap_or_default(),
         )?;
     }
@@ -430,6 +435,7 @@ fn daemon_lifecycle_spool_processes_observation_hook_jobs() -> anyhow::Result<()
             hook_name,
             raw_stdin.to_string(),
             None,
+            None,
             1_778_800_000 + u64::try_from(index).unwrap_or_default(),
         )?;
     }
@@ -450,6 +456,143 @@ fn daemon_lifecycle_spool_processes_observation_hook_jobs() -> anyhow::Result<()
     assert!(
         remaining.is_empty(),
         "processed observation jobs should be deleted"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn daemon_lifecycle_spool_processes_new_async_lifecycle_hook_families() -> anyhow::Result<()> {
+    let harness = LifecycleSpoolTestRepo::new()?;
+    let transcript_path = harness.write_transcript("new-async-hooks-session");
+
+    let pre_boundary_snapshot =
+        crate::host::checkpoints::lifecycle::spool::LifecycleBoundarySnapshot {
+            pre_untracked_files: vec!["scratch.txt".to_string()],
+            transcript_offset: Some(17),
+            ..Default::default()
+        };
+    let workspace_snapshot =
+        crate::host::checkpoints::lifecycle::spool::LifecycleWorkspaceSnapshot {
+            modified_files: vec!["tracked.txt".to_string()],
+            new_files: vec!["generated.txt".to_string()],
+            deleted_files: Vec::new(),
+        };
+    let branch_snapshot = crate::host::checkpoints::lifecycle::spool::LifecycleBoundarySnapshot {
+        workspace: Some(workspace_snapshot.clone()),
+        branch_name: Some("feature/async-hooks".to_string()),
+        is_default_branch: Some(false),
+        ..Default::default()
+    };
+    let workspace_boundary_snapshot =
+        crate::host::checkpoints::lifecycle::spool::LifecycleBoundarySnapshot {
+            workspace: Some(workspace_snapshot.clone()),
+            ..Default::default()
+        };
+
+    let cases = [
+        (
+            crate::adapters::agents::AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_USER_PROMPT_SUBMIT,
+            serde_json::json!({
+                "sessionId": "new-async-hooks-session",
+                "transcriptPath": transcript_path.to_string_lossy(),
+                "prompt": "implement async lifecycle",
+                "model": "codex-test",
+            }),
+            None,
+            Some(pre_boundary_snapshot.clone()),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_PRE_TOOL_USE,
+            serde_json::json!({
+                "sessionId": "new-async-hooks-session",
+                "transcriptPath": transcript_path.to_string_lossy(),
+                "toolName": "Task",
+                "toolUseId": "task-1",
+                "toolInput": {
+                    "description": "Inspect lifecycle spool",
+                    "prompt": "check daemon replay"
+                },
+                "model": "codex-test",
+            }),
+            None,
+            Some(pre_boundary_snapshot.clone()),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_POST_TOOL_USE,
+            serde_json::json!({
+                "sessionId": "new-async-hooks-session",
+                "transcriptPath": transcript_path.to_string_lossy(),
+                "toolName": "Task",
+                "toolUseId": "task-1",
+                "toolInput": {
+                    "description": "Inspect lifecycle spool",
+                    "prompt": "check daemon replay"
+                },
+                "toolResponse": {
+                    "agentId": "subagent-1",
+                    "content": "done"
+                },
+                "model": "codex-test",
+            }),
+            Some(workspace_snapshot.clone()),
+            Some(workspace_boundary_snapshot),
+        ),
+        (
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_POST_TODO,
+            serde_json::json!({
+                "session_id": "new-async-hooks-session",
+                "transcript_path": transcript_path.to_string_lossy(),
+                "tool_name": "TodoWrite",
+                "tool_use_id": "todo-1",
+                "tool_input": {
+                    "todos": [{
+                        "content": "Cover async lifecycle daemon replay",
+                        "status": "completed"
+                    }]
+                },
+                "model": "claude-test",
+            }),
+            Some(workspace_snapshot),
+            Some(branch_snapshot),
+        ),
+    ];
+
+    let expected_jobs = cases.len() as u64;
+
+    for (index, (agent_name, hook_name, raw_stdin, workspace_snapshot, boundary_snapshot)) in
+        cases.into_iter().enumerate()
+    {
+        harness.enqueue_lifecycle_job(
+            agent_name,
+            hook_name,
+            raw_stdin.to_string(),
+            workspace_snapshot,
+            boundary_snapshot,
+            1_778_800_000 + u64::try_from(index).unwrap_or_default(),
+        )?;
+    }
+
+    let mut processed = 0;
+    loop {
+        let processed_once = harness.process_once()?;
+        if processed_once == 0 {
+            break;
+        }
+        processed += processed_once;
+    }
+
+    assert_eq!(processed, expected_jobs);
+    let remaining =
+        crate::host::checkpoints::lifecycle::spool::list_lifecycle_jobs_for_tests(&harness.sqlite)
+            .expect("list lifecycle jobs");
+    assert!(
+        remaining.is_empty(),
+        "processed newly async lifecycle jobs should be deleted"
     );
 
     Ok(())
