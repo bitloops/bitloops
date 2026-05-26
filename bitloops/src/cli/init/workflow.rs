@@ -112,6 +112,8 @@ pub(crate) async fn run_for_project_root(
         &local_policy_path,
         project_root,
         args.embeddings_runtime,
+        args.summaries_runtime,
+        args.summary_embeddings_mode,
         out,
         input,
     )
@@ -216,15 +218,26 @@ async fn configure_init_semantic_policy(
     local_policy_path: &Path,
     project_root: &Path,
     explicit_embeddings_runtime: Option<crate::cli::embeddings::EmbeddingsRuntime>,
+    explicit_summaries_runtime: Option<crate::cli::init::SummariesRuntime>,
+    explicit_summary_embeddings_mode: Option<crate::cli::init::SummaryEmbeddingsMode>,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<RepoSemanticEmbeddingPolicy> {
     let existing = repo_semantic_embedding_policy(project_root)?;
-    if existing.present && !init_semantic_policy_needs_provider_setup(project_root, &existing) {
+    if existing.present
+        && explicit_embeddings_runtime.is_none()
+        && explicit_summaries_runtime.is_none()
+        && explicit_summary_embeddings_mode.is_none()
+        && !init_semantic_policy_needs_provider_setup(project_root, &existing)
+    {
         return Ok(existing);
     }
 
-    if !telemetry_consent::can_prompt_interactively() && explicit_embeddings_runtime.is_none() {
+    if !telemetry_consent::can_prompt_interactively()
+        && explicit_embeddings_runtime.is_none()
+        && explicit_summaries_runtime.is_none()
+        && explicit_summary_embeddings_mode.is_none()
+    {
         if existing.present {
             return Ok(existing);
         }
@@ -283,18 +296,24 @@ async fn configure_init_semantic_policy(
         InitEmbeddingsSetupSelection::Skip => {}
     }
 
-    let summary_selection =
-        choose_summary_setup_during_init(project_root, repo_selected_summaries, out, input)?;
+    let summary_selection = choose_summary_setup_during_init(
+        project_root,
+        repo_selected_summaries,
+        explicit_summaries_runtime,
+        out,
+        input,
+    )?;
     match summary_selection {
         SummarySetupSelection::Cloud => {
             login_required = true;
             let gateway_url = platform_summary_gateway_url_override();
-            let message = configure_cloud_summary_generation(project_root, gateway_url.as_deref())
-                .map_err(|err| {
-                    anyhow::anyhow!(
-                        "Bitloops init completed, but semantic summary setup failed: {err:#}"
-                    )
-                })?;
+            let message =
+                configure_cloud_summary_generation(project_root, gateway_url.as_deref(), None)
+                    .map_err(|err| {
+                        anyhow::anyhow!(
+                            "Bitloops init completed, but semantic summary setup failed: {err:#}"
+                        )
+                    })?;
             writeln!(out, "{message}")?;
             selected_summary_generation = current_summary_generation_profile(project_root);
         }
@@ -316,38 +335,107 @@ async fn configure_init_semantic_policy(
     }
 
     let summary_embedding_candidate = selected_code_embeddings.clone();
-    if selected_summary_generation.is_some() {
-        let summary_embeddings_selection = choose_summary_embeddings_setup_during_init(
-            repo_selected_summaries,
-            selected_summary_embeddings.is_some(),
-            summary_embedding_candidate.as_deref(),
-            out,
-            input,
-        )?;
-        match summary_embeddings_selection {
-            InitSummaryEmbeddingsSetupSelection::Existing => {}
-            InitSummaryEmbeddingsSetupSelection::UseSelectedEmbeddingsProvider => {
-                selected_summary_embeddings = summary_embedding_candidate;
+    match explicit_summary_embeddings_mode {
+        Some(crate::cli::init::SummaryEmbeddingsMode::Off) => {
+            selected_summary_embeddings = None;
+        }
+        Some(crate::cli::init::SummaryEmbeddingsMode::On) => {
+            if selected_summary_generation.is_none() {
+                bail!(
+                    "`--summary-embeddings-mode=on` requires summaries to be enabled for this init run."
+                );
             }
-            InitSummaryEmbeddingsSetupSelection::Cloud => {
-                login_required = true;
-                let gateway_url = platform_embeddings_gateway_url_override(None);
-                for line in install_or_configure_platform_embeddings(
-                    project_root,
-                    gateway_url.as_deref(),
-                    "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
-                )? {
-                    writeln!(out, "{line}")?;
+            if selected_summary_embeddings.is_none() {
+                if let Some(profile) = summary_embedding_candidate.clone() {
+                    selected_summary_embeddings = Some(profile);
+                } else {
+                    if !telemetry_consent::can_prompt_interactively() {
+                        bail!(
+                            "`--summary-embeddings-mode=on` requires an embeddings provider. Re-run interactively to choose one or pass `--embeddings-runtime local|platform`."
+                        );
+                    }
+                    let summary_embeddings_selection = choose_summary_embeddings_setup_during_init(
+                        repo_selected_summaries,
+                        selected_summary_embeddings.is_some(),
+                        summary_embedding_candidate.as_deref(),
+                        out,
+                        input,
+                    )?;
+                    match summary_embeddings_selection {
+                        InitSummaryEmbeddingsSetupSelection::Existing => {}
+                        InitSummaryEmbeddingsSetupSelection::UseSelectedEmbeddingsProvider => {
+                            if let Some(profile) = summary_embedding_candidate.clone() {
+                                selected_summary_embeddings = Some(profile);
+                            } else {
+                                bail!(
+                                    "`--summary-embeddings-mode=on` requires an embeddings provider."
+                                );
+                            }
+                        }
+                        InitSummaryEmbeddingsSetupSelection::Cloud => {
+                            login_required = true;
+                            let gateway_url = platform_embeddings_gateway_url_override(None);
+                            for line in install_or_configure_platform_embeddings(
+                                project_root,
+                                gateway_url.as_deref(),
+                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+                            )? {
+                                writeln!(out, "{line}")?;
+                            }
+                            selected_summary_embeddings =
+                                current_code_embeddings_profile(project_root);
+                        }
+                        InitSummaryEmbeddingsSetupSelection::Local => {
+                            for line in install_or_bootstrap_embeddings(project_root)? {
+                                writeln!(out, "{line}")?;
+                            }
+                            selected_summary_embeddings =
+                                current_code_embeddings_profile(project_root);
+                        }
+                        InitSummaryEmbeddingsSetupSelection::Skip => {
+                            bail!(
+                                "`--summary-embeddings-mode=on` requires selecting an embeddings provider."
+                            );
+                        }
+                    }
                 }
-                selected_summary_embeddings = current_code_embeddings_profile(project_root);
             }
-            InitSummaryEmbeddingsSetupSelection::Local => {
-                for line in install_or_bootstrap_embeddings(project_root)? {
-                    writeln!(out, "{line}")?;
+        }
+        None => {
+            if selected_summary_generation.is_some() {
+                let summary_embeddings_selection = choose_summary_embeddings_setup_during_init(
+                    repo_selected_summaries,
+                    selected_summary_embeddings.is_some(),
+                    summary_embedding_candidate.as_deref(),
+                    out,
+                    input,
+                )?;
+                match summary_embeddings_selection {
+                    InitSummaryEmbeddingsSetupSelection::Existing => {}
+                    InitSummaryEmbeddingsSetupSelection::UseSelectedEmbeddingsProvider => {
+                        selected_summary_embeddings = summary_embedding_candidate;
+                    }
+                    InitSummaryEmbeddingsSetupSelection::Cloud => {
+                        login_required = true;
+                        let gateway_url = platform_embeddings_gateway_url_override(None);
+                        for line in install_or_configure_platform_embeddings(
+                            project_root,
+                            gateway_url.as_deref(),
+                            "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+                        )? {
+                            writeln!(out, "{line}")?;
+                        }
+                        selected_summary_embeddings = current_code_embeddings_profile(project_root);
+                    }
+                    InitSummaryEmbeddingsSetupSelection::Local => {
+                        for line in install_or_bootstrap_embeddings(project_root)? {
+                            writeln!(out, "{line}")?;
+                        }
+                        selected_summary_embeddings = current_code_embeddings_profile(project_root);
+                    }
+                    InitSummaryEmbeddingsSetupSelection::Skip => {}
                 }
-                selected_summary_embeddings = current_code_embeddings_profile(project_root);
             }
-            InitSummaryEmbeddingsSetupSelection::Skip => {}
         }
     }
 

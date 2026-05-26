@@ -304,6 +304,19 @@ pub(super) fn write_platform_summary_profile(
     )
 }
 
+pub(super) fn write_platform_summary_profile_with_api_key_env(
+    repo_root: &Path,
+    gateway_url_override: Option<&str>,
+    api_key_env: &str,
+) -> Result<()> {
+    let api_key_env = api_key_env.trim();
+    if api_key_env.is_empty() {
+        bail!("summary platform API key environment variable cannot be empty");
+    }
+    let api_key = env_placeholder(api_key_env);
+    write_platform_summary_profile_with_api_key(repo_root, gateway_url_override, &api_key)
+}
+
 fn write_platform_summary_profile_with_api_key(
     repo_root: &Path,
     gateway_url_override: Option<&str>,

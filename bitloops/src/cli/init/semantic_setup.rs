@@ -16,6 +16,8 @@ use crate::cli::terminal_picker::{
 use crate::config::SemanticSummaryMode;
 use crate::config::settings::repo_semantic_embedding_policy;
 
+use super::SummariesRuntime;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InitEmbeddingsSetupSelection {
     Unchanged,
@@ -69,6 +71,7 @@ pub(crate) fn choose_embeddings_setup_during_init(
 pub(crate) fn choose_summary_setup_during_init(
     repo_root: &Path,
     repo_selected_summaries: bool,
+    explicit_runtime: Option<SummariesRuntime>,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<SummarySetupSelection> {
@@ -78,6 +81,13 @@ pub(crate) fn choose_summary_setup_during_init(
 
     if repo_summary_generation_configured(repo_root) {
         return Ok(SummarySetupSelection::Skip);
+    }
+
+    if let Some(runtime) = explicit_runtime {
+        return Ok(match runtime {
+            SummariesRuntime::Local => SummarySetupSelection::Local,
+            SummariesRuntime::Platform => SummarySetupSelection::Cloud,
+        });
     }
 
     prompt_summary_setup_selection(

@@ -372,7 +372,7 @@ fn summary_setup_can_write_platform_profile() {
                 },
             )
         },
-        || configure_cloud_summary_generation(&configure_root, None),
+        || configure_cloud_summary_generation(&configure_root, None, None),
     )
     .expect("configure cloud summaries");
 
@@ -405,6 +405,42 @@ fn summary_setup_can_write_platform_profile() {
         std::fs::read_to_string(repo_root.join(REPO_POLICY_LOCAL_FILE_NAME)).expect("read policy");
     assert!(repo_policy.contains("summary_mode = \"auto\""));
     assert!(repo_policy.contains("summary_generation = \"summary_llm\""));
+}
+
+#[test]
+fn summary_setup_can_write_platform_profile_with_api_key_override() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(&config_path, "").expect("write config");
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+
+    with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || {
+            configure_cloud_summary_generation(
+                &configure_root,
+                Some("https://platform.example.com/v1/chat/completions"),
+                Some("CUSTOM_SUMMARIES_TOKEN"),
+            )
+        },
+    )
+    .expect("configure cloud summaries");
+
+    let rendered = std::fs::read_to_string(&config_path).expect("read config");
+    assert!(rendered.contains("api_key = \"${CUSTOM_SUMMARIES_TOKEN}\""));
+    assert!(rendered.contains("base_url = \"https://platform.example.com/v1/chat/completions\""));
 }
 
 #[test]
@@ -513,7 +549,7 @@ summary_mode = "off"
                 },
             )
         },
-        || configure_cloud_summary_generation(&configure_root, None),
+        || configure_cloud_summary_generation(&configure_root, None, None),
     )
     .expect("configure cloud summaries");
 
@@ -555,6 +591,7 @@ fn summary_setup_can_write_platform_profile_with_url_override() {
             configure_cloud_summary_generation(
                 &configure_root,
                 Some("https://platform.example.com/v1/chat/completions"),
+                None,
             )
         },
     )
@@ -590,9 +627,10 @@ fn cloud_summary_setup_prepared_plan_reports_progress_and_writes_profile() {
         || {
             execute_prepared_summary_setup_with_progress(
                 &configure_root,
-                prepare_cloud_summary_generation_plan(Some(
-                    "https://platform.example.com/v1/chat/completions",
-                )),
+                prepare_cloud_summary_generation_plan(
+                    Some("https://platform.example.com/v1/chat/completions"),
+                    None,
+                ),
                 |progress| {
                     progress_events.push(progress);
                     Ok(())
