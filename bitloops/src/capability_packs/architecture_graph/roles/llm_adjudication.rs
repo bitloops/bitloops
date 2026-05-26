@@ -8,13 +8,16 @@ use crate::host::inference::StructuredGenerationRequest;
 use crate::host::inference::StructuredGenerationService;
 
 #[cfg(test)]
+use super::taxonomy::SeededArchitectureRuleCandidates;
+#[cfg(test)]
 use super::taxonomy::architecture_roles_seed_schema;
 use super::taxonomy::{
-    SeededArchitectureRole, SeededArchitectureRoleDiscovery, SeededArchitectureRuleCandidate,
-    SeededArchitectureRuleCandidates, SeededArchitectureTaxonomy,
-    architecture_roles_seed_roles_schema, architecture_roles_seed_rule_candidates_schema,
-    generic_role_family_examples, role_rule_candidate_examples, supported_rule_fact_catalog,
-    validate_seeded_roles, validate_seeded_taxonomy,
+    DecodedSeedRuleCandidates, SeedRuleCandidateValidationIssue, SeededArchitectureRole,
+    SeededArchitectureRoleDiscovery, SeededArchitectureRuleCandidate, SeededArchitectureTaxonomy,
+    SupportedFactPredicate, architecture_roles_seed_roles_schema,
+    architecture_roles_seed_rule_candidates_schema, decode_seeded_rule_candidates_with_recovery,
+    generic_role_family_examples, rule_authoring_contract_json, validate_seeded_roles,
+    validate_seeded_taxonomy,
 };
 
 const MAX_FILE_EVIDENCE: usize = 120;
@@ -121,7 +124,7 @@ pub(crate) async fn collect_seed_evidence(
 pub(crate) fn architecture_roles_seed_system_prompt() -> &'static str {
     "You infer repository-specific architectural role taxonomies. Return JSON only that matches the supplied schema. \
 Do not hardcode Bitloops-specific roles. Use the supplied repository evidence to propose role identities and reviewable deterministic rule candidates for this repository. \
-Rule candidates must use only facts and operators listed in rule_authoring_contract.supported_facts."
+Rule candidates must use only predicate ids listed in rule_authoring_contract.supported_predicates."
 }
 
 pub(crate) fn architecture_roles_seed_roles_system_prompt() -> &'static str {
@@ -219,10 +222,15 @@ pub(crate) fn architecture_roles_seed_user_prompt(
             "Return only durable role identities that are justified by the repository evidence.",
             "Do not include lifecycle state; newly inferred roles are activated by Bitloops after validation.",
             "Detection rules must be reviewable and safe for deterministic use.",
-            "Use only fact-backed conditions from rule_authoring_contract.supported_facts.",
+            "Use only fact-backed predicate conditions from rule_authoring_contract.supported_predicates.",
             "Do not invent additional fact keys, operators, aliases, or candidate_selector fields.",
             "Use rule_authoring_contract.rule_candidate_examples as shape examples only; adapt role keys, paths, languages, kinds, and symbols to the repository evidence.",
             "Prefer multi-signal rules over path-only rules and include target kinds whenever possible.",
+            "All required_facts and required_fact_any_groups are evaluated against one target at a time; do not combine facts that only exist on different target granularities.",
+            "Use file target rules for file-level facts such as file.role and file.analysis_mode.",
+            "Use artefact target rules for artefact-level facts such as canonical_kind, language_kind, and dependency facts attached to artefacts.",
+            "Use symbol target rules for symbol facts such as symbol.fqn, symbol.name, and has_signature.",
+            "If a role needs both file-level and symbol-level evidence, emit separate narrower rule candidates instead of one cross-target rule.",
             "Prefer fewer strong roles over many weak or redundant roles."
         ],
         "repository_identity": {
@@ -233,18 +241,7 @@ pub(crate) fn architecture_roles_seed_user_prompt(
             "identity": scope.repo.identity,
             "branch_name": scope.branch_name,
         },
-        "rule_authoring_contract": {
-            "contract_version": "fact-backed-rule-v2",
-            "supported_facts": supported_rule_fact_catalog(),
-            "target_kinds": ["file", "artefact", "symbol"],
-            "ops": ["eq", "contains", "prefix", "suffix", "gte", "lte"],
-            "scoring": {
-                "base_confidence": "Maximum confidence for this rule when positive evidence is fully satisfied.",
-                "condition_score": "Relative contribution within the rule; normalized at evaluation time.",
-                "min_positive_ratio": "Minimum normalized positive evidence required before emitting a signal."
-            },
-            "rule_candidate_examples": role_rule_candidate_examples(),
-        },
+        "rule_authoring_contract": rule_authoring_contract_json(),
         "evidence": evidence,
     })
     .to_string()
@@ -295,11 +292,19 @@ pub(crate) fn architecture_roles_seed_rules_user_prompt(
             "Inspect source code through workspace_path before finalizing rules. Use the supplied DB evidence as an index for where to look first.",
             "Detection rules must be reviewable and safe for deterministic use.",
             "A good rule should match a reusable architectural pattern, not only one currently visible artefact.",
-            "Use only fact-backed conditions from rule_authoring_contract.supported_facts.",
+            "Use only fact-backed predicate conditions from rule_authoring_contract.supported_predicates.",
+            "Use only predicates from supported_predicates.",
+            "signature.contains:eq means exact match against an extracted signature token.",
+            "Do not use natural language operators such as `contains` unless that exact predicate id is listed.",
             "Do not invent additional fact keys, operators, aliases, or candidate_selector fields.",
             "Prefer multi-signal rules over path-only rules.",
             "Include target kinds whenever possible.",
             "Use dependency conditions only when dependency facts are present in evidence.",
+            "All required_facts and required_fact_any_groups are evaluated against one target at a time; do not combine facts that only exist on different target granularities.",
+            "Use file target rules for file-level facts such as file.role and file.analysis_mode.",
+            "Use artefact target rules for artefact-level facts such as canonical_kind, language_kind, and dependency facts attached to artefacts.",
+            "Use symbol target rules for symbol facts such as symbol.fqn, symbol.name, and has_signature.",
+            "If a role needs both file-level and symbol-level evidence, emit separate narrower rule candidates instead of one cross-target rule.",
             "Use rule_authoring_contract.rule_candidate_examples as shape examples only. Adapt paths, languages, kinds, and symbols to repository evidence and inspected source code.",
             "Populate each rule evidence object with inspected paths, positive examples, negative examples when known, DB sections used, a concise reasoning summary, confidence reason, and uncertainty.",
             "Return zero rule candidates for a role when evidence does not support a stable deterministic rule."
@@ -316,18 +321,7 @@ pub(crate) fn architecture_roles_seed_rules_user_prompt(
         "fact_synthesis_context": fact_synthesis_context("rules"),
         "agentic_code_exploration": agentic_code_exploration_contract(),
         "db_evidence_guide": db_evidence_guide(),
-        "rule_authoring_contract": {
-            "contract_version": "fact-backed-rule-v2",
-            "supported_facts": supported_rule_fact_catalog(),
-            "target_kinds": ["file", "artefact", "symbol"],
-            "ops": ["eq", "contains", "prefix", "suffix", "gte", "lte"],
-            "scoring": {
-                "base_confidence": "Maximum confidence for this rule when positive evidence is fully satisfied.",
-                "condition_score": "Relative contribution within the rule; normalized at evaluation time.",
-                "min_positive_ratio": "Minimum normalized positive evidence required before emitting a signal."
-            },
-            "rule_candidate_examples": role_rule_candidate_examples(),
-        },
+        "rule_authoring_contract": rule_authoring_contract_json(),
         "evidence": evidence,
     })
     .to_string()
@@ -424,6 +418,87 @@ pub(crate) fn architecture_roles_seed_rule_candidates_request(
     }
 }
 
+pub(crate) fn architecture_roles_seed_rule_candidates_retry_request(
+    scope: &SlimCliRepoScope,
+    original_batch_index: usize,
+    roles: &[SeededArchitectureRole],
+    supported_predicates: &[SupportedFactPredicate],
+    issues: &[SeedRuleCandidateValidationIssue],
+) -> StructuredGenerationRequest {
+    let mut metadata = Map::new();
+    metadata.insert(
+        "capability_id".to_string(),
+        Value::String("architecture_graph".to_string()),
+    );
+    metadata.insert(
+        "slot_name".to_string(),
+        Value::String("fact_synthesis".to_string()),
+    );
+    metadata.insert(
+        "seed_phase".to_string(),
+        Value::String("rules_retry".to_string()),
+    );
+    metadata.insert(
+        "seed_rule_batch_index".to_string(),
+        Value::Number(serde_json::Number::from(original_batch_index)),
+    );
+    metadata.insert(
+        "repo_id".to_string(),
+        Value::String(scope.repo.repo_id.clone()),
+    );
+
+    let compact_roles = roles
+        .iter()
+        .map(|role| {
+            json!({
+                "canonical_key": role.canonical_key,
+                "display_name": role.display_name,
+                "description": role.description,
+                "family": role.family,
+            })
+        })
+        .collect::<Vec<_>>();
+    let supported_predicates = supported_predicates
+        .iter()
+        .map(|predicate| {
+            json!({
+                "id": predicate.id,
+                "value_type": predicate.value_type,
+                "description": predicate.description,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    StructuredGenerationRequest {
+        system_prompt: architecture_roles_seed_rules_system_prompt().to_string(),
+        user_prompt: json!({
+            "task": "Regenerate deterministic architecture role rule candidates for rejected candidates only.",
+            "instructions": [
+                "Return replacements only for the rejected candidates listed in validation_issues.",
+                "Use only predicates from supported_predicates.",
+                "Do not include full repository evidence or unaffected candidates.",
+                "Do not use natural language operators such as `contains` unless that exact predicate id is listed."
+            ],
+            "repository_identity": {
+                "repo_id": scope.repo.repo_id,
+                "provider": scope.repo.provider,
+                "organization": scope.repo.organization,
+                "name": scope.repo.name,
+                "identity": scope.repo.identity,
+                "branch_name": scope.branch_name,
+            },
+            "original_batch_index": original_batch_index,
+            "known_roles": compact_roles,
+            "supported_predicates": supported_predicates,
+            "validation_issues": issues,
+        })
+        .to_string(),
+        json_schema: architecture_roles_seed_rule_candidates_schema(),
+        workspace_path: Some(scope.repo_root.display().to_string()),
+        metadata,
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn decode_seeded_taxonomy_response(value: Value) -> Result<SeededArchitectureTaxonomy> {
     let taxonomy: SeededArchitectureTaxonomy =
@@ -441,12 +516,29 @@ pub(crate) fn decode_seeded_role_discovery_response(
     Ok(discovery)
 }
 
+#[cfg(test)]
 pub(crate) fn decode_seeded_rule_candidates_response(
     value: Value,
 ) -> Result<SeededArchitectureRuleCandidates> {
-    let candidates: SeededArchitectureRuleCandidates =
-        serde_json::from_value(value).context("parse seeded architecture rule candidates")?;
-    Ok(candidates)
+    let decoded = decode_seeded_rule_candidates_with_recovery(value);
+    if decoded.rejected.is_empty() {
+        return Ok(SeededArchitectureRuleCandidates {
+            rule_candidates: decoded.accepted,
+        });
+    }
+    let first = &decoded.rejected[0];
+    Err(anyhow::anyhow!(
+        "parse seeded architecture rule candidates rejected {} candidate(s); first rejection at {}: {}",
+        decoded.rejected.len(),
+        first.field_path,
+        first.reason
+    ))
+}
+
+pub(crate) fn decode_seeded_rule_candidates_response_with_recovery(
+    value: Value,
+) -> DecodedSeedRuleCandidates {
+    decode_seeded_rule_candidates_with_recovery(value)
 }
 
 pub(crate) fn combine_seeded_taxonomy(

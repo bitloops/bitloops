@@ -9,6 +9,7 @@ use crate::capability_packs::architecture_graph::types::{
 use crate::host::inference::{InferenceGateway, StructuredGenerationRequest};
 
 use super::evidence_packet_builder::RoleEvidencePacket;
+use super::taxonomy::seeded_rule_candidate_schema;
 
 pub fn execute_llm_adjudication(
     inference: &dyn InferenceGateway,
@@ -75,6 +76,7 @@ fn adjudication_user_prompt(packet: &RoleEvidencePacket) -> String {
 
 fn adjudication_response_schema() -> Value {
     let evidence_schema = evidence_value_schema();
+    let rule_candidate_schema = seeded_rule_candidate_schema();
     json!({
         "type": "object",
         "properties": {
@@ -107,10 +109,7 @@ fn adjudication_response_schema() -> Value {
                         "target_role_id": { "type": "string", "minLength": 1 },
                         "title": { "type": "string", "minLength": 1 },
                         "summary": { "type": "string", "minLength": 1 },
-                        "rule_candidate": {
-                            "type": "object",
-                            "additionalProperties": true
-                        },
+                        "rule_candidate": rule_candidate_schema,
                         "source_cluster_key": { "type": ["string", "null"] }
                     },
                     "required": ["target_role_id", "title", "summary", "rule_candidate", "source_cluster_key"],
@@ -162,6 +161,13 @@ mod tests {
     }
 
     #[test]
+    fn adjudication_response_schema_disables_additional_properties_for_all_objects() {
+        let schema = adjudication_response_schema();
+
+        assert_schema_objects_disable_additional_properties("$", &schema);
+    }
+
+    #[test]
     fn adjudication_response_schema_keeps_evidence_provider_neutral() {
         let schema = adjudication_response_schema();
 
@@ -206,6 +212,38 @@ mod tests {
             Value::Array(items) => {
                 for (index, item) in items.iter().enumerate() {
                     assert_schema_objects_require_every_property(&format!("{path}/{index}"), item);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn assert_schema_objects_disable_additional_properties(path: &str, value: &Value) {
+        match value {
+            Value::Object(map) => {
+                let is_object_schema =
+                    matches!(map.get("type").and_then(Value::as_str), Some("object"));
+                if is_object_schema {
+                    assert_eq!(
+                        map.get("additionalProperties"),
+                        Some(&Value::Bool(false)),
+                        "{path}: object schemas must set additionalProperties=false"
+                    );
+                }
+
+                for (key, child) in map {
+                    assert_schema_objects_disable_additional_properties(
+                        &format!("{path}/{key}"),
+                        child,
+                    );
+                }
+            }
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    assert_schema_objects_disable_additional_properties(
+                        &format!("{path}/{index}"),
+                        item,
+                    );
                 }
             }
             _ => {}

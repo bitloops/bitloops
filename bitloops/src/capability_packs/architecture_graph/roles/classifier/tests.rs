@@ -67,6 +67,81 @@ fn artefact_fixture(path: &str, name: &str) -> crate::models::CurrentCanonicalAr
     }
 }
 
+async fn insert_active_rule_for_role(
+    relational: &crate::host::devql::RelationalStorage,
+    role_id: &str,
+    candidate_selector: serde_json::Value,
+    positive_conditions: serde_json::Value,
+) -> anyhow::Result<()> {
+    super::super::storage::upsert_detection_rule(
+        relational,
+        &super::super::taxonomy::ArchitectureRoleDetectionRule {
+            repo_id: "repo-1".to_string(),
+            rule_id: format!("rule-{role_id}"),
+            role_id: role_id.to_string(),
+            version: 1,
+            lifecycle: super::super::taxonomy::RoleRuleLifecycle::Active,
+            priority: 100,
+            score: 0.90,
+            min_positive_ratio: 1.0,
+            candidate_selector,
+            positive_conditions,
+            negative_conditions: serde_json::json!([]),
+            provenance: serde_json::json!({"source": "test"}),
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn classifier_skips_invalid_active_rule_and_uses_remaining_rules() -> anyhow::Result<()> {
+    let (_temp, relational) = classifier_storage()?;
+    insert_active_rule_for_role(
+        &relational,
+        "valid-role",
+        serde_json::json!({ "targetKinds": ["file"] }),
+        serde_json::json!([
+            { "kind": "path", "key": "full", "op": "eq", "value": "src/main.rs", "score": 1.0 }
+        ]),
+    )
+    .await?;
+    insert_active_rule_for_role(
+        &relational,
+        "invalid-role",
+        serde_json::json!({ "targetKinds": ["file"] }),
+        serde_json::json!([
+            { "kind": "signature", "key": "contains", "op": "eq", "value": "Result", "score": 1.0 }
+        ]),
+    )
+    .await?;
+
+    let files = vec![file_fixture("src/main.rs")];
+    let current_state = empty_current_state();
+    let outcome = classify_architecture_roles_for_current_state(
+        &relational,
+        &current_state,
+        ArchitectureRoleClassificationInput {
+            repo_id: "repo-1",
+            generation_seq: 1,
+            scope: ArchitectureRoleClassificationScope {
+                full_reconcile: false,
+                affected_paths: BTreeSet::from(["src/main.rs".to_string()]),
+                removed_paths: BTreeSet::new(),
+            },
+            files: &files,
+        },
+    )
+    .await?;
+
+    assert_eq!(outcome.metrics.rules_loaded, 2);
+    assert_eq!(outcome.metrics.signals_written, 1);
+    assert!(outcome.warnings.iter().any(|warning| {
+        warning.contains("skipped active architecture role rule")
+            && warning.contains("invalid-role")
+    }));
+    Ok(())
+}
+
 fn positive_signal(role_id: &str, rule_id: &str, score: f64) -> ArchitectureRoleRuleSignal {
     ArchitectureRoleRuleSignal {
         repo_id: "repo-1".to_string(),
@@ -927,6 +1002,72 @@ async fn classification_extracts_facts_runs_rules_and_writes_assignment() -> any
             && assignment.status == AssignmentStatus::Stale
             && assignment.generation_seq == 0
     }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn classification_writes_rule_assignment_for_active_file_rule() -> anyhow::Result<()> {
+    let (_temp, relational) = classifier_storage()?;
+    let role = super::super::taxonomy::ArchitectureRole {
+        repo_id: "repo-1".to_string(),
+        role_id: "role-platform".to_string(),
+        family: "entrypoint".to_string(),
+        slug: "platform_bootstrapper".to_string(),
+        display_name: "Platform Bootstrapper".to_string(),
+        description: "Startup file role".to_string(),
+        lifecycle: super::super::taxonomy::RoleLifecycle::Active,
+        provenance: serde_json::json!({"source": "test"}),
+    };
+    super::super::storage::upsert_classification_role(&relational, &role).await?;
+    insert_active_rule_for_role(
+        &relational,
+        &role.role_id,
+        serde_json::json!({
+            "targetKinds": ["file"],
+            "pathPrefixes": ["src"],
+            "pathSuffixes": [],
+            "requiredFacts": [
+                { "kind": "language", "key": "resolved", "op": "eq", "value": "rust", "score": 1.0 },
+                { "kind": "path", "key": "full", "op": "eq", "value": "src/main.rs", "score": 1.0 }
+            ],
+            "requiredFactAnyGroups": []
+        }),
+        serde_json::json!([
+            { "kind": "file", "key": "role", "op": "eq", "value": "source_code", "score": 1.0 }
+        ]),
+    )
+    .await?;
+
+    let mut main_file = file_fixture("src/main.rs");
+    main_file.file_role = "source_code".to_string();
+    let files = vec![main_file];
+    let current_state = empty_current_state();
+    let outcome = classify_architecture_roles_for_current_state(
+        &relational,
+        &current_state,
+        ArchitectureRoleClassificationInput {
+            repo_id: "repo-1",
+            generation_seq: 1,
+            scope: ArchitectureRoleClassificationScope {
+                full_reconcile: true,
+                affected_paths: BTreeSet::new(),
+                removed_paths: BTreeSet::new(),
+            },
+            files: &files,
+        },
+    )
+    .await?;
+
+    assert_eq!(outcome.metrics.signals_written, 1);
+    assert_eq!(outcome.metrics.assignments_written, 1);
+    let assignment_paths = vec!["src/main.rs".to_string()];
+    let assignments =
+        super::super::storage::load_assignments_for_paths(&relational, "repo-1", &assignment_paths)
+            .await?;
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0].source, AssignmentSource::Rule);
+    assert_eq!(assignments[0].status, AssignmentStatus::Active);
+    assert_eq!(assignments[0].target, RoleTarget::file("src/main.rs"));
     Ok(())
 }
 

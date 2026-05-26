@@ -100,6 +100,53 @@ mod deterministic_tests {
 mod seeded_tests {
     use super::super::*;
 
+    fn condition_schema_properties<'a>(
+        schema: &'a serde_json::Value,
+        pointer: &str,
+    ) -> &'a serde_json::Map<String, serde_json::Value> {
+        schema
+            .pointer(pointer)
+            .and_then(|value| value.get("properties"))
+            .and_then(serde_json::Value::as_object)
+            .expect("condition schema properties")
+    }
+
+    fn string_enum_values(
+        properties: &serde_json::Map<String, serde_json::Value>,
+        key: &str,
+    ) -> std::collections::BTreeSet<String> {
+        properties
+            .get(key)
+            .and_then(|value| value.get("enum"))
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or_else(|| panic!("missing enum for {key}"))
+            .iter()
+            .map(|value| value.as_str().expect("enum value is a string").to_string())
+            .collect()
+    }
+
+    fn assert_schema_has_no_composition(path: &str, value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for keyword in ["oneOf", "anyOf", "allOf"] {
+                    assert!(
+                        !map.contains_key(keyword),
+                        "{path}: provider-neutral seed schema must not use {keyword}"
+                    );
+                }
+                for (key, child) in map {
+                    assert_schema_has_no_composition(&format!("{path}/{key}"), child);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    assert_schema_has_no_composition(&format!("{path}/{index}"), item);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn assert_schema_objects_require_every_property(value: &serde_json::Value) {
         match value {
             serde_json::Value::Object(map) => {
@@ -233,7 +280,36 @@ mod seeded_tests {
     }
 
     #[test]
-    fn seed_rule_schema_exposes_fact_backed_conditions() {
+    fn supported_fact_predicates_include_only_valid_fact_op_pairs() {
+        let predicates = supported_fact_predicates();
+
+        assert!(!predicates.is_empty());
+        for predicate in predicates {
+            let parsed = parse_supported_fact_predicate(predicate.id).expect("predicate parses");
+            assert_eq!(parsed.id, predicate.id);
+            assert_eq!(parsed.kind, predicate.kind);
+            assert_eq!(parsed.key, predicate.key);
+            assert_eq!(parsed.op, predicate.op);
+        }
+    }
+
+    #[test]
+    fn supported_fact_predicates_include_signature_contains_eq() {
+        let predicate = parse_supported_fact_predicate("signature.contains:eq")
+            .expect("signature predicate should exist");
+
+        assert_eq!(predicate.kind, "signature");
+        assert_eq!(predicate.key, "contains");
+        assert_eq!(predicate.op, "eq");
+    }
+
+    #[test]
+    fn supported_fact_predicates_reject_signature_contains_contains() {
+        assert!(parse_supported_fact_predicate("signature.contains:contains").is_none());
+    }
+
+    #[test]
+    fn seed_rule_schema_uses_provider_neutral_predicate_conditions() {
         let schema = architecture_roles_seed_rule_candidates_schema();
         let selector = schema
             .pointer("/properties/rule_candidates/items/properties/candidate_selector/properties")
@@ -244,26 +320,32 @@ mod seeded_tests {
         assert!(selector.contains_key("required_facts"));
         assert!(selector.contains_key("required_fact_any_groups"));
 
-        let condition = schema
-            .pointer(
-                "/properties/rule_candidates/items/properties/positive_conditions/items/properties",
-            )
-            .and_then(serde_json::Value::as_object)
-            .expect("condition properties");
-        for key in ["kind", "key", "op", "value", "score"] {
-            assert!(condition.contains_key(key), "missing condition key {key}");
+        let properties = condition_schema_properties(
+            &schema,
+            "/properties/rule_candidates/items/properties/positive_conditions/items",
+        );
+        for key in ["predicate", "value", "score"] {
+            assert!(properties.contains_key(key), "missing condition key {key}");
+        }
+        for key in ["kind", "key", "op"] {
+            assert!(
+                !properties.contains_key(key),
+                "condition schema should not expose legacy key {key}"
+            );
         }
 
-        let ops = schema
-            .pointer("/properties/rule_candidates/items/properties/positive_conditions/items/properties/op/enum")
-            .and_then(serde_json::Value::as_array)
-            .expect("condition op enum")
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .collect::<std::collections::BTreeSet<_>>();
+        let predicates = string_enum_values(properties, "predicate");
+        assert!(predicates.contains("signature.contains:eq"));
+        assert!(!predicates.contains("signature.contains:contains"));
+        assert!(predicates.contains("path.full:prefix"));
+        assert!(predicates.contains("dependency.outgoing_count:gte"));
+    }
 
-        assert!(ops.contains("gte"));
-        assert!(ops.contains("lte"));
+    #[test]
+    fn seed_rule_schema_avoids_schema_composition() {
+        let schema = architecture_roles_seed_rule_candidates_schema();
+
+        assert_schema_has_no_composition("$", &schema);
     }
 
     #[test]
@@ -338,37 +420,39 @@ mod seeded_tests {
 
         let unsupported = unsupported_role_rule_signals();
         let unsupported = unsupported.as_array().expect("unsupported is an array");
-        assert!(unsupported.iter().any(|entry| {
+        assert!(!unsupported.iter().any(|entry| {
             entry.get("signal").and_then(serde_json::Value::as_str) == Some("signature_contains")
         }));
         assert!(unsupported.iter().any(|entry| {
-            entry.get("signal").and_then(serde_json::Value::as_str) == Some("file_role")
+            entry.get("signal").and_then(serde_json::Value::as_str) == Some("dependency_edge_kind")
         }));
+    }
+
+    #[test]
+    fn rule_authoring_contract_documents_same_target_semantics() {
+        let contract = rule_authoring_contract_json();
+        let text = serde_json::to_string(&contract).expect("contract json");
+        assert!(text.contains("same_target_semantics"));
+        assert!(text.contains("single file, artefact, or symbol target"));
+        assert!(text.contains("file"));
+        assert!(text.contains("artefact"));
+        assert!(text.contains("symbol"));
     }
 
     #[test]
     fn rule_candidate_examples_use_only_supported_condition_kinds() {
         let catalog = supported_rule_fact_catalog();
         let catalog = catalog.as_array().expect("catalog is an array");
-        let mut supported = std::collections::BTreeSet::new();
-        for fact in catalog {
-            let kind = fact
-                .get("kind")
-                .and_then(serde_json::Value::as_str)
-                .expect("fact has kind");
-            let key = fact
-                .get("key")
-                .and_then(serde_json::Value::as_str)
-                .expect("fact has key");
-            let ops = fact
-                .get("ops")
-                .and_then(serde_json::Value::as_array)
-                .expect("fact has ops");
-            for op in ops {
-                let op = op.as_str().expect("op is a string");
-                supported.insert(format!("{kind}.{key}.{op}"));
-            }
-        }
+        let supported = catalog
+            .iter()
+            .map(|predicate| {
+                predicate
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("predicate has id")
+                    .to_string()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
 
         let examples = role_rule_candidate_examples();
         let examples = examples.as_array().expect("examples are an array");
@@ -405,22 +489,13 @@ mod seeded_tests {
                     .and_then(serde_json::Value::as_array)
                     .expect("example includes condition arrays");
                 for condition in conditions {
-                    let kind = condition
-                        .get("kind")
+                    let predicate = condition
+                        .get("predicate")
                         .and_then(serde_json::Value::as_str)
-                        .expect("condition has kind");
-                    let key = condition
-                        .get("key")
-                        .and_then(serde_json::Value::as_str)
-                        .expect("condition has key");
-                    let op = condition
-                        .get("op")
-                        .and_then(serde_json::Value::as_str)
-                        .expect("condition has op");
-                    let condition_key = format!("{kind}.{key}.{op}");
+                        .expect("condition has predicate");
                     assert!(
-                        supported.contains(&condition_key),
-                        "unsupported example condition `{condition_key}`"
+                        supported.contains(predicate),
+                        "unsupported example condition `{predicate}`"
                     );
                     assert!(
                         condition
@@ -478,31 +553,244 @@ mod seeded_tests {
 
         for schema in schemas {
             for pointer in [
-                "/properties/rule_candidates/items/properties/positive_conditions/items/properties",
-                "/properties/rule_candidates/items/properties/negative_conditions/items/properties",
+                "/properties/rule_candidates/items/properties/positive_conditions/items",
+                "/properties/rule_candidates/items/properties/negative_conditions/items",
             ] {
-                let properties = schema
-                    .pointer(pointer)
-                    .and_then(serde_json::Value::as_object)
-                    .unwrap_or_else(|| panic!("missing condition properties at {pointer}"));
-                for key in ["kind", "key", "op", "value", "score"] {
-                    assert!(properties.contains_key(key), "missing condition key {key}");
-                }
-                let enum_values = properties
-                    .get("op")
-                    .and_then(|op| op.get("enum"))
-                    .and_then(serde_json::Value::as_array)
-                    .unwrap_or_else(|| panic!("missing op enum at {pointer}"));
-                let actual = enum_values
-                    .iter()
-                    .map(|value| value.as_str().expect("enum value is a string"))
-                    .collect::<Vec<_>>();
+                let properties = condition_schema_properties(&schema, pointer);
                 assert_eq!(
-                    actual,
-                    vec!["eq", "contains", "prefix", "suffix", "gte", "lte"]
+                    string_enum_values(properties, "predicate"),
+                    std::collections::BTreeSet::from([
+                        "artefact.canonical_kind:eq".to_string(),
+                        "artefact.has_parent_artefact:eq".to_string(),
+                        "artefact.language_kind:contains".to_string(),
+                        "artefact.language_kind:eq".to_string(),
+                        "dependency.incoming_count:eq".to_string(),
+                        "dependency.incoming_count:gte".to_string(),
+                        "dependency.incoming_count:lte".to_string(),
+                        "dependency.incoming_kind:eq".to_string(),
+                        "dependency.outgoing_count:eq".to_string(),
+                        "dependency.outgoing_count:gte".to_string(),
+                        "dependency.outgoing_count:lte".to_string(),
+                        "dependency.outgoing_kind:eq".to_string(),
+                        "file.analysis_mode:eq".to_string(),
+                        "file.role:eq".to_string(),
+                        "language.resolved:eq".to_string(),
+                        "path.extension:eq".to_string(),
+                        "path.full:contains".to_string(),
+                        "path.full:eq".to_string(),
+                        "path.full:prefix".to_string(),
+                        "path.full:suffix".to_string(),
+                        "path.segment:eq".to_string(),
+                        "signature.contains:eq".to_string(),
+                        "symbol.fqn:contains".to_string(),
+                        "symbol.fqn:eq".to_string(),
+                        "symbol.fqn:prefix".to_string(),
+                        "symbol.fqn:suffix".to_string(),
+                        "symbol.has_signature:eq".to_string(),
+                        "symbol.name:contains".to_string(),
+                        "symbol.name:eq".to_string(),
+                        "symbol.name:prefix".to_string(),
+                        "symbol.name:suffix".to_string(),
+                        "symbol.name_suffix:eq".to_string(),
+                    ])
                 );
             }
         }
+    }
+
+    #[test]
+    fn decode_seeded_rule_candidates_repairs_signature_contains_contains() {
+        let decoded = decode_seeded_rule_candidates_with_recovery(json!({
+            "rule_candidates": [
+                {
+                    "target_role_key": "command_dispatcher",
+                    "candidate_selector": {
+                        "target_kinds": ["artefact"],
+                        "path_prefixes": [],
+                        "path_suffixes": [],
+                        "path_contains": [],
+                        "languages": [],
+                        "canonical_kinds": [],
+                        "symbol_fqn_contains": [],
+                        "required_facts": [
+                            { "kind": "signature", "key": "contains", "op": "contains", "value": "Result", "score": 0.7 }
+                        ],
+                        "required_fact_any_groups": []
+                    },
+                    "positive_conditions": [
+                        { "predicate": "path.full:contains", "value": "src", "score": 0.8 }
+                    ],
+                    "negative_conditions": [],
+                    "score": { "base_confidence": 0.8, "priority_hint": 100, "min_positive_ratio": 1.0 },
+                    "evidence": {
+                        "inspected_paths": [],
+                        "positive_examples": [],
+                        "negative_examples": [],
+                        "db_sections_used": [],
+                        "reasoning_summary": "",
+                        "confidence_reason": "",
+                        "uncertainty": ""
+                    },
+                    "metadata": {}
+                }
+            ]
+        }));
+
+        assert_eq!(decoded.accepted.len(), 1);
+        assert_eq!(decoded.repaired.len(), 1);
+        assert!(decoded.rejected.is_empty());
+        assert_eq!(
+            decoded.accepted[0].candidate_selector.required_facts[0].op,
+            Some(RoleFactConditionOp::Eq)
+        );
+    }
+
+    #[test]
+    fn decode_seeded_rule_candidates_keeps_valid_siblings_when_one_candidate_is_invalid() {
+        let decoded = decode_seeded_rule_candidates_with_recovery(json!({
+            "rule_candidates": [
+                {
+                    "target_role_key": "command_dispatcher",
+                    "candidate_selector": {
+                        "target_kinds": ["file"],
+                        "path_prefixes": [],
+                        "path_suffixes": [],
+                        "path_contains": [],
+                        "languages": [],
+                        "canonical_kinds": [],
+                        "symbol_fqn_contains": [],
+                        "required_facts": [],
+                        "required_fact_any_groups": []
+                    },
+                    "positive_conditions": [
+                        { "predicate": "path.full:prefix", "value": "src/cli", "score": 1.0 }
+                    ],
+                    "negative_conditions": [],
+                    "score": { "base_confidence": 0.8, "priority_hint": 100, "min_positive_ratio": 1.0 },
+                    "evidence": {
+                        "inspected_paths": [],
+                        "positive_examples": [],
+                        "negative_examples": [],
+                        "db_sections_used": [],
+                        "reasoning_summary": "",
+                        "confidence_reason": "",
+                        "uncertainty": ""
+                    },
+                    "metadata": {}
+                },
+                {
+                    "target_role_key": "command_dispatcher",
+                    "candidate_selector": {
+                        "target_kinds": ["file"],
+                        "path_prefixes": [],
+                        "path_suffixes": [],
+                        "path_contains": [],
+                        "languages": [],
+                        "canonical_kinds": [],
+                        "symbol_fqn_contains": [],
+                        "required_facts": [],
+                        "required_fact_any_groups": []
+                    },
+                    "positive_conditions": [
+                        { "predicate": "signature.contains:contains", "value": "Result", "score": 1.0 }
+                    ],
+                    "negative_conditions": [],
+                    "score": { "base_confidence": 0.8, "priority_hint": 100, "min_positive_ratio": 1.0 },
+                    "evidence": {
+                        "inspected_paths": [],
+                        "positive_examples": [],
+                        "negative_examples": [],
+                        "db_sections_used": [],
+                        "reasoning_summary": "",
+                        "confidence_reason": "",
+                        "uncertainty": ""
+                    },
+                    "metadata": {}
+                }
+            ]
+        }));
+
+        assert_eq!(decoded.accepted.len(), 1);
+        assert_eq!(decoded.rejected.len(), 1);
+        assert_eq!(decoded.accepted[0].positive_conditions[0].kind, "path");
+    }
+
+    #[test]
+    fn decode_seeded_rule_candidates_rejects_ambiguous_unsupported_ops() {
+        let decoded = decode_seeded_rule_candidates_with_recovery(json!({
+            "rule_candidates": [
+                {
+                    "target_role_key": "command_dispatcher",
+                    "candidate_selector": {
+                        "target_kinds": ["file"],
+                        "path_prefixes": [],
+                        "path_suffixes": [],
+                        "path_contains": [],
+                        "languages": [],
+                        "canonical_kinds": [],
+                        "symbol_fqn_contains": [],
+                        "required_facts": [],
+                        "required_fact_any_groups": []
+                    },
+                    "positive_conditions": [
+                        { "kind": "path", "key": "extension", "op": "contains", "value": ".rs", "score": 1.0 }
+                    ],
+                    "negative_conditions": [],
+                    "score": { "base_confidence": 0.8, "priority_hint": 100, "min_positive_ratio": 1.0 },
+                    "evidence": {
+                        "inspected_paths": [],
+                        "positive_examples": [],
+                        "negative_examples": [],
+                        "db_sections_used": [],
+                        "reasoning_summary": "",
+                        "confidence_reason": "",
+                        "uncertainty": ""
+                    },
+                    "metadata": {}
+                }
+            ]
+        }));
+
+        assert!(decoded.accepted.is_empty());
+        assert!(decoded.repaired.is_empty());
+        assert_eq!(decoded.rejected.len(), 1);
+        assert!(decoded.rejected[0].reason.contains("unsupported op"));
+    }
+
+    #[test]
+    fn validate_seeded_taxonomy_reports_rule_condition_location() {
+        let taxonomy = SeededArchitectureTaxonomy {
+            roles: vec![SeededArchitectureRole {
+                canonical_key: "command_dispatcher".to_string(),
+                display_name: "Command Dispatcher".to_string(),
+                description: String::new(),
+                family: Some("entrypoint".to_string()),
+                lifecycle_status: Some("active".to_string()),
+                provenance: json!({}),
+                evidence: json!([]),
+            }],
+            rule_candidates: vec![SeededArchitectureRuleCandidate {
+                target_role_key: "command_dispatcher".to_string(),
+                candidate_selector: RoleRuleCandidateSelector::default(),
+                positive_conditions: vec![RoleRuleCondition {
+                    kind: "path".to_string(),
+                    key: Some("path".to_string()),
+                    op: Some(RoleFactConditionOp::Eq),
+                    value: json!("src/main.rs"),
+                    score: Some(1.0),
+                }],
+                negative_conditions: vec![],
+                score: RoleRuleScore::default(),
+                evidence: json!([]),
+                metadata: json!({}),
+            }],
+        };
+
+        let err = validate_seeded_taxonomy(&taxonomy).expect_err("path.path should fail");
+        let message = err.to_string();
+
+        assert!(message.contains("rule_candidates[0:command_dispatcher].positive_conditions[0]"));
+        assert!(message.contains("unsupported fact condition path.path"));
     }
 
     #[test]

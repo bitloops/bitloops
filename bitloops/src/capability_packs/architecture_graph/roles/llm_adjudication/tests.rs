@@ -1,4 +1,5 @@
 use super::*;
+use crate::capability_packs::architecture_graph::roles::taxonomy::supported_fact_predicates;
 use crate::host::inference::StructuredGenerationService;
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -56,25 +57,17 @@ fn test_scope() -> SlimCliRepoScope {
     }
 }
 
-fn contract_supports_fact(
+fn contract_supports_predicate(
     contract: &serde_json::Map<String, Value>,
-    kind: &str,
-    key: &str,
-    op: &str,
+    predicate_id: &str,
 ) -> bool {
     contract
-        .get("supported_facts")
+        .get("supported_predicates")
         .and_then(Value::as_array)
-        .map(|facts| {
-            facts.iter().any(|fact| {
-                fact.get("kind").and_then(Value::as_str) == Some(kind)
-                    && fact.get("key").and_then(Value::as_str) == Some(key)
-                    && fact
-                        .get("ops")
-                        .and_then(Value::as_array)
-                        .map(|ops| ops.iter().any(|value| value.as_str() == Some(op)))
-                        .unwrap_or(false)
-            })
+        .map(|predicates| {
+            predicates
+                .iter()
+                .any(|predicate| predicate.get("id").and_then(Value::as_str) == Some(predicate_id))
         })
         .unwrap_or(false)
 }
@@ -101,12 +94,10 @@ fn seed_prompt_includes_rule_authoring_contract_visible_to_llm() {
         contract.get("contract_version").and_then(Value::as_str),
         Some("fact-backed-rule-v2")
     );
-    assert!(contract_supports_fact(contract, "path", "full", "prefix"));
-    assert!(contract_supports_fact(
+    assert!(contract_supports_predicate(contract, "path.full:prefix"));
+    assert!(contract_supports_predicate(
         contract,
-        "artefact",
-        "canonical_kind",
-        "eq"
+        "artefact.canonical_kind:eq"
     ));
     assert!(
         contract
@@ -116,14 +107,10 @@ fn seed_prompt_includes_rule_authoring_contract_visible_to_llm() {
             .iter()
             .any(|kind| kind.as_str() == Some("file"))
     );
-    assert!(
-        contract
-            .get("ops")
-            .and_then(Value::as_array)
-            .expect("prompt includes ops")
-            .iter()
-            .any(|op| op.as_str() == Some("gte"))
-    );
+    assert!(contract_supports_predicate(
+        contract,
+        "dependency.outgoing_count:gte"
+    ));
 
     let examples = contract
         .get("rule_candidate_examples")
@@ -135,9 +122,7 @@ fn seed_prompt_includes_rule_authoring_contract_visible_to_llm() {
             .and_then(Value::as_array)
             .map(|conditions| {
                 conditions.iter().any(|condition| {
-                    condition.get("kind").and_then(Value::as_str) == Some("path")
-                        && condition.get("key").and_then(Value::as_str) == Some("full")
-                        && condition.get("op").and_then(Value::as_str) == Some("contains")
+                    condition.get("predicate").and_then(Value::as_str) == Some("path.full:contains")
                 })
             })
             .unwrap_or(false)
@@ -195,19 +180,15 @@ fn rule_generation_prompt_maps_db_facts_to_supported_conditions() {
         .get("rule_authoring_contract")
         .and_then(Value::as_object)
         .expect("prompt includes rule_authoring_contract");
-    assert!(contract_supports_fact(
+    assert!(contract_supports_predicate(
         contract,
-        "artefact",
-        "canonical_kind",
-        "eq"
+        "artefact.canonical_kind:eq"
     ));
-    assert!(contract_supports_fact(
+    assert!(contract_supports_predicate(
         contract,
-        "dependency",
-        "outgoing_count",
-        "gte"
+        "dependency.outgoing_count:gte"
     ));
-    assert!(contract_supports_fact(contract, "file", "role", "eq"));
+    assert!(contract_supports_predicate(contract, "file.role:eq"));
     assert!(
             value
                 .get("rules")
@@ -219,6 +200,98 @@ fn rule_generation_prompt_maps_db_facts_to_supported_conditions() {
                         == Some("Use dependency conditions only when dependency facts are present in evidence.")
                 })
         );
+}
+
+#[test]
+fn architecture_roles_rule_generation_prompt_uses_supported_predicates() {
+    let roles = vec![SeededArchitectureRole {
+        canonical_key: "cli_surface".to_string(),
+        display_name: "CLI Surface".to_string(),
+        description: "Command handlers.".to_string(),
+        family: Some("entrypoint".to_string()),
+        lifecycle_status: Some("active".to_string()),
+        provenance: json!({}),
+        evidence: json!({}),
+    }];
+    let prompt = architecture_roles_seed_rules_user_prompt(
+        &test_scope(),
+        &json!({"canonical_files": []}),
+        &roles,
+    );
+    let value: Value = serde_json::from_str(&prompt).expect("prompt is JSON");
+    let contract = value
+        .get("rule_authoring_contract")
+        .and_then(Value::as_object)
+        .expect("contract");
+    let rendered = serde_json::to_string(&value).expect("render prompt");
+
+    assert!(contract.get("supported_predicates").is_some());
+    assert!(contract.get("supported_facts").is_none());
+    assert!(rendered.contains("signature.contains:eq"));
+    assert!(rendered.contains("Do not use natural language operators such as `contains`"));
+    assert!(rendered.contains("\"predicate\":\"signature.contains:eq\""));
+}
+
+#[test]
+fn architecture_roles_rule_generation_retry_prompt_is_compact() {
+    let roles = vec![SeededArchitectureRole {
+        canonical_key: "cli_surface".to_string(),
+        display_name: "CLI Surface".to_string(),
+        description: "Command handlers.".to_string(),
+        family: Some("entrypoint".to_string()),
+        lifecycle_status: Some("active".to_string()),
+        provenance: json!({}),
+        evidence: json!({}),
+    }];
+    let issues = vec![SeedRuleCandidateValidationIssue {
+        candidate_index: 7,
+        role_slug: Some("cli_surface".to_string()),
+        candidate_slug: None,
+        field_path: "positive_conditions[0]".to_string(),
+        reason: "unsupported predicate `signature.contains:contains`".to_string(),
+        raw_candidate_excerpt: "{\"target_role_key\":\"cli_surface\"}".to_string(),
+    }];
+
+    let request = architecture_roles_seed_rule_candidates_retry_request(
+        &test_scope(),
+        2,
+        &roles,
+        &supported_fact_predicates(),
+        &issues,
+    );
+    let prompt: Value = serde_json::from_str(&request.user_prompt).expect("retry prompt JSON");
+
+    assert!(request.user_prompt.len() < 16 * 1024);
+    assert!(prompt.get("evidence").is_none());
+    assert_eq!(
+        prompt.get("original_batch_index").and_then(Value::as_u64),
+        Some(2)
+    );
+    assert!(request.user_prompt.contains("replacements only"));
+    assert!(request.user_prompt.contains("positive_conditions[0]"));
+}
+
+#[test]
+fn architecture_roles_rule_generation_retry_uses_predicate_schema() {
+    let request = architecture_roles_seed_rule_candidates_retry_request(
+        &test_scope(),
+        0,
+        &[],
+        &supported_fact_predicates(),
+        &[],
+    );
+    let properties = request
+        .json_schema
+        .pointer(
+            "/properties/rule_candidates/items/properties/positive_conditions/items/properties",
+        )
+        .and_then(Value::as_object)
+        .expect("condition properties");
+
+    assert!(properties.contains_key("predicate"));
+    assert!(!properties.contains_key("kind"));
+    assert!(!properties.contains_key("key"));
+    assert!(!properties.contains_key("op"));
 }
 
 #[test]

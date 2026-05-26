@@ -3,11 +3,12 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
+mod rule_preview;
 mod rule_storage;
+pub(super) use rule_preview::preview_rule_spec;
 pub(super) use rule_storage::canonical_rule_hash;
-use rule_storage::{compute_stored_rule_matches, rule_spec_storage_payload, sha256_json};
+use rule_storage::{rule_spec_storage_payload, sha256_json};
 
-use crate::host::capability_host::gateways::RelationalGateway;
 use crate::host::devql::RelationalStorage;
 
 use super::{
@@ -30,8 +31,7 @@ use crate::capability_packs::architecture_graph::roles::storage::{
     normalize_role_key, update_current_assignment_status, update_role_rule_lifecycle, upsert_role,
 };
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
-    ArchitectureRoleAssignment, AssignmentStatus, MatchableArtefact, RoleRuleCandidateSelector,
-    RoleRuleCondition, RoleSplitSpecFile, RuleSpecFile, TargetKind, role_rule_matches,
+    ArchitectureRoleAssignment, AssignmentStatus, RoleSplitSpecFile,
 };
 
 pub async fn apply_proposal(
@@ -300,160 +300,6 @@ pub(super) async fn preview_alias_change(
             "reclassification_required": false,
         }
     }))
-}
-
-pub(super) async fn preview_rule_spec(
-    gateway: &dyn RelationalGateway,
-    repo_id: &str,
-    role_id: &str,
-    spec: &RuleSpecFile,
-    existing_rule: Option<&ArchitectureRoleRuleRecord>,
-) -> Result<Value> {
-    let artefacts = load_matchable_artefacts(gateway, repo_id)?;
-    let new_matches = compute_rule_matches(
-        &artefacts,
-        &spec.candidate_selector,
-        &spec.positive_conditions,
-        &spec.negative_conditions,
-    );
-    let current_matches = if let Some(rule) = existing_rule {
-        compute_stored_rule_matches(&artefacts, rule)?
-    } else {
-        BTreeSet::new()
-    };
-    let added_matches = new_matches
-        .difference(&current_matches)
-        .cloned()
-        .collect::<Vec<_>>();
-    let removed_matches = current_matches
-        .difference(&new_matches)
-        .cloned()
-        .collect::<Vec<_>>();
-    let affected_artefact_ids = current_matches
-        .union(&new_matches)
-        .cloned()
-        .collect::<Vec<_>>();
-    let safety = rule_preview_safety(&artefacts, &new_matches, spec);
-    Ok(json!({
-        "operation": if existing_rule.is_some() { "edit_rule" } else { "draft_rule" },
-        "affected_role_ids": [role_id],
-        "affected_rule_ids": existing_rule
-            .map(|rule| vec![rule.rule_id.clone()])
-            .unwrap_or_default(),
-        "affected_assignment_ids": current_matches.clone().into_iter().collect::<Vec<_>>(),
-        "affected_artefact_ids": affected_artefact_ids.clone(),
-        "affected_roles": 1,
-        "affected_rules": if existing_rule.is_some() { 1 } else { 0 },
-        "current_matches": current_matches,
-        "new_matches": new_matches,
-        "added_matches": added_matches,
-        "removed_matches": removed_matches,
-        "affected_assignments": current_matches.len() + added_matches.len(),
-        "affected_artefacts": affected_artefact_ids.len(),
-        "safety": safety,
-        "downstream_review_work": {
-            "reclassification_required": !removed_matches.is_empty() || !added_matches.is_empty(),
-        }
-    }))
-}
-
-fn rule_preview_safety(
-    artefacts: &[MatchableArtefact],
-    new_matches: &BTreeSet<String>,
-    spec: &RuleSpecFile,
-) -> Value {
-    let total_targets = artefacts.len();
-    let matched_targets = new_matches.len();
-    let match_ratio = if total_targets == 0 {
-        0.0
-    } else {
-        matched_targets as f64 / total_targets as f64
-    };
-    let max_match_ratio_without_override = 0.20;
-    let uses_target_kinds = !spec.candidate_selector.target_kinds.is_empty();
-    let impossible_target_kind = spec
-        .candidate_selector
-        .target_kinds
-        .iter()
-        .any(|target_kind| matches!(target_kind, TargetKind::File | TargetKind::Symbol));
-    let positive_condition_count = spec.positive_conditions.len();
-    let negative_condition_count = spec.negative_conditions.len();
-    let path_only = positive_condition_count > 0
-        && spec
-            .positive_conditions
-            .iter()
-            .all(rule_condition_is_path_only);
-    let narrow_path_prefix = spec
-        .candidate_selector
-        .path_prefixes
-        .iter()
-        .any(|prefix| prefix.split('/').filter(|part| !part.is_empty()).count() >= 2);
-    let matches_test_generated_or_vendor = negative_condition_count == 0
-        && artefacts.iter().any(|artefact| {
-            new_matches.contains(&artefact.artefact_id)
-                && path_has_test_generated_or_vendor_segment(&artefact.path)
-        });
-
-    let mut blocking_reasons = Vec::new();
-    let mut warnings = Vec::new();
-    if matched_targets == 0 {
-        blocking_reasons.push("zero_matches");
-    }
-    if impossible_target_kind {
-        blocking_reasons.push("unsupported_preview_target_kind");
-    }
-    if match_ratio > max_match_ratio_without_override && !narrow_path_prefix {
-        blocking_reasons.push("broad_match_ratio");
-    }
-    if !uses_target_kinds {
-        blocking_reasons.push("missing_target_kinds");
-    }
-    if path_only && matched_targets > 1 {
-        blocking_reasons.push("path_only_multiple_matches");
-    }
-    if matches_test_generated_or_vendor {
-        blocking_reasons.push("unbounded_test_generated_or_vendor_matches");
-    }
-    if path_only {
-        warnings.push("path_only_rule");
-    }
-
-    json!({
-        "status": if blocking_reasons.is_empty() { "safe" } else { "blocked" },
-        "blocking_reasons": blocking_reasons,
-        "warnings": warnings,
-        "matched_targets": matched_targets,
-        "total_targets": total_targets,
-        "match_ratio": match_ratio,
-        "max_match_ratio_without_override": max_match_ratio_without_override,
-        "path_only": path_only,
-        "uses_target_kinds": uses_target_kinds,
-        "impossible_target_kind": impossible_target_kind,
-        "positive_condition_count": positive_condition_count,
-        "negative_condition_count": negative_condition_count,
-        "conflicting_active_assignments": 0,
-        "conflicting_roles": [],
-        "protected_authoritative_collisions": 0
-    })
-}
-
-fn rule_condition_is_path_only(condition: &RoleRuleCondition) -> bool {
-    if let Some(key) = condition.key.as_deref() {
-        return condition.kind == "path" && matches!(key, "full" | "segment" | "extension");
-    }
-    matches!(
-        condition.kind.as_str(),
-        "path_contains" | "path_equals" | "path_prefix" | "path_suffix"
-    )
-}
-
-fn path_has_test_generated_or_vendor_segment(path: &str) -> bool {
-    path.split('/').any(|segment| {
-        matches!(
-            segment,
-            "test" | "tests" | "__tests__" | "generated" | "vendor" | "vendors"
-        )
-    })
 }
 
 pub(super) async fn preview_rule_lifecycle_change(
@@ -927,40 +773,6 @@ pub(super) async fn resolve_rule_ref(
     load_role_rule_by_id(relational, repo_id, stripped)
         .await?
         .ok_or_else(|| anyhow!("rule reference `{rule_ref}` was not found"))
-}
-
-fn load_matchable_artefacts(
-    gateway: &dyn RelationalGateway,
-    repo_id: &str,
-) -> Result<Vec<MatchableArtefact>> {
-    gateway
-        .load_current_canonical_artefacts(repo_id)?
-        .into_iter()
-        .map(|artefact| {
-            Ok(MatchableArtefact {
-                artefact_id: artefact.artefact_id,
-                path: artefact.path,
-                language: Some(artefact.language),
-                canonical_kind: artefact.canonical_kind,
-                symbol_fqn: artefact.symbol_fqn,
-            })
-        })
-        .collect()
-}
-
-fn compute_rule_matches(
-    artefacts: &[MatchableArtefact],
-    selector: &RoleRuleCandidateSelector,
-    positive_conditions: &[RoleRuleCondition],
-    negative_conditions: &[RoleRuleCondition],
-) -> BTreeSet<String> {
-    artefacts
-        .iter()
-        .filter(|artefact| {
-            role_rule_matches(selector, positive_conditions, negative_conditions, artefact)
-        })
-        .map(|artefact| artefact.artefact_id.clone())
-        .collect()
 }
 
 fn assignment_target_key(assignment: &ArchitectureRoleAssignment) -> String {

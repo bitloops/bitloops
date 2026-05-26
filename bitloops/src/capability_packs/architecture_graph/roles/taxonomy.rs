@@ -5,16 +5,22 @@ use serde_json::{Value, json};
 use super::contracts::RoleAdjudicationRequest;
 
 mod seed;
+pub(crate) use seed::seeded_rule_candidate_schema;
 pub use seed::{
-    RoleRuleCandidateSelector, RoleRuleCondition, RoleRuleScore, RoleSplitSpecFile,
-    RoleSplitTargetRole, RuleSpecFile, SeededArchitectureRole, SeededArchitectureRoleDiscovery,
+    DecodedSeedRuleCandidates, RoleRuleCandidateSelector, RoleRuleCondition, RoleRuleScore,
+    RoleSplitSpecFile, RoleSplitTargetRole, RuleSpecFile, SeedRuleCandidateRepair,
+    SeedRuleCandidateValidationIssue, SeededArchitectureRole, SeededArchitectureRoleDiscovery,
     SeededArchitectureRuleCandidate, SeededArchitectureRuleCandidates, SeededArchitectureTaxonomy,
-    allowed_rule_condition_kinds, architecture_roles_seed_roles_schema,
-    architecture_roles_seed_rule_candidates_schema, architecture_roles_seed_schema,
-    generic_role_family_examples, role_rule_candidate_examples, role_rule_condition_catalog,
-    role_rule_fact_to_condition_mapping, seeded_role_lifecycle_status, supported_rule_fact_catalog,
-    unsupported_role_rule_signals, validate_role_split_spec, validate_rule_spec_file,
-    validate_seeded_roles, validate_seeded_taxonomy, validate_supported_fact_condition,
+    SeededRoleRulePredicateCondition, SupportedFactPredicate, allowed_rule_condition_kinds,
+    architecture_roles_seed_roles_schema, architecture_roles_seed_rule_candidates_schema,
+    architecture_roles_seed_schema, decode_seeded_rule_candidates_with_recovery,
+    generic_role_family_examples, parse_supported_fact_predicate,
+    role_fact_condition_from_seed_predicate, role_rule_candidate_examples,
+    role_rule_condition_catalog, role_rule_fact_to_condition_mapping, rule_authoring_contract_json,
+    seeded_role_lifecycle_status, supported_fact_predicate_ids, supported_fact_predicates,
+    supported_rule_fact_catalog, unsupported_role_rule_signals, validate_role_split_spec,
+    validate_rule_spec_file, validate_seeded_roles, validate_seeded_taxonomy,
+    validate_supported_fact_condition,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

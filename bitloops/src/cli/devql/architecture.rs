@@ -52,8 +52,8 @@ use roles_seed::{
 };
 #[cfg(test)]
 use roles_seed::{
-    SeedRuleActivationSummary, SeedSummary, architecture_seed_request_diagnostics,
-    ensure_seed_alias, persist_seeded_taxonomy,
+    SeedRecoverySummary, SeedRuleActivationSummary, SeedSummary,
+    architecture_seed_request_diagnostics, ensure_seed_alias, persist_seeded_taxonomy,
 };
 #[cfg(test)]
 use support::sql_text;

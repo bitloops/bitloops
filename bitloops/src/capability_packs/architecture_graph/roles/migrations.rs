@@ -295,7 +295,8 @@ pub async fn create_rule_draft_proposal(
 ) -> Result<ProposalSummary> {
     validate_rule_spec_file(&spec)?;
     let role = resolve_role_ref(relational, repo_id, &spec.role_ref).await?;
-    let preview = preview_rule_spec(gateway, repo_id, &role.role_id, &spec, None).await?;
+    let preview =
+        preview_rule_spec(relational, gateway, repo_id, &role.role_id, &spec, None).await?;
     let request = DraftRuleRequest {
         role_id: role.role_id.clone(),
         spec,
@@ -322,6 +323,7 @@ pub async fn create_rule_edit_proposal(
     validate_rule_spec_file(&spec)?;
     let existing_rule = resolve_rule_ref(relational, repo_id, rule_ref).await?;
     let preview = preview_rule_spec(
+        relational,
         gateway,
         repo_id,
         &existing_rule.role_id,
@@ -395,7 +397,15 @@ pub async fn preview_existing_rule_match_safety(
         evidence: rule.evidence.clone(),
         metadata: rule.metadata.clone(),
     };
-    preview_rule_spec(gateway, repo_id, &rule.role_id, &spec, Some(&rule)).await
+    preview_rule_spec(
+        relational,
+        gateway,
+        repo_id,
+        &rule.role_id,
+        &spec,
+        Some(&rule),
+    )
+    .await
 }
 
 fn stored_rule_candidate_selector(value: &Value) -> Result<RoleRuleCandidateSelector> {

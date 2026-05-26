@@ -1,57 +1,10 @@
+use crate::capability_packs::architecture_graph::roles::taxonomy::{
+    RuleSpecFile, role_rule_candidate_selector_contract, role_rule_conditions_contract,
+};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
-
-use crate::capability_packs::architecture_graph::roles::storage::ArchitectureRoleRuleRecord;
-use crate::capability_packs::architecture_graph::roles::taxonomy::{
-    MatchableArtefact, RoleCandidateSelector, RoleFactCondition, RuleSpecFile,
-    parse_rule_conditions, parse_rule_selector, role_rule_candidate_selector_contract,
-    role_rule_conditions_contract, role_rule_contract_matches,
-};
-
-use super::compute_rule_matches;
-
-pub(super) fn compute_stored_rule_matches(
-    artefacts: &[MatchableArtefact],
-    rule: &ArchitectureRoleRuleRecord,
-) -> Result<BTreeSet<String>> {
-    if let (Ok(selector), Ok(positive), Ok(negative)) = (
-        parse_rule_selector(&rule.candidate_selector),
-        parse_rule_conditions(&rule.positive_conditions),
-        parse_rule_conditions(&rule.negative_conditions),
-    ) {
-        return Ok(compute_rule_matches(
-            artefacts, &selector, &positive, &negative,
-        ));
-    }
-
-    let selector = serde_json::from_value::<RoleCandidateSelector>(rule.candidate_selector.clone())
-        .with_context(|| format!("parse fact-backed selector for rule `{}`", rule.rule_id))?;
-    let positive =
-        serde_json::from_value::<Vec<RoleFactCondition>>(rule.positive_conditions.clone())
-            .with_context(|| {
-                format!(
-                    "parse fact-backed positive conditions for rule `{}`",
-                    rule.rule_id
-                )
-            })?;
-    let negative =
-        serde_json::from_value::<Vec<RoleFactCondition>>(rule.negative_conditions.clone())
-            .with_context(|| {
-                format!(
-                    "parse fact-backed negative conditions for rule `{}`",
-                    rule.rule_id
-                )
-            })?;
-
-    Ok(artefacts
-        .iter()
-        .filter(|artefact| role_rule_contract_matches(&selector, &positive, &negative, artefact))
-        .map(|artefact| artefact.artefact_id.clone())
-        .collect())
-}
 
 pub(in crate::capability_packs::architecture_graph::roles::migrations) fn canonical_rule_hash(
     spec: &RuleSpecFile,

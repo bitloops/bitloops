@@ -6,9 +6,10 @@ use std::collections::BTreeMap;
 
 use crate::capability_packs::architecture_graph::roles::llm_adjudication::{
     SEED_RULE_ROLE_BATCH_SIZE, architecture_roles_seed_roles_request,
-    architecture_roles_seed_rule_candidates_request, collect_seed_evidence,
+    architecture_roles_seed_rule_candidates_request,
+    architecture_roles_seed_rule_candidates_retry_request, collect_seed_evidence,
     combine_seeded_taxonomy, decode_seeded_role_discovery_response,
-    decode_seeded_rule_candidates_response,
+    decode_seeded_rule_candidates_response_with_recovery,
 };
 use crate::capability_packs::architecture_graph::roles::migrations::{
     apply_proposal, create_rule_activate_proposal, preview_existing_rule_match_safety,
@@ -27,7 +28,7 @@ use crate::capability_packs::architecture_graph::roles::storage::{
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
     SeededArchitectureRuleCandidate, SeededArchitectureTaxonomy,
     role_rule_candidate_selector_contract, role_rule_conditions_contract,
-    seeded_role_lifecycle_status,
+    seeded_role_lifecycle_status, supported_fact_predicates, validate_seeded_taxonomy,
 };
 use crate::config::InferenceTask;
 use crate::host::capability_host::gateways::RelationalGateway;
@@ -49,6 +50,22 @@ pub(super) struct SeedSummary {
     pub(super) rules_total: usize,
     pub(super) rules_created: usize,
     pub(super) rules_reused: usize,
+    pub(super) recovery: SeedRecoverySummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+pub struct SeedRecoverySummary {
+    pub rule_candidates_accepted: usize,
+    pub rule_candidates_repaired: usize,
+    pub rule_candidates_rejected: usize,
+    pub rule_batches_retried: usize,
+    pub rule_batches_skipped: usize,
+    pub warnings: Vec<String>,
+}
+
+struct SeedGenerationOutcome {
+    taxonomy: SeededArchitectureTaxonomy,
+    recovery: SeedRecoverySummary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -60,6 +77,7 @@ pub(super) struct SeedRuleActivationSummary {
     pub(super) proposal_ids: Vec<String>,
     pub(super) blocked_rule_ids: Vec<String>,
     pub(super) blocked_reasons: BTreeMap<String, Vec<String>>,
+    pub(super) blocked_diagnostics: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -181,18 +199,19 @@ pub(super) async fn seed_architecture_roles(
             format!("resolving architecture fact_synthesis inference slot `{profile_name}`")
         })?;
     let evidence = collect_seed_evidence(scope, context).await?;
-    let taxonomy = generate_seed_taxonomy_with_diagnostics(
+    let outcome = generate_seed_taxonomy_with_diagnostics(
         service.as_ref(),
         scope,
         &evidence,
         &profile_name,
         &resolved,
     )?;
-    persist_seeded_taxonomy(
+    persist_seeded_taxonomy_with_recovery(
         context.storage.as_ref(),
         &scope.repo.repo_id,
         &profile_name,
-        taxonomy,
+        outcome.taxonomy,
+        outcome.recovery,
     )
     .await
 }
@@ -203,7 +222,7 @@ fn generate_seed_taxonomy_with_diagnostics(
     evidence: &Value,
     profile_name: &str,
     resolved: &ResolvedInferenceSlot,
-) -> Result<SeededArchitectureTaxonomy> {
+) -> Result<SeedGenerationOutcome> {
     let profile_diagnostics = ArchitectureSeedProfileDiagnostics {
         profile_name,
         driver: resolved.driver.as_deref(),
@@ -240,6 +259,7 @@ fn generate_seed_taxonomy_with_diagnostics(
     let role_discovery = decode_seeded_role_discovery_response(role_response)?;
 
     let mut rule_candidates = Vec::new();
+    let mut recovery = SeedRecoverySummary::default();
     for (batch_index, role_batch) in role_discovery
         .roles
         .chunks(SEED_RULE_ROLE_BATCH_SIZE)
@@ -273,25 +293,119 @@ fn generate_seed_taxonomy_with_diagnostics(
             rule_diagnostics.human_summary()
         );
 
-        let rule_response = service.generate(rule_request).with_context(|| {
-            format!(
-                "generating architecture rule candidates failed: {}",
-                rule_diagnostics.human_summary()
-            )
-        })?;
-        let mut decoded = decode_seeded_rule_candidates_response(rule_response)?;
-        rule_candidates.append(&mut decoded.rule_candidates);
+        let rule_response = match service.generate(rule_request) {
+            Ok(response) => response,
+            Err(error) => {
+                recovery.rule_batches_skipped += 1;
+                let warning = format!(
+                    "rule_generation_batch_{batch_index} skipped after generation error: {error}"
+                );
+                eprintln!("architecture roles seed: warning: {warning}");
+                recovery.warnings.push(warning);
+                continue;
+            }
+        };
+        let mut decoded = decode_seeded_rule_candidates_response_with_recovery(rule_response);
+        recovery.rule_candidates_accepted += decoded.accepted.len();
+        recovery.rule_candidates_repaired += decoded.repaired.len();
+        recovery.rule_candidates_rejected += decoded.rejected.len();
+        rule_candidates.append(&mut decoded.accepted);
+
+        let mut retry_accepted = 0usize;
+        let mut retry_rejected = 0usize;
+        let retry = !decoded.rejected.is_empty();
+        if retry {
+            recovery.rule_batches_retried += 1;
+            let retry_request = architecture_roles_seed_rule_candidates_retry_request(
+                scope,
+                batch_index,
+                role_batch,
+                &supported_fact_predicates(),
+                &decoded.rejected,
+            );
+            match service.generate(retry_request) {
+                Ok(retry_response) => {
+                    let mut retry_decoded =
+                        decode_seeded_rule_candidates_response_with_recovery(retry_response);
+                    retry_accepted = retry_decoded.accepted.len();
+                    retry_rejected = retry_decoded.rejected.len();
+                    recovery.rule_candidates_accepted += retry_accepted;
+                    recovery.rule_candidates_repaired += retry_decoded.repaired.len();
+                    recovery.rule_candidates_rejected += retry_rejected;
+                    rule_candidates.append(&mut retry_decoded.accepted);
+                    for issue in retry_decoded.rejected {
+                        recovery.warnings.push(format!(
+                            "rule_generation_batch_{batch_index} dropped candidate {} at {}: {}",
+                            issue.candidate_index, issue.field_path, issue.reason
+                        ));
+                    }
+                }
+                Err(error) => {
+                    recovery.rule_batches_skipped += 1;
+                    retry_rejected = decoded.rejected.len();
+                    recovery.warnings.push(format!(
+                        "rule_generation_batch_{batch_index} retry failed; dropped {} rejected candidate(s): {error}",
+                        decoded.rejected.len()
+                    ));
+                }
+            }
+        }
+        for issue in decoded.rejected {
+            if !retry {
+                recovery.warnings.push(format!(
+                    "rule_generation_batch_{batch_index} dropped candidate {} at {}: {}",
+                    issue.candidate_index, issue.field_path, issue.reason
+                ));
+            }
+        }
+        eprintln!(
+            "architecture roles seed: phase=rule_generation_batch_{batch_index} recovered(repaired={} rejected={} retry={} accepted={} retry_accepted={} retry_rejected={})",
+            recovery.rule_candidates_repaired,
+            recovery.rule_candidates_rejected,
+            retry,
+            recovery.rule_candidates_accepted,
+            retry_accepted,
+            retry_rejected,
+        );
     }
 
-    combine_seeded_taxonomy(role_discovery.roles, rule_candidates)
+    let taxonomy = combine_seeded_taxonomy(role_discovery.roles, rule_candidates)?;
+    Ok(SeedGenerationOutcome { taxonomy, recovery })
 }
 
+#[cfg(test)]
 pub(super) async fn persist_seeded_taxonomy(
     relational: &crate::host::devql::RelationalStorage,
     repo_id: &str,
     profile_name: &str,
     taxonomy: SeededArchitectureTaxonomy,
 ) -> Result<SeedSummary> {
+    persist_seeded_taxonomy_with_recovery(
+        relational,
+        repo_id,
+        profile_name,
+        taxonomy,
+        SeedRecoverySummary::default(),
+    )
+    .await
+}
+
+async fn persist_seeded_taxonomy_with_recovery(
+    relational: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    profile_name: &str,
+    taxonomy: SeededArchitectureTaxonomy,
+    recovery: SeedRecoverySummary,
+) -> Result<SeedSummary> {
+    validate_seeded_taxonomy(&taxonomy).context("preflighting accepted seeded taxonomy")?;
+    for candidate in &taxonomy.rule_candidates {
+        role_rule_candidate_selector_contract(&candidate.candidate_selector);
+        role_rule_conditions_contract(&candidate.positive_conditions)
+            .context("preflighting seeded positive rule conditions")?;
+        role_rule_conditions_contract(&candidate.negative_conditions)
+            .context("preflighting seeded negative rule conditions")?;
+    }
+
     let roles_total = taxonomy.roles.len();
     let rules_total = taxonomy.rule_candidates.len();
     let mut roles_created = 0usize;
@@ -299,6 +413,7 @@ pub(super) async fn persist_seeded_taxonomy(
     let mut rules_created = 0usize;
     let mut rules_reused = 0usize;
     let mut persisted_role_ids = std::collections::BTreeMap::new();
+    let mut recovery = recovery;
 
     for seeded_role in taxonomy.roles {
         let canonical_key = normalize_role_key(&seeded_role.canonical_key);
@@ -345,7 +460,7 @@ pub(super) async fn persist_seeded_taxonomy(
             roles_created += 1;
         }
         if persisted.canonical_key != canonical_key {
-            ensure_seed_alias(
+            record_seed_alias(
                 relational,
                 &ArchitectureRoleAliasRecord {
                     alias_id: deterministic_alias_id(repo_id, &canonical_key),
@@ -356,11 +471,12 @@ pub(super) async fn persist_seeded_taxonomy(
                     source_kind: "seed".to_string(),
                     metadata: json!({"seed_profile": profile_name}),
                 },
+                &mut recovery,
             )
             .await?;
         }
         let display_alias = persisted.display_name.clone();
-        ensure_seed_alias(
+        record_seed_alias(
             relational,
             &ArchitectureRoleAliasRecord {
                 alias_id: deterministic_alias_id(repo_id, &display_alias),
@@ -371,6 +487,7 @@ pub(super) async fn persist_seeded_taxonomy(
                 source_kind: "seed".to_string(),
                 metadata: json!({"seed_profile": profile_name}),
             },
+            &mut recovery,
         )
         .await?;
         persisted_role_ids.insert(canonical_key, persisted.role_id);
@@ -429,6 +546,7 @@ pub(super) async fn persist_seeded_taxonomy(
         rules_total,
         rules_created,
         rules_reused,
+        recovery,
     })
 }
 
@@ -550,11 +668,26 @@ pub(super) async fn activate_seeded_draft_rules(
     let mut proposal_ids = Vec::new();
     let mut blocked_rule_ids = Vec::new();
     let mut blocked_reasons = BTreeMap::new();
+    let mut blocked_diagnostics = BTreeMap::new();
 
     for rule_id in &rule_ids {
         let rule_ref = format!("rule:{rule_id}");
         let preview =
-            preview_existing_rule_match_safety(relational, gateway, repo_id, &rule_ref).await?;
+            match preview_existing_rule_match_safety(relational, gateway, repo_id, &rule_ref).await
+            {
+                Ok(preview) => preview,
+                Err(error) => {
+                    blocked_rule_ids.push(rule_id.clone());
+                    blocked_reasons.insert(rule_id.clone(), vec!["preview_error".to_string()]);
+                    blocked_diagnostics.insert(
+                        rule_id.clone(),
+                        json!({
+                            "error": error.to_string(),
+                        }),
+                    );
+                    continue;
+                }
+            };
         let blocking_reasons = preview
             .get("safety")
             .and_then(|safety| safety.get("blocking_reasons"))
@@ -568,6 +701,13 @@ pub(super) async fn activate_seeded_draft_rules(
             })
             .unwrap_or_default();
         if !blocking_reasons.is_empty() {
+            if let Some(diagnostics) = preview
+                .get("safety")
+                .and_then(|safety| safety.get("diagnostics"))
+                .filter(|diagnostics| !diagnostics.is_null())
+            {
+                blocked_diagnostics.insert(rule_id.clone(), diagnostics.clone());
+            }
             blocked_rule_ids.push(rule_id.clone());
             blocked_reasons.insert(rule_id.clone(), blocking_reasons);
             continue;
@@ -599,6 +739,7 @@ pub(super) async fn activate_seeded_draft_rules(
         proposal_ids,
         blocked_rule_ids,
         blocked_reasons,
+        blocked_diagnostics,
     })
 }
 
@@ -695,7 +836,7 @@ pub(super) fn format_bootstrap_command_output(
 }
 
 pub(super) fn format_seed_summary(summary: &SeedSummary) -> String {
-    format!(
+    let mut output = format!(
         "architecture roles seeded with profile `{}`\nroles: total={} created={} reused={}\nrules: total={} created={} reused={}",
         summary.profile_name,
         summary.roles_total,
@@ -704,7 +845,19 @@ pub(super) fn format_seed_summary(summary: &SeedSummary) -> String {
         summary.rules_total,
         summary.rules_created,
         summary.rules_reused,
-    )
+    );
+    output.push_str(&format!(
+        "\nrecovery: rule_candidates_accepted={} rule_candidates_repaired={} rule_candidates_rejected={} rule_batches_retried={} rule_batches_skipped={}",
+        summary.recovery.rule_candidates_accepted,
+        summary.recovery.rule_candidates_repaired,
+        summary.recovery.rule_candidates_rejected,
+        summary.recovery.rule_batches_retried,
+        summary.recovery.rule_batches_skipped,
+    ));
+    for warning in &summary.recovery.warnings {
+        output.push_str(&format!("\nwarning: {warning}"));
+    }
+    output
 }
 
 fn push_blocked_rule_activation_lines(
@@ -724,7 +877,40 @@ fn push_blocked_rule_activation_lines(
             .get(rule_id)
             .map(|values| values.join(","))
             .unwrap_or_else(|| "unknown".to_string());
-        sections.push(format!("blocked_rule={rule_id} reasons={reasons}"));
+        let diagnostics = activation
+            .blocked_diagnostics
+            .get(rule_id)
+            .and_then(compact_blocked_rule_diagnostics)
+            .map(|value| format!(" diagnostics={value}"))
+            .unwrap_or_default();
+        sections.push(format!(
+            "blocked_rule={rule_id} reasons={reasons}{diagnostics}"
+        ));
+    }
+}
+
+fn compact_blocked_rule_diagnostics(value: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    for key in [
+        "matched_targets",
+        "target_count",
+        "required_fact_group_count",
+    ] {
+        let Some(value) = value.get(key) else {
+            continue;
+        };
+        if let Some(number) = value.as_i64() {
+            parts.push(format!("{key}={number}"));
+        } else if let Some(number) = value.as_u64() {
+            parts.push(format!("{key}={number}"));
+        } else if let Some(text) = value.as_str() {
+            parts.push(format!("{key}={text}"));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
     }
 }
 
@@ -744,6 +930,7 @@ fn merge_provenance(mut left: Value, right: Value) -> Value {
     }
 }
 
+#[cfg(test)]
 pub(super) async fn ensure_seed_alias(
     relational: &crate::host::devql::RelationalStorage,
     alias: &ArchitectureRoleAliasRecord,
@@ -755,6 +942,25 @@ pub(super) async fn ensure_seed_alias(
             existing_role_id,
         }) => {
             bail!("seeded role alias `{alias}` conflicts with existing role `{existing_role_id}`")
+        }
+    }
+}
+
+async fn record_seed_alias(
+    relational: &crate::host::devql::RelationalStorage,
+    alias: &ArchitectureRoleAliasRecord,
+    recovery: &mut SeedRecoverySummary,
+) -> Result<()> {
+    match create_role_alias(relational, alias).await? {
+        Ok(()) => Ok(()),
+        Err(AliasConflict::AlreadyAssignedToDifferentRole {
+            alias,
+            existing_role_id,
+        }) => {
+            recovery.warnings.push(format!(
+                "seeded role alias `{alias}` conflicts with existing role `{existing_role_id}`; skipped alias"
+            ));
+            Ok(())
         }
     }
 }

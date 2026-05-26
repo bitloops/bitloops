@@ -20,6 +20,19 @@ pub struct CompiledArchitectureRoleRule {
     pub negative_conditions: Vec<RoleFactCondition>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SkippedDetectionRule {
+    pub rule_id: String,
+    pub role_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CompiledRulesWithDiagnostics {
+    pub rules: Vec<CompiledArchitectureRoleRule>,
+    pub skipped: Vec<SkippedDetectionRule>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RuleEvaluationResult {
     pub signals: Vec<ArchitectureRoleRuleSignal>,
@@ -28,34 +41,50 @@ pub struct RuleEvaluationResult {
 pub fn compile_detection_rules(
     rules: Vec<ArchitectureRoleDetectionRule>,
 ) -> Result<Vec<CompiledArchitectureRoleRule>> {
-    rules
-        .into_iter()
-        .map(|rule| {
-            let selector = parse_candidate_selector_contract(&rule)
-                .with_context(|| format!("parsing candidate selector for rule {}", rule.rule_id))?;
-            let positive_conditions = parse_conditions_contract(&rule.positive_conditions)
-                .with_context(|| {
-                    format!("parsing positive conditions for rule {}", rule.rule_id)
-                })?;
-            let negative_conditions = parse_conditions_contract(&rule.negative_conditions)
-                .with_context(|| {
-                    format!("parsing negative conditions for rule {}", rule.rule_id)
-                })?;
-            validate_condition_scores(&selector.required_facts, &rule.rule_id)?;
-            for group in &selector.required_fact_any_groups {
-                validate_condition_scores(group, &rule.rule_id)?;
-            }
-            validate_condition_scores(&positive_conditions, &rule.rule_id)?;
-            validate_condition_scores(&negative_conditions, &rule.rule_id)?;
-            validate_positive_evidence_shape(&positive_conditions, &rule.rule_id)?;
-            Ok(CompiledArchitectureRoleRule {
-                rule,
-                selector,
-                positive_conditions,
-                negative_conditions,
-            })
-        })
-        .collect()
+    rules.into_iter().map(compile_detection_rule).collect()
+}
+
+pub fn compile_detection_rules_lossy(
+    rules: Vec<ArchitectureRoleDetectionRule>,
+) -> CompiledRulesWithDiagnostics {
+    let mut compiled = CompiledRulesWithDiagnostics::default();
+    for rule in rules {
+        let rule_id = rule.rule_id.clone();
+        let role_id = rule.role_id.clone();
+        match compile_detection_rule(rule) {
+            Ok(rule) => compiled.rules.push(rule),
+            Err(error) => compiled.skipped.push(SkippedDetectionRule {
+                rule_id,
+                role_id,
+                reason: error.to_string(),
+            }),
+        }
+    }
+    compiled
+}
+
+fn compile_detection_rule(
+    rule: ArchitectureRoleDetectionRule,
+) -> Result<CompiledArchitectureRoleRule> {
+    let selector = parse_candidate_selector_contract(&rule)
+        .with_context(|| format!("parsing candidate selector for rule {}", rule.rule_id))?;
+    let positive_conditions = parse_conditions_contract(&rule.positive_conditions)
+        .with_context(|| format!("parsing positive conditions for rule {}", rule.rule_id))?;
+    let negative_conditions = parse_conditions_contract(&rule.negative_conditions)
+        .with_context(|| format!("parsing negative conditions for rule {}", rule.rule_id))?;
+    validate_condition_scores(&selector.required_facts, &rule.rule_id)?;
+    for group in &selector.required_fact_any_groups {
+        validate_condition_scores(group, &rule.rule_id)?;
+    }
+    validate_condition_scores(&positive_conditions, &rule.rule_id)?;
+    validate_condition_scores(&negative_conditions, &rule.rule_id)?;
+    validate_positive_evidence_shape(&positive_conditions, &rule.rule_id)?;
+    Ok(CompiledArchitectureRoleRule {
+        rule,
+        selector,
+        positive_conditions,
+        negative_conditions,
+    })
 }
 
 fn validate_condition_scores(conditions: &[RoleFactCondition], rule_id: &str) -> Result<()> {

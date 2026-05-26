@@ -156,3 +156,24 @@ pub async fn load_facts_for_paths(
         .map(fact_from_row)
         .collect()
 }
+
+pub async fn load_current_role_facts(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<Vec<ArchitectureArtefactFact>> {
+    let sql = format!(
+        "SELECT repo_id, fact_id, target_kind, artefact_id, symbol_id, path, language,
+                fact_kind, fact_key, fact_value, source, confidence, evidence_json, generation_seq
+         FROM architecture_artefact_facts_current
+         WHERE repo_id = {}
+         ORDER BY path ASC, target_kind ASC, fact_kind ASC, fact_key ASC, fact_value ASC",
+        sql_text(repo_id),
+    );
+    relational
+        .query_rows(&sql)
+        .await
+        .context("loading current architecture role facts")?
+        .into_iter()
+        .map(fact_from_row)
+        .collect()
+}

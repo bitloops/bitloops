@@ -8,6 +8,10 @@ use crate::capability_packs::architecture_graph::roles::storage::normalize_role_
 
 use super::{RoleFactCondition, RoleFactConditionOp, TargetKind};
 
+mod contract;
+mod schema;
+mod supported_facts;
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeededArchitectureTaxonomy {
@@ -27,6 +31,14 @@ pub struct SeededArchitectureRoleDiscovery {
 pub struct SeededArchitectureRuleCandidates {
     #[serde(rename = "rule_candidates")]
     pub rule_candidates: Vec<SeededArchitectureRuleCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeededRoleRulePredicateCondition {
+    pub predicate: String,
+    pub value: String,
+    pub score: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -129,6 +141,34 @@ pub struct RuleSpecFile {
     pub metadata: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DecodedSeedRuleCandidates {
+    pub accepted: Vec<SeededArchitectureRuleCandidate>,
+    pub repaired: Vec<SeedRuleCandidateRepair>,
+    pub rejected: Vec<SeedRuleCandidateValidationIssue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SeedRuleCandidateValidationIssue {
+    pub candidate_index: usize,
+    pub role_slug: Option<String>,
+    pub candidate_slug: Option<String>,
+    pub field_path: String,
+    pub reason: String,
+    pub raw_candidate_excerpt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SeedRuleCandidateRepair {
+    pub candidate_index: usize,
+    pub role_slug: Option<String>,
+    pub candidate_slug: Option<String>,
+    pub field_path: String,
+    pub from: String,
+    pub to: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoleSplitSpecFile {
@@ -165,27 +205,23 @@ pub fn allowed_rule_condition_kinds() -> &'static [&'static str] {
 }
 
 pub fn supported_rule_fact_catalog() -> Value {
-    json!([
-        {"kind": "path", "key": "full", "ops": ["eq", "contains", "prefix", "suffix"]},
-        {"kind": "path", "key": "segment", "ops": ["eq"]},
-        {"kind": "path", "key": "extension", "ops": ["eq"]},
-        {"kind": "language", "key": "resolved", "ops": ["eq"]},
-        {"kind": "file", "key": "analysis_mode", "ops": ["eq"]},
-        {"kind": "file", "key": "role", "ops": ["eq"]},
-        {"kind": "artefact", "key": "canonical_kind", "ops": ["eq"]},
-        {"kind": "artefact", "key": "language_kind", "ops": ["eq", "contains"]},
-        {"kind": "artefact", "key": "has_parent_artefact", "ops": ["eq"]},
-        {"kind": "symbol", "key": "fqn", "ops": ["contains", "prefix", "suffix", "eq"]},
-        {"kind": "symbol", "key": "name", "ops": ["eq", "contains", "prefix", "suffix"]},
-        {"kind": "symbol", "key": "name_suffix", "ops": ["eq"]},
-        {"kind": "symbol", "key": "has_signature", "ops": ["eq"]},
-        {"kind": "signature", "key": "contains", "ops": ["eq"]},
-        {"kind": "dependency", "key": "incoming_kind", "ops": ["eq"]},
-        {"kind": "dependency", "key": "outgoing_kind", "ops": ["eq"]},
-        {"kind": "dependency", "key": "incoming_count", "ops": ["gte", "lte", "eq"]},
-        {"kind": "dependency", "key": "outgoing_count", "ops": ["gte", "lte", "eq"]}
-    ])
+    supported_facts::catalog()
 }
+
+pub use contract::{
+    generic_role_family_examples, role_rule_candidate_examples, role_rule_condition_catalog,
+    role_rule_fact_to_condition_mapping, rule_authoring_contract_json,
+    unsupported_role_rule_signals,
+};
+pub(crate) use schema::seeded_rule_candidate_schema;
+pub use schema::{
+    architecture_roles_seed_roles_schema, architecture_roles_seed_rule_candidates_schema,
+    architecture_roles_seed_schema,
+};
+pub use supported_facts::{
+    SupportedFactPredicate, parse_supported_fact_predicate, supported_fact_predicate_ids,
+    supported_fact_predicates,
+};
 
 pub fn validate_seeded_taxonomy(taxonomy: &SeededArchitectureTaxonomy) -> Result<()> {
     validate_seeded_roles(&taxonomy.roles)?;
@@ -196,14 +232,17 @@ pub fn validate_seeded_taxonomy(taxonomy: &SeededArchitectureTaxonomy) -> Result
         .map(|role| normalize_role_key(&role.canonical_key))
         .collect::<BTreeSet<_>>();
 
-    for candidate in &taxonomy.rule_candidates {
-        let target =
-            normalise_non_empty("rule_candidate.target_role_key", &candidate.target_role_key)?;
+    for (candidate_index, candidate) in taxonomy.rule_candidates.iter().enumerate() {
+        let target = normalise_non_empty(
+            &format!("rule_candidates[{candidate_index}].target_role_key"),
+            &candidate.target_role_key,
+        )?;
         if !keys.contains(&target) {
-            bail!("rule candidate references unknown target role key `{target}`");
+            bail!("rule candidate {candidate_index} references unknown target role key `{target}`");
         }
+        let prefix = format!("rule_candidates[{candidate_index}:{target}]");
         validate_rule_shape(
-            "rule_candidate",
+            &prefix,
             &candidate.candidate_selector,
             &candidate.positive_conditions,
             &candidate.negative_conditions,
@@ -231,6 +270,87 @@ pub fn validate_seeded_roles(roles: &[SeededArchitectureRole]) -> Result<()> {
     Ok(())
 }
 
+pub fn role_fact_condition_from_seed_predicate(
+    field_path: &str,
+    condition: &SeededRoleRulePredicateCondition,
+) -> Result<RoleFactCondition> {
+    let predicate =
+        parse_supported_fact_predicate(condition.predicate.trim()).ok_or_else(|| {
+            anyhow!(
+                "{field_path}.predicate uses unsupported predicate `{}`",
+                condition.predicate
+            )
+        })?;
+    let value = condition.value.trim();
+    if value.is_empty() {
+        bail!("{field_path}.value must not be empty");
+    }
+    if !condition.score.is_finite() || !(0.0..=1.0).contains(&condition.score) {
+        bail!("{field_path}.score must be between 0 and 1");
+    }
+    let op = role_fact_condition_op_from_name(predicate.op).ok_or_else(|| {
+        anyhow!(
+            "{field_path}.predicate uses unsupported op `{}`",
+            predicate.op
+        )
+    })?;
+    let fact_condition = RoleFactCondition {
+        kind: predicate.kind.to_string(),
+        key: predicate.key.to_string(),
+        op,
+        value: value.to_string(),
+        score: condition.score,
+    };
+    validate_supported_fact_condition(field_path, &fact_condition)?;
+    Ok(fact_condition)
+}
+
+pub fn decode_seeded_rule_candidates_with_recovery(value: Value) -> DecodedSeedRuleCandidates {
+    let Some(raw_candidates) = value.get("rule_candidates").and_then(Value::as_array) else {
+        return DecodedSeedRuleCandidates {
+            rejected: vec![SeedRuleCandidateValidationIssue {
+                candidate_index: 0,
+                role_slug: None,
+                candidate_slug: None,
+                field_path: "rule_candidates".to_string(),
+                reason: "response must include rule_candidates array".to_string(),
+                raw_candidate_excerpt: compact_raw_excerpt(&value),
+            }],
+            ..Default::default()
+        };
+    };
+
+    let mut decoded = DecodedSeedRuleCandidates::default();
+    for (candidate_index, raw_candidate) in raw_candidates.iter().enumerate() {
+        let role_slug = raw_candidate
+            .get("target_role_key")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let candidate_slug = raw_candidate
+            .pointer("/metadata/slug")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        match decode_seeded_rule_candidate_with_recovery(candidate_index, raw_candidate.clone()) {
+            Ok((candidate, mut repaired)) => {
+                decoded.accepted.push(candidate);
+                decoded.repaired.append(&mut repaired);
+            }
+            Err((field_path, reason)) => {
+                decoded.rejected.push(SeedRuleCandidateValidationIssue {
+                    candidate_index,
+                    role_slug,
+                    candidate_slug,
+                    field_path,
+                    reason,
+                    raw_candidate_excerpt: compact_raw_excerpt(raw_candidate),
+                });
+            }
+        }
+    }
+
+    decoded
+}
+
 pub fn validate_rule_spec_file(spec: &RuleSpecFile) -> Result<()> {
     normalise_non_empty("rule_spec.role_ref", &spec.role_ref)?;
     validate_rule_shape(
@@ -256,485 +376,6 @@ pub fn validate_role_split_spec(spec: &RoleSplitSpecFile) -> Result<()> {
         }
     }
     Ok(())
-}
-pub fn generic_role_family_examples() -> Value {
-    json!([
-        {
-            "family": "entrypoint",
-            "examples": ["cli_command_surface", "http_route_handler", "job_runner"]
-        },
-        {
-            "family": "application",
-            "examples": ["use_case_orchestrator", "service_facade", "workflow_coordinator"]
-        },
-        {
-            "family": "domain",
-            "examples": ["aggregate_root", "domain_service", "policy_engine"]
-        },
-        {
-            "family": "infrastructure",
-            "examples": ["repository_adapter", "queue_adapter", "external_api_client"]
-        }
-    ])
-}
-
-pub fn role_rule_condition_catalog() -> Value {
-    json!([
-        {
-            "kind": "path_contains",
-            "fact": "path.full",
-            "value": "Substring that must appear in the repository-relative path.",
-            "description": "Use for stable path segments such as `src/cli`, `commands`, or `tests`."
-        },
-        {
-            "kind": "path_equals",
-            "fact": "path.full",
-            "value": "Exact repository-relative path.",
-            "description": "Use only when one specific file or artefact path is the intended deterministic match."
-        },
-        {
-            "kind": "path_prefix",
-            "fact": "path.full",
-            "value": "Repository-relative path prefix.",
-            "description": "Use for directories or stable source tree areas."
-        },
-        {
-            "kind": "path_suffix",
-            "fact": "path.full",
-            "value": "Repository-relative path suffix.",
-            "description": "Use for file names, extensions, or stable suffixes such as `_test.rs`."
-        },
-        {
-            "kind": "language_is",
-            "fact": "language.name",
-            "value": "Language identifier from evidence, such as `rust` or `typescript`.",
-            "description": "Use to keep a rule scoped to one language."
-        },
-        {
-            "kind": "canonical_kind_is",
-            "fact": "symbol.canonical_kind",
-            "value": "Canonical artefact kind from evidence, such as `function`, `method`, `class`, or `test`.",
-            "description": "Use to constrain rules to specific artefact kinds."
-        },
-        {
-            "kind": "symbol_fqn_contains",
-            "fact": "symbol.fqn",
-            "value": "Substring that must appear in the fully qualified symbol name.",
-            "description": "Use for stable module, namespace, type, or function naming patterns."
-        }
-    ])
-}
-
-pub fn role_rule_fact_to_condition_mapping() -> Value {
-    json!([
-        {
-            "evidence_field": "canonical_files.path",
-            "condition_kind": "path_prefix|path_suffix|path_contains|path_equals",
-            "guidance": "Use stable repository-relative path structure. Prefer prefixes for directories and suffixes for file names or extensions."
-        },
-        {
-            "evidence_field": "canonical_files.resolved_language",
-            "condition_kind": "language_is",
-            "guidance": "Use the resolved language value when available."
-        },
-        {
-            "evidence_field": "canonical_artefacts.language",
-            "condition_kind": "language_is",
-            "guidance": "Use when the rule targets symbols rather than files."
-        },
-        {
-            "evidence_field": "canonical_artefacts.canonical_kind",
-            "condition_kind": "canonical_kind_is",
-            "guidance": "Use for symbol kind constraints such as function, method, struct, class, module, or test when present in evidence."
-        },
-        {
-            "evidence_field": "canonical_artefacts.symbol_fqn",
-            "condition_kind": "symbol_fqn_contains",
-            "guidance": "Use stable namespace, module, type, or function substrings. Avoid one-off generated ids."
-        }
-    ])
-}
-
-pub fn unsupported_role_rule_signals() -> Value {
-    json!([
-        {
-            "signal": "dependency_count",
-            "reason": "Dependency counts are useful evidence but are not a supported deterministic condition kind today."
-        },
-        {
-            "signal": "dependency_edge_kind",
-            "reason": "dependency_graph_hints can support confidence, but edge_kind is not directly matchable by the current classifier."
-        },
-        {
-            "signal": "signature_contains",
-            "reason": "Signatures are supplied as evidence, but the current deterministic rule DSL does not match signatures."
-        },
-        {
-            "signal": "file_role",
-            "reason": "file_role appears in canonical_files, but the current deterministic rule DSL does not match it."
-        },
-        {
-            "signal": "analysis_mode",
-            "reason": "analysis_mode appears in canonical_files, but the current deterministic rule DSL does not match it."
-        },
-        {
-            "signal": "target_kind",
-            "reason": "The current seed candidate selector does not expose target kind filtering."
-        }
-    ])
-}
-
-pub fn role_rule_candidate_examples() -> Value {
-    json!([
-        {
-            "target_role_key": "cli_command_surface",
-            "candidate_selector": {
-                "target_kinds": ["artefact"],
-                "path_prefixes": ["src/cli"],
-                "path_suffixes": [".rs"],
-                "path_contains": ["commands"],
-                "languages": ["rust"],
-                "canonical_kinds": ["function"],
-                "symbol_fqn_contains": [],
-                "required_facts": [
-                    { "kind": "language", "key": "resolved", "op": "eq", "value": "rust", "score": 1.0 }
-                ],
-                "required_fact_any_groups": []
-            },
-            "positive_conditions": [
-                { "kind": "path", "key": "full", "op": "prefix", "value": "src/cli", "score": 0.35 },
-                { "kind": "path", "key": "full", "op": "contains", "value": "commands", "score": 0.35 },
-                { "kind": "language", "key": "resolved", "op": "eq", "value": "rust", "score": 0.30 }
-            ],
-            "negative_conditions": [
-                { "kind": "path", "key": "full", "op": "suffix", "value": "_test.rs", "score": 1.0 }
-            ],
-            "score": {
-                "base_confidence": 0.82,
-                "priority_hint": 100,
-                "min_positive_ratio": 1.0
-            },
-            "evidence": {
-                "inspected_paths": ["src/cli/commands/run.rs"],
-                "positive_examples": [
-                    {
-                        "path": "src/cli/commands/run.rs",
-                        "symbol_fqn": "crate::cli::commands::run",
-                        "canonical_kind": "function",
-                        "why": "Command path and function symbol match the CLI command surface role."
-                    }
-                ],
-                "negative_examples": [
-                    {
-                        "path": "src/cli/commands/run_test.rs",
-                        "symbol_fqn": null,
-                        "canonical_kind": "test",
-                        "why": "Test files should not define the runtime command surface role."
-                    }
-                ],
-                "db_sections_used": ["canonical_files", "canonical_artefacts"],
-                "reasoning_summary": "CLI command files under src/cli/commands in Rust are likely command-surface artefacts.",
-                "confidence_reason": "Path, language, and canonical kind are stable deterministic signals.",
-                "uncertainty": ""
-            },
-            "metadata": {}
-        },
-        {
-            "target_role_key": "domain_policy",
-            "candidate_selector": {
-                "target_kinds": ["artefact"],
-                "path_prefixes": ["src/domain"],
-                "path_suffixes": [],
-                "path_contains": [],
-                "languages": ["rust"],
-                "canonical_kinds": ["struct", "enum", "function"],
-                "symbol_fqn_contains": ["policy"],
-                "required_facts": [
-                    { "kind": "language", "key": "resolved", "op": "eq", "value": "rust", "score": 1.0 }
-                ],
-                "required_fact_any_groups": []
-            },
-            "positive_conditions": [
-                { "kind": "artefact", "key": "canonical_kind", "op": "eq", "value": "function", "score": 0.50 },
-                { "kind": "symbol", "key": "fqn", "op": "contains", "value": "policy", "score": 0.50 }
-            ],
-            "negative_conditions": [],
-            "score": {
-                "base_confidence": 0.74,
-                "priority_hint": 100,
-                "min_positive_ratio": 1.0
-            },
-            "evidence": {
-                "inspected_paths": ["src/domain/policy.rs"],
-                "positive_examples": [
-                    {
-                        "path": "src/domain/policy.rs",
-                        "symbol_fqn": "crate::domain::policy::apply_policy",
-                        "canonical_kind": "function",
-                        "why": "Domain path and policy symbol naming match the role."
-                    }
-                ],
-                "negative_examples": [],
-                "db_sections_used": ["canonical_files", "canonical_artefacts"],
-                "reasoning_summary": "Domain path and policy naming are stable enough for reviewable deterministic suggestions.",
-                "confidence_reason": "The rule uses stable path and symbol naming constraints.",
-                "uncertainty": ""
-            },
-            "metadata": {}
-        }
-    ])
-}
-
-fn strict_empty_object_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {},
-        "required": [],
-        "additionalProperties": false
-    })
-}
-
-fn string_array_schema() -> Value {
-    json!({
-        "type": "array",
-        "items": { "type": "string" }
-    })
-}
-
-fn evidence_example_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["path", "symbol_fqn", "canonical_kind", "why"],
-        "properties": {
-            "path": { "type": "string" },
-            "symbol_fqn": { "type": ["string", "null"] },
-            "canonical_kind": { "type": ["string", "null"] },
-            "why": { "type": "string" }
-        }
-    })
-}
-
-fn seeded_role_evidence_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-            "inspected_paths",
-            "supporting_paths",
-            "supporting_symbols",
-            "db_sections_used",
-            "reasoning_summary",
-            "confidence_reason",
-            "uncertainty"
-        ],
-        "properties": {
-            "inspected_paths": string_array_schema(),
-            "supporting_paths": string_array_schema(),
-            "supporting_symbols": string_array_schema(),
-            "db_sections_used": string_array_schema(),
-            "reasoning_summary": { "type": "string" },
-            "confidence_reason": { "type": "string" },
-            "uncertainty": { "type": "string" }
-        }
-    })
-}
-
-fn seeded_rule_evidence_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-            "inspected_paths",
-            "positive_examples",
-            "negative_examples",
-            "db_sections_used",
-            "reasoning_summary",
-            "confidence_reason",
-            "uncertainty"
-        ],
-        "properties": {
-            "inspected_paths": string_array_schema(),
-            "positive_examples": {
-                "type": "array",
-                "items": evidence_example_schema()
-            },
-            "negative_examples": {
-                "type": "array",
-                "items": evidence_example_schema()
-            },
-            "db_sections_used": string_array_schema(),
-            "reasoning_summary": { "type": "string" },
-            "confidence_reason": { "type": "string" },
-            "uncertainty": { "type": "string" }
-        }
-    })
-}
-
-fn role_condition_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["kind", "key", "op", "value", "score"],
-        "properties": {
-            "kind": { "type": "string", "minLength": 1 },
-            "key": { "type": "string", "minLength": 1 },
-            "op": { "type": "string", "enum": ["eq", "contains", "prefix", "suffix", "gte", "lte"] },
-            "value": { "type": "string", "minLength": 1 },
-            "score": { "type": "number", "minimum": 0, "maximum": 1 }
-        }
-    })
-}
-
-fn seeded_role_schema() -> Value {
-    let strict_object = strict_empty_object_schema();
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-            "canonical_key",
-            "display_name",
-            "description",
-            "family",
-            "provenance",
-            "evidence"
-        ],
-        "properties": {
-            "canonical_key": { "type": "string", "minLength": 1 },
-            "display_name": { "type": "string", "minLength": 1 },
-            "description": { "type": "string" },
-            "family": { "type": ["string", "null"] },
-            "provenance": strict_object.clone(),
-            "evidence": seeded_role_evidence_schema()
-        }
-    })
-}
-
-fn seeded_rule_candidate_schema() -> Value {
-    let strict_object = strict_empty_object_schema();
-    let condition_schema = role_condition_schema();
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-            "target_role_key",
-            "candidate_selector",
-            "positive_conditions",
-            "negative_conditions",
-            "score",
-            "evidence",
-            "metadata"
-        ],
-        "properties": {
-            "target_role_key": { "type": "string", "minLength": 1 },
-            "candidate_selector": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                    "target_kinds",
-                    "path_prefixes",
-                    "path_suffixes",
-                    "path_contains",
-                    "languages",
-                    "canonical_kinds",
-                    "symbol_fqn_contains",
-                    "required_facts",
-                    "required_fact_any_groups"
-                ],
-                "properties": {
-                    "target_kinds": {
-                        "type": "array",
-                        "items": { "type": "string", "enum": ["file", "artefact", "symbol"] }
-                    },
-                    "path_prefixes": { "type": "array", "items": { "type": "string" } },
-                    "path_suffixes": { "type": "array", "items": { "type": "string" } },
-                    "path_contains": { "type": "array", "items": { "type": "string" } },
-                    "languages": { "type": "array", "items": { "type": "string" } },
-                    "canonical_kinds": { "type": "array", "items": { "type": "string" } },
-                    "symbol_fqn_contains": { "type": "array", "items": { "type": "string" } },
-                    "required_facts": {
-                        "type": "array",
-                        "items": condition_schema.clone()
-                    },
-                    "required_fact_any_groups": {
-                        "type": "array",
-                        "items": {
-                            "type": "array",
-                            "items": condition_schema.clone()
-                        }
-                    }
-                }
-            },
-            "positive_conditions": {
-                "type": "array",
-                "items": condition_schema.clone()
-            },
-            "negative_conditions": {
-                "type": "array",
-                "items": condition_schema
-            },
-            "score": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["base_confidence", "priority_hint", "min_positive_ratio"],
-                "properties": {
-                    "base_confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-                    "priority_hint": { "type": ["integer", "null"] },
-                    "min_positive_ratio": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
-                }
-            },
-            "evidence": seeded_rule_evidence_schema(),
-            "metadata": strict_object
-        }
-    })
-}
-
-pub fn architecture_roles_seed_roles_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["roles"],
-        "properties": {
-            "roles": {
-                "type": "array",
-                "minItems": 1,
-                "items": seeded_role_schema()
-            }
-        }
-    })
-}
-
-pub fn architecture_roles_seed_rule_candidates_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["rule_candidates"],
-        "properties": {
-            "rule_candidates": {
-                "type": "array",
-                "items": seeded_rule_candidate_schema()
-            }
-        }
-    })
-}
-
-pub fn architecture_roles_seed_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["roles", "rule_candidates"],
-        "properties": {
-            "roles": {
-                "type": "array",
-                "minItems": 1,
-                "items": seeded_role_schema()
-            },
-            "rule_candidates": {
-                "type": "array",
-                "items": seeded_rule_candidate_schema()
-            }
-        }
-    })
 }
 fn normalise_non_empty(field_name: &str, value: &str) -> Result<String> {
     let normalized = normalize_role_key(value);
@@ -785,25 +426,33 @@ fn validate_rule_shape(
         &format!("{prefix}.candidate_selector.symbol_fqn_contains"),
         &selector.symbol_fqn_contains,
     )?;
-    for condition in &selector.required_facts {
+    for (condition_index, condition) in selector.required_facts.iter().enumerate() {
         validate_condition(
-            &format!("{prefix}.candidate_selector.required_facts"),
+            &format!("{prefix}.candidate_selector.required_facts[{condition_index}]"),
             condition,
         )?;
     }
-    for group in &selector.required_fact_any_groups {
-        for condition in group {
+    for (group_index, group) in selector.required_fact_any_groups.iter().enumerate() {
+        for (condition_index, condition) in group.iter().enumerate() {
             validate_condition(
-                &format!("{prefix}.candidate_selector.required_fact_any_groups"),
+                &format!(
+                    "{prefix}.candidate_selector.required_fact_any_groups[{group_index}][{condition_index}]"
+                ),
                 condition,
             )?;
         }
     }
-    for condition in positive_conditions {
-        validate_condition(&format!("{prefix}.positive_conditions"), condition)?;
+    for (condition_index, condition) in positive_conditions.iter().enumerate() {
+        validate_condition(
+            &format!("{prefix}.positive_conditions[{condition_index}]"),
+            condition,
+        )?;
     }
-    for condition in negative_conditions {
-        validate_condition(&format!("{prefix}.negative_conditions"), condition)?;
+    for (condition_index, condition) in negative_conditions.iter().enumerate() {
+        validate_condition(
+            &format!("{prefix}.negative_conditions[{condition_index}]"),
+            condition,
+        )?;
     }
     reject_signature_only_positive_conditions(
         &format!("{prefix}.positive_conditions"),
@@ -818,6 +467,207 @@ fn validate_rule_shape(
         score.min_positive_ratio,
     )?;
     Ok(())
+}
+
+fn decode_seeded_rule_candidate_with_recovery(
+    candidate_index: usize,
+    mut raw_candidate: Value,
+) -> std::result::Result<
+    (
+        SeededArchitectureRuleCandidate,
+        Vec<SeedRuleCandidateRepair>,
+    ),
+    (String, String),
+> {
+    let role_slug = raw_candidate
+        .get("target_role_key")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let candidate_slug = raw_candidate
+        .pointer("/metadata/slug")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let mut repairs = Vec::new();
+    rewrite_seed_candidate_conditions(
+        candidate_index,
+        role_slug.as_deref(),
+        candidate_slug.as_deref(),
+        &mut raw_candidate,
+        &mut repairs,
+    )?;
+    let candidate = serde_json::from_value::<SeededArchitectureRuleCandidate>(raw_candidate)
+        .map_err(|error| ("rule_candidates".to_string(), error.to_string()))?;
+    validate_rule_shape(
+        &format!("rule_candidates[{candidate_index}]"),
+        &candidate.candidate_selector,
+        &candidate.positive_conditions,
+        &candidate.negative_conditions,
+        &candidate.score,
+    )
+    .map_err(|error| ("rule_candidates".to_string(), error.to_string()))?;
+    Ok((candidate, repairs))
+}
+
+fn rewrite_seed_candidate_conditions(
+    candidate_index: usize,
+    role_slug: Option<&str>,
+    candidate_slug: Option<&str>,
+    candidate: &mut Value,
+    repairs: &mut Vec<SeedRuleCandidateRepair>,
+) -> std::result::Result<(), (String, String)> {
+    rewrite_condition_array(
+        candidate_index,
+        role_slug,
+        candidate_slug,
+        candidate.pointer_mut("/candidate_selector/required_facts"),
+        "candidate_selector.required_facts",
+        repairs,
+    )?;
+    if let Some(groups) = candidate
+        .pointer_mut("/candidate_selector/required_fact_any_groups")
+        .and_then(Value::as_array_mut)
+    {
+        for (group_index, group) in groups.iter_mut().enumerate() {
+            rewrite_condition_array(
+                candidate_index,
+                role_slug,
+                candidate_slug,
+                Some(group),
+                &format!("candidate_selector.required_fact_any_groups[{group_index}]"),
+                repairs,
+            )?;
+        }
+    }
+    rewrite_condition_array(
+        candidate_index,
+        role_slug,
+        candidate_slug,
+        candidate.get_mut("positive_conditions"),
+        "positive_conditions",
+        repairs,
+    )?;
+    rewrite_condition_array(
+        candidate_index,
+        role_slug,
+        candidate_slug,
+        candidate.get_mut("negative_conditions"),
+        "negative_conditions",
+        repairs,
+    )?;
+    Ok(())
+}
+
+fn rewrite_condition_array(
+    candidate_index: usize,
+    role_slug: Option<&str>,
+    candidate_slug: Option<&str>,
+    value: Option<&mut Value>,
+    field_path: &str,
+    repairs: &mut Vec<SeedRuleCandidateRepair>,
+) -> std::result::Result<(), (String, String)> {
+    let Some(Value::Array(conditions)) = value else {
+        return Ok(());
+    };
+    for (condition_index, condition) in conditions.iter_mut().enumerate() {
+        let condition_path = format!("{field_path}[{condition_index}]");
+        rewrite_condition_object(
+            candidate_index,
+            role_slug,
+            candidate_slug,
+            condition,
+            &condition_path,
+            repairs,
+        )?;
+    }
+    Ok(())
+}
+
+fn rewrite_condition_object(
+    candidate_index: usize,
+    role_slug: Option<&str>,
+    candidate_slug: Option<&str>,
+    condition: &mut Value,
+    field_path: &str,
+    repairs: &mut Vec<SeedRuleCandidateRepair>,
+) -> std::result::Result<(), (String, String)> {
+    let Some(object) = condition.as_object_mut() else {
+        return Err((
+            field_path.to_string(),
+            "condition must be an object".to_string(),
+        ));
+    };
+
+    if object.contains_key("predicate") {
+        let predicate_condition =
+            serde_json::from_value::<SeededRoleRulePredicateCondition>(condition.clone())
+                .map_err(|error| (field_path.to_string(), error.to_string()))?;
+        let fact_condition =
+            role_fact_condition_from_seed_predicate(field_path, &predicate_condition)
+                .map_err(|error| (field_path.to_string(), error.to_string()))?;
+        *condition = role_rule_condition_from_fact_condition(fact_condition);
+        return Ok(());
+    }
+
+    if object.contains_key("key") || object.contains_key("op") {
+        let from_op = object
+            .get("op")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let kind = object
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let key = object
+            .get("key")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if kind == "signature" && key == "contains" && from_op == "contains" {
+            object.insert("op".to_string(), Value::String("eq".to_string()));
+            repairs.push(SeedRuleCandidateRepair {
+                candidate_index,
+                role_slug: role_slug.map(str::to_string),
+                candidate_slug: candidate_slug.map(str::to_string),
+                field_path: field_path.to_string(),
+                from: "signature.contains:contains".to_string(),
+                to: "signature.contains:eq".to_string(),
+                reason: "signature.contains supports exact token matches; repaired legacy contains op to eq".to_string(),
+            });
+        }
+
+        let role_condition = serde_json::from_value::<RoleRuleCondition>(condition.clone())
+            .map_err(|error| (field_path.to_string(), error.to_string()))?;
+        let fact_condition = fact_condition_from_rule_condition(field_path, &role_condition)
+            .map_err(|error| (field_path.to_string(), error.to_string()))?;
+        validate_supported_fact_condition(field_path, &fact_condition)
+            .map_err(|error| (field_path.to_string(), error.to_string()))?;
+    }
+
+    Ok(())
+}
+
+fn role_rule_condition_from_fact_condition(condition: RoleFactCondition) -> Value {
+    json!({
+        "kind": condition.kind,
+        "key": condition.key,
+        "op": fact_condition_op_name(condition.op),
+        "value": condition.value,
+        "score": condition.score,
+    })
+}
+
+fn compact_raw_excerpt(value: &Value) -> String {
+    const MAX_RAW_CANDIDATE_EXCERPT_CHARS: usize = 500;
+    let raw = serde_json::to_string(value).unwrap_or_else(|_| "<unserializable>".to_string());
+    if raw.chars().count() <= MAX_RAW_CANDIDATE_EXCERPT_CHARS {
+        return raw;
+    }
+    let mut excerpt = raw
+        .chars()
+        .take(MAX_RAW_CANDIDATE_EXCERPT_CHARS)
+        .collect::<String>();
+    excerpt.push_str("...");
+    excerpt
 }
 
 fn validate_optional_unit_interval(field_name: &str, value: Option<f64>) -> Result<()> {
@@ -949,22 +799,7 @@ pub fn validate_supported_fact_condition(
 }
 
 fn supported_fact_ops(kind: &str, key: &str) -> Option<&'static [&'static str]> {
-    match (kind, key) {
-        ("path", "full") => Some(&["eq", "contains", "prefix", "suffix"]),
-        ("path", "segment" | "extension") => Some(&["eq"]),
-        ("language", "resolved") => Some(&["eq"]),
-        ("file", "analysis_mode" | "role") => Some(&["eq"]),
-        ("artefact", "canonical_kind") => Some(&["eq"]),
-        ("artefact", "language_kind") => Some(&["eq", "contains"]),
-        ("artefact", "has_parent_artefact") => Some(&["eq"]),
-        ("symbol", "fqn") => Some(&["contains", "prefix", "suffix", "eq"]),
-        ("symbol", "name") => Some(&["eq", "contains", "prefix", "suffix"]),
-        ("symbol", "name_suffix" | "has_signature") => Some(&["eq"]),
-        ("signature", "contains") => Some(&["eq"]),
-        ("dependency", "incoming_kind" | "outgoing_kind") => Some(&["eq"]),
-        ("dependency", "incoming_count" | "outgoing_count") => Some(&["gte", "lte", "eq"]),
-        _ => None,
-    }
+    supported_facts::ops_for(kind, key)
 }
 
 fn fact_condition_op_name(op: RoleFactConditionOp) -> &'static str {
@@ -975,5 +810,17 @@ fn fact_condition_op_name(op: RoleFactConditionOp) -> &'static str {
         RoleFactConditionOp::Suffix => "suffix",
         RoleFactConditionOp::Gte => "gte",
         RoleFactConditionOp::Lte => "lte",
+    }
+}
+
+fn role_fact_condition_op_from_name(value: &str) -> Option<RoleFactConditionOp> {
+    match value {
+        "eq" => Some(RoleFactConditionOp::Eq),
+        "contains" => Some(RoleFactConditionOp::Contains),
+        "prefix" => Some(RoleFactConditionOp::Prefix),
+        "suffix" => Some(RoleFactConditionOp::Suffix),
+        "gte" => Some(RoleFactConditionOp::Gte),
+        "lte" => Some(RoleFactConditionOp::Lte),
+        _ => None,
     }
 }

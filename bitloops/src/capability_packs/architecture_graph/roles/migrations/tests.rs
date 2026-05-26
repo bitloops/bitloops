@@ -1,9 +1,15 @@
 #[cfg(test)]
 mod deterministic_tests {
     use super::super::*;
-    use crate::capability_packs::architecture_graph::roles::fact_extraction::SliceArchitectureRoleCurrentStateSource;
+    use crate::capability_packs::architecture_graph::roles::fact_extraction::{
+        ArchitectureRoleFactExtractionInput, SliceArchitectureRoleCurrentStateSource,
+        extract_architecture_role_facts,
+    };
     use crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql;
-    use crate::models::{CurrentCanonicalArtefactRecord, ProductionArtefact};
+    use crate::models::{
+        CurrentCanonicalArtefactRecord, CurrentCanonicalEdgeRecord, CurrentCanonicalFileRecord,
+        ProductionArtefact,
+    };
 
     struct FakeRelationalGateway {
         artefacts: Vec<CurrentCanonicalArtefactRecord>,
@@ -317,10 +323,23 @@ mod deterministic_tests {
         selector: RoleRuleCandidateSelector,
     ) -> Result<ArchitectureRoleRuleRecord> {
         let version = next_role_rule_version(relational, "repo-1", role_id).await?;
+        let positive_conditions = selector
+            .path_prefixes
+            .first()
+            .map(|prefix| {
+                vec![taxonomy::RoleRuleCondition {
+                    kind: "path".to_string(),
+                    key: Some("full".to_string()),
+                    op: Some(taxonomy::RoleFactConditionOp::Prefix),
+                    value: json!(prefix),
+                    score: Some(1.0),
+                }]
+            })
+            .unwrap_or_default();
         let spec = RuleSpecFile {
             role_ref: role_id.to_string(),
             candidate_selector: selector,
-            positive_conditions: vec![],
+            positive_conditions,
             negative_conditions: vec![],
             score: super::super::taxonomy::RoleRuleScore {
                 base_confidence: Some(0.8),
@@ -483,7 +502,13 @@ mod deterministic_tests {
                     path_prefixes: vec!["src/domain".to_string()],
                     ..Default::default()
                 },
-                positive_conditions: vec![],
+                positive_conditions: vec![taxonomy::RoleRuleCondition {
+                    kind: "path".to_string(),
+                    key: Some("full".to_string()),
+                    op: Some(taxonomy::RoleFactConditionOp::Prefix),
+                    value: json!("src/domain"),
+                    score: Some(1.0),
+                }],
                 negative_conditions: vec![],
                 score: super::super::taxonomy::RoleRuleScore {
                     base_confidence: Some(0.8),
@@ -617,6 +642,428 @@ mod deterministic_tests {
         assert_eq!(
             proposal.preview_payload["safety"]["blocking_reasons"],
             json!(["zero_matches"])
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rule_preview_allows_file_target_kind_when_file_facts_match() -> Result<()> {
+        let relational = relational().await?;
+        let role = seed_role(&relational).await?;
+
+        let files = vec![CurrentCanonicalFileRecord {
+            repo_id: "repo-1".to_string(),
+            path: "src/main.rs".to_string(),
+            analysis_mode: "code".to_string(),
+            file_role: "source_code".to_string(),
+            language: "rust".to_string(),
+            resolved_language: "rust".to_string(),
+            effective_content_id: "content-main".to_string(),
+            parser_version: "parser".to_string(),
+            extractor_version: "extractor".to_string(),
+            exists_in_head: true,
+            exists_in_index: true,
+            exists_in_worktree: true,
+        }];
+        let current_state = SliceArchitectureRoleCurrentStateSource::new(&[], &[]);
+        let affected_paths = std::collections::BTreeSet::from(["src/main.rs".to_string()]);
+        let extraction = extract_architecture_role_facts(
+            ArchitectureRoleFactExtractionInput {
+                repo_id: "repo-1",
+                generation_seq: 1,
+                affected_paths: &affected_paths,
+                files: &files,
+            },
+            &current_state,
+        )?;
+        let facts = extraction.facts;
+        let fact_paths = vec!["src/main.rs".to_string()];
+        crate::capability_packs::architecture_graph::roles::storage::replace_role_classification_state(
+            &relational,
+            crate::capability_packs::architecture_graph::roles::storage::RoleClassificationStateReplacement {
+                repo_id: "repo-1",
+                fact_and_signal_paths: &fact_paths,
+                facts: &facts,
+                signals: &[],
+                assignment_paths: &[],
+                assignments: &[],
+                assignment_history_writes: &[],
+                removed_assignment_paths: &[],
+                generation_seq: 1,
+            },
+        )
+        .await?;
+
+        let proposal = create_rule_draft_proposal(
+            &relational,
+            &gateway(),
+            "repo-1",
+            RuleSpecFile {
+                role_ref: role.canonical_key.clone(),
+                candidate_selector: RoleRuleCandidateSelector {
+                    target_kinds: vec![taxonomy::TargetKind::File],
+                    path_prefixes: vec!["src".to_string()],
+                    required_facts: vec![
+                        taxonomy::RoleRuleCondition {
+                            kind: "language".to_string(),
+                            key: Some("resolved".to_string()),
+                            op: Some(taxonomy::RoleFactConditionOp::Eq),
+                            value: json!("rust"),
+                            score: Some(1.0),
+                        },
+                        taxonomy::RoleRuleCondition {
+                            kind: "file".to_string(),
+                            key: Some("role".to_string()),
+                            op: Some(taxonomy::RoleFactConditionOp::Eq),
+                            value: json!("source_code"),
+                            score: Some(1.0),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                positive_conditions: vec![taxonomy::RoleRuleCondition {
+                    kind: "path".to_string(),
+                    key: Some("full".to_string()),
+                    op: Some(taxonomy::RoleFactConditionOp::Eq),
+                    value: json!("src/main.rs"),
+                    score: Some(1.0),
+                }],
+                negative_conditions: Vec::new(),
+                score: taxonomy::RoleRuleScore {
+                    base_confidence: Some(0.90),
+                    priority_hint: Some(100),
+                    min_positive_ratio: Some(1.0),
+                },
+                evidence: json!({}),
+                metadata: json!({}),
+            },
+            json!({"source": "test"}),
+        )
+        .await?;
+
+        let blocking_reasons = proposal.preview_payload["safety"]["blocking_reasons"]
+            .as_array()
+            .expect("blocking reasons");
+        assert!(!blocking_reasons.contains(&json!("unsupported_preview_target_kind")));
+        assert_eq!(
+            proposal.preview_payload["new_matches"],
+            json!(["file:src/main.rs"])
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rule_preview_allows_symbol_target_kind_when_symbol_facts_match() -> Result<()> {
+        let relational = relational().await?;
+        let role = seed_role(&relational).await?;
+        let facts = vec![
+            taxonomy::ArchitectureArtefactFact {
+                repo_id: "repo-1".to_string(),
+                fact_id: "fact-symbol-fqn".to_string(),
+                target: taxonomy::RoleTarget::symbol(
+                    "artefact-boot",
+                    "symbol-boot",
+                    "src/platform/bootstrap.rs",
+                ),
+                language: Some("rust".to_string()),
+                fact_kind: "symbol".to_string(),
+                fact_key: "fqn".to_string(),
+                fact_value: "src/platform/bootstrap.rs::boot_http_api".to_string(),
+                source: "test".to_string(),
+                confidence: 1.0,
+                evidence: json!([]),
+                generation_seq: 1,
+            },
+            taxonomy::ArchitectureArtefactFact {
+                repo_id: "repo-1".to_string(),
+                fact_id: "fact-symbol-signature".to_string(),
+                target: taxonomy::RoleTarget::symbol(
+                    "artefact-boot",
+                    "symbol-boot",
+                    "src/platform/bootstrap.rs",
+                ),
+                language: Some("rust".to_string()),
+                fact_kind: "symbol".to_string(),
+                fact_key: "has_signature".to_string(),
+                fact_value: "true".to_string(),
+                source: "test".to_string(),
+                confidence: 1.0,
+                evidence: json!([]),
+                generation_seq: 1,
+            },
+        ];
+        let fact_paths = vec!["src/platform/bootstrap.rs".to_string()];
+        crate::capability_packs::architecture_graph::roles::storage::replace_role_classification_state(
+            &relational,
+            crate::capability_packs::architecture_graph::roles::storage::RoleClassificationStateReplacement {
+                repo_id: "repo-1",
+                fact_and_signal_paths: &fact_paths,
+                facts: &facts,
+                signals: &[],
+                assignment_paths: &[],
+                assignments: &[],
+                assignment_history_writes: &[],
+                removed_assignment_paths: &[],
+                generation_seq: 1,
+            },
+        )
+        .await?;
+
+        let proposal = create_rule_draft_proposal(
+            &relational,
+            &gateway(),
+            "repo-1",
+            RuleSpecFile {
+                role_ref: role.canonical_key.clone(),
+                candidate_selector: RoleRuleCandidateSelector {
+                    target_kinds: vec![taxonomy::TargetKind::Symbol],
+                    path_prefixes: vec!["src/platform".to_string()],
+                    required_facts: vec![taxonomy::RoleRuleCondition {
+                        kind: "symbol".to_string(),
+                        key: Some("fqn".to_string()),
+                        op: Some(taxonomy::RoleFactConditionOp::Contains),
+                        value: json!("boot_http_api"),
+                        score: Some(1.0),
+                    }],
+                    ..Default::default()
+                },
+                positive_conditions: vec![taxonomy::RoleRuleCondition {
+                    kind: "symbol".to_string(),
+                    key: Some("has_signature".to_string()),
+                    op: Some(taxonomy::RoleFactConditionOp::Eq),
+                    value: json!("true"),
+                    score: Some(1.0),
+                }],
+                negative_conditions: Vec::new(),
+                score: taxonomy::RoleRuleScore {
+                    base_confidence: Some(0.90),
+                    priority_hint: Some(100),
+                    min_positive_ratio: Some(1.0),
+                },
+                evidence: json!({}),
+                metadata: json!({}),
+            },
+            json!({"source": "test"}),
+        )
+        .await?;
+
+        let blocking_reasons = proposal.preview_payload["safety"]["blocking_reasons"]
+            .as_array()
+            .expect("blocking reasons");
+        assert!(!blocking_reasons.contains(&json!("unsupported_preview_target_kind")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rule_preview_uses_current_dependency_facts() -> Result<()> {
+        let relational = relational().await?;
+        let role = seed_role(&relational).await?;
+        let artefacts = vec![CurrentCanonicalArtefactRecord {
+            repo_id: "repo-1".to_string(),
+            path: "src/application/create_user.rs".to_string(),
+            content_id: "content-create-user".to_string(),
+            symbol_id: "symbol-create-user-file".to_string(),
+            artefact_id: "artefact-create-user-file".to_string(),
+            language: "rust".to_string(),
+            extraction_fingerprint: "fingerprint-create-user-file".to_string(),
+            canonical_kind: Some("file".to_string()),
+            language_kind: Some("file".to_string()),
+            symbol_fqn: Some("src/application/create_user.rs".to_string()),
+            parent_symbol_id: None,
+            parent_artefact_id: None,
+            start_line: 1,
+            end_line: 20,
+            start_byte: 0,
+            end_byte: 200,
+            signature: None,
+            modifiers: String::new(),
+            docstring: None,
+        }];
+        let edges = vec![CurrentCanonicalEdgeRecord {
+            repo_id: "repo-1".to_string(),
+            edge_id: "edge-import-user".to_string(),
+            path: "src/application/create_user.rs".to_string(),
+            from_artefact_id: "artefact-create-user-file".to_string(),
+            to_artefact_id: Some("artefact-user".to_string()),
+            to_symbol_ref: Some("src/domain/user.rs::User".to_string()),
+            content_id: "content-create-user".to_string(),
+            from_symbol_id: "symbol-create-user-file".to_string(),
+            to_symbol_id: Some("symbol-user".to_string()),
+            edge_kind: "imports".to_string(),
+            language: "rust".to_string(),
+            start_line: Some(1),
+            end_line: Some(1),
+            metadata: "{}".to_string(),
+        }];
+        let current_state = SliceArchitectureRoleCurrentStateSource::new(&artefacts, &edges);
+        let files = Vec::new();
+        let affected_paths =
+            std::collections::BTreeSet::from(["src/application/create_user.rs".to_string()]);
+        let extraction = extract_architecture_role_facts(
+            ArchitectureRoleFactExtractionInput {
+                repo_id: "repo-1",
+                generation_seq: 1,
+                affected_paths: &affected_paths,
+                files: &files,
+            },
+            &current_state,
+        )?;
+        let facts = extraction.facts;
+        let fact_paths = vec!["src/application/create_user.rs".to_string()];
+        crate::capability_packs::architecture_graph::roles::storage::replace_role_classification_state(
+            &relational,
+            crate::capability_packs::architecture_graph::roles::storage::RoleClassificationStateReplacement {
+                repo_id: "repo-1",
+                fact_and_signal_paths: &fact_paths,
+                facts: &facts,
+                signals: &[],
+                assignment_paths: &[],
+                assignments: &[],
+                assignment_history_writes: &[],
+                removed_assignment_paths: &[],
+                generation_seq: 1,
+            },
+        )
+        .await?;
+
+        let proposal = create_rule_draft_proposal(
+            &relational,
+            &gateway(),
+            "repo-1",
+            RuleSpecFile {
+                role_ref: role.canonical_key.clone(),
+                candidate_selector: RoleRuleCandidateSelector {
+                    target_kinds: vec![taxonomy::TargetKind::Artefact],
+                    path_prefixes: vec!["src/application".to_string()],
+                    required_facts: vec![taxonomy::RoleRuleCondition {
+                        kind: "dependency".to_string(),
+                        key: Some("outgoing_kind".to_string()),
+                        op: Some(taxonomy::RoleFactConditionOp::Eq),
+                        value: json!("imports"),
+                        score: Some(1.0),
+                    }],
+                    ..Default::default()
+                },
+                positive_conditions: vec![taxonomy::RoleRuleCondition {
+                    kind: "path".to_string(),
+                    key: Some("full".to_string()),
+                    op: Some(taxonomy::RoleFactConditionOp::Contains),
+                    value: json!("create_user.rs"),
+                    score: Some(1.0),
+                }],
+                negative_conditions: Vec::new(),
+                score: taxonomy::RoleRuleScore {
+                    base_confidence: Some(0.90),
+                    priority_hint: Some(100),
+                    min_positive_ratio: Some(1.0),
+                },
+                evidence: json!({}),
+                metadata: json!({}),
+            },
+            json!({"source": "test"}),
+        )
+        .await?;
+
+        assert_ne!(
+            proposal.preview_payload["safety"]["blocking_reasons"],
+            json!(["zero_matches"])
+        );
+        assert_eq!(proposal.preview_payload["safety"]["status"], json!("safe"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rule_preview_excludes_targets_with_matching_negative_conditions() -> Result<()> {
+        let relational = relational().await?;
+        let role = seed_role(&relational).await?;
+
+        let files = vec![CurrentCanonicalFileRecord {
+            repo_id: "repo-1".to_string(),
+            path: "src/generated/main.rs".to_string(),
+            analysis_mode: "code".to_string(),
+            file_role: "source_code".to_string(),
+            language: "rust".to_string(),
+            resolved_language: "rust".to_string(),
+            effective_content_id: "content-main".to_string(),
+            parser_version: "parser".to_string(),
+            extractor_version: "extractor".to_string(),
+            exists_in_head: true,
+            exists_in_index: true,
+            exists_in_worktree: true,
+        }];
+        let current_state = SliceArchitectureRoleCurrentStateSource::new(&[], &[]);
+        let affected_paths =
+            std::collections::BTreeSet::from(["src/generated/main.rs".to_string()]);
+        let extraction = extract_architecture_role_facts(
+            ArchitectureRoleFactExtractionInput {
+                repo_id: "repo-1",
+                generation_seq: 1,
+                affected_paths: &affected_paths,
+                files: &files,
+            },
+            &current_state,
+        )?;
+        let facts = extraction.facts;
+        let fact_paths = vec!["src/generated/main.rs".to_string()];
+        crate::capability_packs::architecture_graph::roles::storage::replace_role_classification_state(
+            &relational,
+            crate::capability_packs::architecture_graph::roles::storage::RoleClassificationStateReplacement {
+                repo_id: "repo-1",
+                fact_and_signal_paths: &fact_paths,
+                facts: &facts,
+                signals: &[],
+                assignment_paths: &[],
+                assignments: &[],
+                assignment_history_writes: &[],
+                removed_assignment_paths: &[],
+                generation_seq: 1,
+            },
+        )
+        .await?;
+
+        let proposal = create_rule_draft_proposal(
+            &relational,
+            &gateway(),
+            "repo-1",
+            RuleSpecFile {
+                role_ref: role.canonical_key.clone(),
+                candidate_selector: RoleRuleCandidateSelector {
+                    target_kinds: vec![taxonomy::TargetKind::File],
+                    path_prefixes: vec!["src".to_string()],
+                    ..Default::default()
+                },
+                positive_conditions: vec![taxonomy::RoleRuleCondition {
+                    kind: "file".to_string(),
+                    key: Some("role".to_string()),
+                    op: Some(taxonomy::RoleFactConditionOp::Eq),
+                    value: json!("source_code"),
+                    score: Some(1.0),
+                }],
+                negative_conditions: vec![taxonomy::RoleRuleCondition {
+                    kind: "path".to_string(),
+                    key: Some("full".to_string()),
+                    op: Some(taxonomy::RoleFactConditionOp::Contains),
+                    value: json!("generated"),
+                    score: Some(1.0),
+                }],
+                score: taxonomy::RoleRuleScore {
+                    base_confidence: Some(0.90),
+                    priority_hint: Some(100),
+                    min_positive_ratio: Some(1.0),
+                },
+                evidence: json!({}),
+                metadata: json!({}),
+            },
+            json!({"source": "test"}),
+        )
+        .await?;
+
+        assert_eq!(proposal.preview_payload["new_matches"], json!([]));
+        assert!(
+            proposal.preview_payload["safety"]["blocking_reasons"]
+                .as_array()
+                .expect("blocking reasons")
+                .contains(&json!("zero_matches"))
         );
         Ok(())
     }

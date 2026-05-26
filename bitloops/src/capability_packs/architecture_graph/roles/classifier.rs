@@ -15,7 +15,7 @@ use super::fact_extraction::{
     ArchitectureRoleCurrentStateSource, ArchitectureRoleFactExtractionInput,
     extract_architecture_role_facts,
 };
-use super::rules::{compile_detection_rules, evaluate_rules_over_facts};
+use super::rules::{compile_detection_rules_lossy, evaluate_rules_over_facts};
 use super::storage::{
     AssignmentHistoryWrite, RoleClassificationStateReplacement,
     load_active_assignment_paths_not_in, load_active_detection_rules, load_assignments_for_paths,
@@ -348,7 +348,18 @@ pub async fn classify_architecture_roles_for_current_state(
     let fact_and_signal_paths =
         refreshed_paths_with_removals(&extraction.refreshed_paths, &removed_assignment_paths);
     let rules = load_active_detection_rules(relational, input.repo_id).await?;
-    let compiled = compile_detection_rules(rules.clone())?;
+    let compiled_with_diagnostics = compile_detection_rules_lossy(rules.clone());
+    let skipped_rule_warnings = compiled_with_diagnostics
+        .skipped
+        .iter()
+        .map(|skipped| {
+            format!(
+                "skipped active architecture role rule {} for role {}: {}",
+                skipped.rule_id, skipped.role_id, skipped.reason
+            )
+        })
+        .collect::<Vec<_>>();
+    let compiled = compiled_with_diagnostics.rules;
     let rule_result = evaluate_rules_over_facts(&compiled, &extraction.facts)?;
     let assignments = aggregate_role_assignments(
         input.repo_id,
@@ -568,7 +579,7 @@ pub async fn classify_architecture_roles_for_current_state(
             max_sqlite_lock_hold_ms: apply_outcome.sqlite_phase_metrics.max_hold_ms,
             file_batches: usize::from(input.scope.full_reconcile),
         },
-        warnings: Vec::new(),
+        warnings: skipped_rule_warnings,
         architecture_embedding_refresh_paths: assignment_refresh_paths,
         architecture_embedding_cleanup_paths: removed_paths,
         adjudication_requests,
