@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.31] - 2026-05-26
+
 ### Added
 
 - **Configure can install daemon config without starting the daemon**: `bitloops configure --file <path> --no-start` and `bitloops configure --default-config --no-start` now validate and install daemon configuration without explicitly starting or restarting the daemon.
@@ -13,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Architecture role classification now reports deterministic coverage and rule-mining signals**: current-state role classification now tracks target coverage, unknown-target suppression, high-impact escalations, adjudication reason counts, and clustered rule-mining representatives so role taxonomy gaps can be inspected without escalating every ordinary unknown source target.
 
 ### Fixed
+
+- **Dashboard bundle install now falls back once when the newest compatible bundle archive 404s** (`CLI-1918`): `fetchBundle` now tries the next compatible `bundle_versions.json` entry when the selected archive returns HTTP 404, while preserving hard failures for checksum mismatches and limiting fallback to one older version.
 
 - **Architecture role classification is more stable around noisy unknowns and imperfect rules**: ordinary non-role files, import artefacts, file-like duplicate artefacts, lock/config/cache/documentation paths, and low-signal source targets are suppressed instead of repeatedly queued for adjudication, while high-impact `main` targets are still escalated when they lack confident deterministic classification. Invalid active detection rules are skipped with diagnostics instead of aborting classification for the remaining valid rules.
 - **Architecture role adjudication and seed prompts now produce stricter reviewable rule suggestions**: adjudication requests use stable target keys plus fact/rule hashes to avoid generation-only churn, adjudication responses validate draftable rule suggestions against active roles and supported fact predicates, and seed prompts now ask local agents to inspect code read-only before returning roles or deterministic rule candidates.
@@ -50,6 +54,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Repo-local DevQL guidance now includes architecture search patterns**: managed guidance surfaces mention `searchMode: ARCHITECTURE` and compact architecture-role query shapes.
 
 ### Fixed
+
 - **Large-repo init embeddings now avoid several avoidable SQLite contention paths**: Bitloops no longer re-initializes the runtime SQLite schema on every open, managed embeddings bootstrap no longer stays blocked behind stale bootstrap state, embedding commits release relational writes before runtime-mailbox finalization, clone rebuild waits until a repo's embedding backlog drains, and sqlite-vec current-row mirror writes are batched per dimension instead of per artefact. Together these changes keep code embeddings progressing on larger repos, reduce `runtime.sqlite` / `relational.db` lock contention during init backfills, and prevent clone rebuild from competing with active embedding work.
 - **Architecture role status can inspect runtime queue state read-only**: `bitloops devql architecture roles status` reads queued adjudication jobs and review items without requiring current-state classification context.
 - **C++ language support in the host-managed language adapter runtime**: added a built-in `cpp-language-pack` with extension-host profile resolution (`.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`, `.h++`), typed `CppKind` language kinds, canonical mappings, C++ artefact extraction, dependency-edge extraction, and source-level C++ `LanguageTestSupport` discovery. C++ now participates in built-in language adapter registration, readiness/registry reporting, DevQL language detection, sync cache extraction/materialization, and cached-kind parsing alongside existing Rust/TS-JS/Python/Go/Java/C#/PHP support.
