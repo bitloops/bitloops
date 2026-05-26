@@ -68,11 +68,9 @@ pub(crate) fn parse_commit_hunks_from_git_show(
     let mut parsed = ParsedCommitHunks::default();
     let mut section = Vec::<&str>::new();
     for line in raw_diff.lines() {
-        if line.starts_with("diff --git ") {
-            if !section.is_empty() {
-                parse_file_diff_section(repo_id, commit_sha, &section, &mut parsed)?;
-                section.clear();
-            }
+        if line.starts_with("diff --git ") && !section.is_empty() {
+            parse_file_diff_section(repo_id, commit_sha, &section, &mut parsed)?;
+            section.clear();
         }
         if !section.is_empty() || line.starts_with("diff --git ") {
             section.push(line);
@@ -141,7 +139,7 @@ fn parse_file_diff_section(
     let mut new_blob_sha = None;
     let mut is_binary = false;
 
-    for line in lines.iter().copied() {
+    for line in lines {
         if line.starts_with("new file mode ") {
             change_kind = Some("added".to_string());
         } else if line.starts_with("deleted file mode ") {

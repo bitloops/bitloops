@@ -90,7 +90,7 @@ async fn execute_graphql_request<T: DeserializeOwned>(
         if err.is_timeout() {
             anyhow::anyhow!(
                 "Bitloops daemon did not respond within {} seconds while sending DevQL request to {endpoint_path}. Run `bitloops daemon restart` and retry.",
-                DAEMON_HTTP_REQUEST_TIMEOUT.as_secs()
+                super::process::DAEMON_HTTP_REQUEST_TIMEOUT.as_secs()
             )
         } else {
             anyhow::anyhow!(err).context("sending DevQL request to Bitloops daemon")

@@ -9,7 +9,9 @@ use crate::graphql::types::{Branch, Commit, CommitHunk, CommitHunkLine, DateTime
 use crate::host::checkpoints::strategy::manual_commit::{
     list_committed, resolve_default_branch_name, run_git,
 };
-use crate::host::devql::{RelationalStorageRole, esc_pg, sql_like_with_escape};
+use crate::host::devql::{
+    RelationalStorageRole, esc_pg, escape_like_pattern, sql_like_with_escape,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
 use serde_json::Value;
@@ -351,7 +353,10 @@ fn build_commit_hunks_sql(
             path = esc_pg(path)
         ));
     } else if let Some(project_path) = project_path {
-        let prefix = format!("{}/%", project_path.trim_end_matches('/'));
+        let prefix = format!(
+            "{}/%",
+            escape_like_pattern(project_path.trim_end_matches('/'))
+        );
         predicates.push(format!(
             "(h.path_after = '{project}' OR h.path_before = '{project}' OR {after_like} OR {before_like})",
             project = esc_pg(project_path),

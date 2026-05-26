@@ -1922,28 +1922,28 @@ pub(super) fn then_expected_shas_completed_in_ledger(
     })
 }
 
-pub(super) fn then_expected_shas_have_hunk_delta_rows(
+pub(super) fn then_expected_shas_have_commit_artefact_rows(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "expected SHAs have hunk-delta rows",
-            helpers::assert_expected_shas_have_hunk_delta_rows(world, &repo_name),
+            "expected SHAs have commit artefact rows",
+            helpers::assert_expected_shas_have_commit_artefact_rows(world, &repo_name),
         );
     })
 }
 
-pub(super) fn then_expected_paths_have_hunk_delta_rows_for_expected_shas(
+pub(super) fn then_expected_paths_have_commit_artefact_rows_for_expected_shas(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "expected paths have hunk-delta rows for expected SHAs",
-            helpers::assert_expected_paths_have_hunk_delta_rows_for_expected_shas(
+            "expected paths have commit artefact rows for expected SHAs",
+            helpers::assert_expected_paths_have_commit_artefact_rows_for_expected_shas(
                 world, &repo_name,
             ),
         );

@@ -261,15 +261,18 @@ async fn execute_ingest_inner(
                             format!("parsing hunk diff for commit {commit_sha}")
                         })?;
                 filter_commit_hunks_by_exclusions(&mut parsed_hunks, &exclusion_matcher);
-                counters.artefacts_upserted += append_changed_after_side_commit_artefacts(
+                let append_ctx = CommitArtefactAppendContext {
                     cfg,
-                    &relational,
+                    relational: &relational,
+                    exclusion_matcher: &exclusion_matcher,
+                    parser_version: &parser_version,
+                    extractor_version: &extractor_version,
+                };
+                counters.artefacts_upserted += append_changed_after_side_commit_artefacts(
+                    &append_ctx,
                     &commit_sha,
                     &commit_info,
                     &parsed_hunks,
-                    &exclusion_matcher,
-                    &parser_version,
-                    &extractor_version,
                 )
                 .await?;
 
@@ -442,15 +445,19 @@ struct ChangedLineRange {
     end: i32,
 }
 
+struct CommitArtefactAppendContext<'a> {
+    cfg: &'a DevqlConfig,
+    relational: &'a RelationalStorage,
+    exclusion_matcher: &'a RepoExclusionMatcher,
+    parser_version: &'a str,
+    extractor_version: &'a str,
+}
+
 async fn append_changed_after_side_commit_artefacts(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
+    ctx: &CommitArtefactAppendContext<'_>,
     commit_sha: &str,
     commit_info: &CheckpointCommitInfo,
     parsed_hunks: &ParsedCommitHunks,
-    exclusion_matcher: &RepoExclusionMatcher,
-    parser_version: &str,
-    extractor_version: &str,
 ) -> Result<usize> {
     if parsed_hunks.file_deltas.is_empty() {
         return Ok(0);
@@ -461,14 +468,14 @@ async fn append_changed_after_side_commit_artefacts(
         return Ok(0);
     }
 
-    let tracked_paths = tracked_paths_at_revision(&cfg.repo_root, commit_sha)
+    let tracked_paths = tracked_paths_at_revision(&ctx.cfg.repo_root, commit_sha)
         .with_context(|| format!("listing tracked files for commit {commit_sha}"))?;
     let classifier = ProjectAwareClassifier::discover_for_revision(
-        &cfg.repo_root,
+        &ctx.cfg.repo_root,
         commit_sha,
         tracked_paths,
-        parser_version,
-        extractor_version,
+        ctx.parser_version,
+        ctx.extractor_version,
     )
     .with_context(|| format!("building project-aware classifier for commit {commit_sha}"))?;
 
@@ -489,7 +496,7 @@ async fn append_changed_after_side_commit_artefacts(
             continue;
         }
 
-        let excluded_by_policy = exclusion_matcher.excludes_repo_relative_path(path);
+        let excluded_by_policy = ctx.exclusion_matcher.excludes_repo_relative_path(path);
         let classification = classifier
             .classify_repo_relative_path(path, excluded_by_policy)
             .with_context(|| {
@@ -501,7 +508,7 @@ async fn append_changed_after_side_commit_artefacts(
             continue;
         }
 
-        let blob_content = git_blob_decoded_content(&cfg.repo_root, blob_sha).ok_or_else(|| {
+        let blob_content = git_blob_decoded_content(&ctx.cfg.repo_root, blob_sha).ok_or_else(|| {
             anyhow!(
                 "failed to decode blob content for hunk ingest artefact path `{}` at commit {} (blob {})",
                 path,
@@ -519,25 +526,28 @@ async fn append_changed_after_side_commit_artefacts(
         }
 
         let (file_artefact, file_record) = build_file_artefact_metadata_record(
-            cfg,
+            ctx.cfg,
             path,
             blob_sha,
             &classification.language,
             &classification.extraction_fingerprint,
             &blob_content,
         );
-        let historical_file_record =
-            commit_scoped_historical_artefact_record(&cfg.repo.repo_id, commit_sha, &file_record);
+        let historical_file_record = commit_scoped_historical_artefact_record(
+            &ctx.cfg.repo.repo_id,
+            commit_sha,
+            &file_record,
+        );
         sql_batch.push(build_insert_historical_artefact_sql(
-            cfg,
-            relational,
+            ctx.cfg,
+            ctx.relational,
             &file_artefact.language,
             &file_artefact.extraction_fingerprint,
             &historical_file_record,
         ));
         sql_batch.push(build_insert_commit_artefact_sql(
-            relational,
-            &cfg.repo.repo_id,
+            ctx.relational,
+            &ctx.cfg.repo.repo_id,
             commit_sha,
             path,
             blob_sha,
@@ -550,8 +560,8 @@ async fn append_changed_after_side_commit_artefacts(
         }
         let source_content = blob_content.text.as_deref().unwrap_or_default();
         artefacts_appended += append_overlapping_language_artefact_metadata_sql(
-            cfg,
-            relational,
+            ctx.cfg,
+            ctx.relational,
             &FileRevision {
                 commit_sha,
                 revision: TemporalRevisionRef {
@@ -571,7 +581,7 @@ async fn append_changed_after_side_commit_artefacts(
     }
 
     if !sql_batch.is_empty() {
-        relational
+        ctx.relational
             .exec_batch_transactional_for_role(RelationalStorageRole::SharedRelational, &sql_batch)
             .await
             .context("appending changed after-side commit artefacts")?;
