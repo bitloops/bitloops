@@ -7,7 +7,7 @@ mod state;
 
 pub use self::coordinator::{DevqlTaskCoordinator, DevqlTaskEnqueueResult};
 
-#[cfg(feature = "slow-tests")]
+#[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
 pub fn drain_lifecycle_stop_spool_for_repo_for_tests(
     repo_root: &std::path::Path,
 ) -> anyhow::Result<u64> {

@@ -32,14 +32,14 @@ mod state;
 #[path = "coordinator/worker.rs"]
 mod worker;
 
-#[cfg(feature = "slow-tests")]
+#[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
 pub(crate) fn recover_lifecycle_stop_spool_jobs_for_tests(
     sqlite: &crate::storage::SqliteConnectionPool,
 ) -> anyhow::Result<u64> {
     worker::lifecycle_spool::recover_lifecycle_stop_spool_jobs(sqlite)
 }
 
-#[cfg(feature = "slow-tests")]
+#[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
 pub(crate) fn process_lifecycle_stop_spool_once_for_tests(
     sqlite: &crate::storage::SqliteConnectionPool,
 ) -> anyhow::Result<u64> {
