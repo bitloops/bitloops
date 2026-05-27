@@ -17,6 +17,8 @@ mod util;
 #[cfg(test)]
 mod tests;
 
+#[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
+pub(crate) use repo_lifecycle_spool::lifecycle_spool_has_running_repo_work;
 pub(crate) use repo_lifecycle_spool::{
     LifecycleBoundarySnapshot, LifecycleHookEnqueueResult, LifecycleJobInsert, LifecycleJobRecord,
     LifecycleJobStatus, LifecycleWorkspaceSnapshot, MAX_LIFECYCLE_JOB_ATTEMPTS,

@@ -8,6 +8,9 @@ pub(crate) use crate::host::runtime_store::{
     requeue_lifecycle_job, unix_timestamp_now,
 };
 
+#[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
+pub(crate) use crate::host::runtime_store::lifecycle_spool_has_running_repo_work;
+
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use crate::host::runtime_store::{

@@ -17,7 +17,8 @@ pub fn drain_lifecycle_spool_for_repo_for_tests(
 
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)?.repo_id;
     let mut processed_total = 0;
-    for _ in 0..16 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
         let processed = coordinator::process_lifecycle_spool_once_for_tests(&sqlite)?;
         processed_total += processed;
         if !crate::host::checkpoints::lifecycle::spool::lifecycle_spool_has_repo_work(
@@ -26,6 +27,15 @@ pub fn drain_lifecycle_spool_for_repo_for_tests(
             return Ok(processed_total);
         }
         if processed == 0 {
+            let has_running_work =
+                crate::host::checkpoints::lifecycle::spool::lifecycle_spool_has_running_repo_work(
+                    &sqlite, &repo_id,
+                )?;
+            if !has_running_work || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        } else if std::time::Instant::now() >= deadline {
             break;
         }
     }

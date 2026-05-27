@@ -308,6 +308,25 @@ pub(crate) fn lifecycle_spool_has_repo_work(
     })
 }
 
+#[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
+pub(crate) fn lifecycle_spool_has_running_repo_work(
+    sqlite: &SqliteConnectionPool,
+    repo_id: &str,
+) -> Result<bool> {
+    sqlite.with_connection(|conn| {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM agent_lifecycle_spool_jobs
+                 WHERE repo_id = ?1 AND status = ?2",
+                params![repo_id, LifecycleJobStatus::Running.as_str()],
+                |row| row.get(0),
+            )
+            .context("checking lifecycle spool running repo work")?;
+        Ok(count > 0)
+    })
+}
+
 pub(crate) fn requeue_lifecycle_job(
     sqlite: &SqliteConnectionPool,
     job_id: &str,
