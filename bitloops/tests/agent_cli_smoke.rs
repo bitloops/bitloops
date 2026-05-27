@@ -550,6 +550,7 @@ fn copilot_cli_smoke_maps_basic_workflow_commit() {
         Some(r#"{"sessionId":"copilot-smoke-1"}"#),
     );
     assert_home_success(&out, "hooks copilot session-end");
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
 
     run_git_expect_success_with_home(
         dir.path(),
