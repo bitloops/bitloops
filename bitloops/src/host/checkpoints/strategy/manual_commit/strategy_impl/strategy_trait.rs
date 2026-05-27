@@ -333,16 +333,29 @@ impl Strategy for ManualCommitStrategy {
         let committed_files = files_changed_in_commit(&self.repo_root, &head).unwrap_or_default();
         let mut committed_files_vec = committed_files.iter().cloned().collect::<Vec<_>>();
         committed_files_vec.sort();
-        let refresh_result =
-            run_devql_post_commit_refresh(&self.repo_root, &head, &committed_files);
-        if let Err(err) = refresh_result {
-            eprintln!(
-                "[bitloops] Warning: DevQL post-commit artefact refresh failed for commit {}: {err:#}",
-                head
-            );
-        }
+        let refresh_deferred_to_daemon = match run_devql_post_commit_refresh(
+            &self.repo_root,
+            &head,
+            &committed_files,
+        ) {
+            Ok(deferred) => deferred,
+            Err(err) => {
+                eprintln!(
+                    "[bitloops] Warning: DevQL post-commit artefact refresh failed for commit {}: {err:#}",
+                    head
+                );
+                false
+            }
+        };
+        let interaction_spool_pending_work = open_interaction_spool(&self.repo_root)
+            .ok()
+            .as_ref()
+            .is_some_and(|spool| spool_has_pending_work(spool));
 
-        if should_defer_post_commit_derivation_for_lifecycle_spool(&self.repo_root) {
+        if refresh_deferred_to_daemon
+            || interaction_spool_pending_work
+            || should_defer_post_commit_derivation_for_lifecycle_spool(&self.repo_root)
+        {
             match crate::host::devql::enqueue_spooled_post_commit_derivation(
                 &self.repo_root,
                 &head,
@@ -352,7 +365,7 @@ impl Strategy for ManualCommitStrategy {
                 Ok(_) => {}
                 Err(err) => {
                     eprintln!(
-                        "[bitloops] Warning: failed to queue post-commit derivation behind lifecycle spool for commit {}: {err:#}",
+                        "[bitloops] Warning: failed to queue post-commit derivation for daemon processing for commit {}: {err:#}",
                         head
                     );
                     self.execute_post_commit_derivation(

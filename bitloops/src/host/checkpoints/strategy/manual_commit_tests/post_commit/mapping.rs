@@ -102,6 +102,52 @@ pub(crate) fn post_commit_defers_derivation_when_lifecycle_spool_work_is_pending
     );
 }
 
+#[test]
+pub(crate) fn post_commit_defers_derivation_when_interaction_spool_work_is_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    seed_interaction_turn(
+        dir.path(),
+        "pending-interaction-session",
+        "pending-interaction-turn",
+        &["src/app.ts"],
+    );
+    assert!(
+        interaction_queue_count(dir.path()) > 0,
+        "seeded interaction turn should leave canonical mutations queued"
+    );
+
+    let head = commit_files(
+        dir.path(),
+        &[("src/app.ts", "export const value = 1;\n")],
+        "agent commit",
+    );
+
+    ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
+
+    assert!(
+        query_commit_checkpoint_id(dir.path(), &head).is_none(),
+        "post_commit should defer derivation until interaction spool work is drained"
+    );
+    let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+    let config_root = crate::config::resolve_bound_daemon_config_root_for_repo(dir.path())
+        .expect("resolve daemon config root");
+    let jobs = crate::host::devql::list_recent_producer_spool_jobs(&config_root, &repo.repo_id, 10)
+        .expect("list producer spool jobs");
+    assert!(
+        jobs.iter().any(|job| matches!(
+            &job.payload,
+            crate::host::devql::ProducerSpoolJobPayload::PostCommitDerivation {
+                commit_sha,
+                committed_files,
+                is_rebase_in_progress: false,
+            } if commit_sha == &head && committed_files == &vec!["src/app.ts".to_string()]
+        )),
+        "post_commit should enqueue a daemon derivation job behind interaction spool work: {jobs:?}"
+    );
+}
+
 fn rewrite_events_path_to_blocked_file(repo_root: &Path) {
     let blocked_parent = repo_root.join("blocked-events-parent");
     fs::write(&blocked_parent, "not a directory").unwrap();
