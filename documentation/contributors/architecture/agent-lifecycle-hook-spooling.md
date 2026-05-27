@@ -38,7 +38,7 @@ The hook process captures volatile state before enqueue:
 | Snapshot kind | Captures | Used by |
 | --- | --- | --- |
 | none | raw hook payload only | SessionStart, SessionEnd, Compaction, pure observation hooks |
-| pre-boundary | untracked files, transcript offset | TurnStart, SubagentStart |
+| pre-boundary | untracked files; transcript offset for TurnStart only | TurnStart, SubagentStart |
 | workspace | modified/new/deleted files | TurnEnd, SubagentEnd, shell TurnEnd, mixed Codex post-tool hooks |
 | workspace plus branch | workspace plus default-branch decision | TodoCheckpoint |
 
