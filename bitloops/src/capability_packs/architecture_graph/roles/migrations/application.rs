@@ -1,10 +1,14 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-use crate::host::capability_host::gateways::RelationalGateway;
+mod rule_preview;
+mod rule_storage;
+pub(super) use rule_preview::preview_rule_spec;
+pub(super) use rule_storage::canonical_rule_hash;
+use rule_storage::{rule_spec_storage_payload, sha256_json};
+
 use crate::host::devql::RelationalStorage;
 
 use super::{
@@ -27,11 +31,7 @@ use crate::capability_packs::architecture_graph::roles::storage::{
     normalize_role_key, update_current_assignment_status, update_role_rule_lifecycle, upsert_role,
 };
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
-    ArchitectureRoleAssignment, AssignmentStatus, MatchableArtefact, RoleCandidateSelector,
-    RoleFactCondition, RoleRuleCandidateSelector, RoleRuleCondition, RoleSplitSpecFile,
-    RuleSpecFile, parse_rule_conditions, parse_rule_selector,
-    role_rule_candidate_selector_contract, role_rule_conditions_contract,
-    role_rule_contract_matches, role_rule_matches,
+    ArchitectureRoleAssignment, AssignmentStatus, RoleSplitSpecFile,
 };
 
 pub async fn apply_proposal(
@@ -298,59 +298,6 @@ pub(super) async fn preview_alias_change(
         "affected_artefacts": 0,
         "downstream_review_work": {
             "reclassification_required": false,
-        }
-    }))
-}
-
-pub(super) async fn preview_rule_spec(
-    gateway: &dyn RelationalGateway,
-    repo_id: &str,
-    role_id: &str,
-    spec: &RuleSpecFile,
-    existing_rule: Option<&ArchitectureRoleRuleRecord>,
-) -> Result<Value> {
-    let artefacts = load_matchable_artefacts(gateway, repo_id)?;
-    let new_matches = compute_rule_matches(
-        &artefacts,
-        &spec.candidate_selector,
-        &spec.positive_conditions,
-        &spec.negative_conditions,
-    );
-    let current_matches = if let Some(rule) = existing_rule {
-        compute_stored_rule_matches(&artefacts, rule)?
-    } else {
-        BTreeSet::new()
-    };
-    let added_matches = new_matches
-        .difference(&current_matches)
-        .cloned()
-        .collect::<Vec<_>>();
-    let removed_matches = current_matches
-        .difference(&new_matches)
-        .cloned()
-        .collect::<Vec<_>>();
-    let affected_artefact_ids = current_matches
-        .union(&new_matches)
-        .cloned()
-        .collect::<Vec<_>>();
-    Ok(json!({
-        "operation": if existing_rule.is_some() { "edit_rule" } else { "draft_rule" },
-        "affected_role_ids": [role_id],
-        "affected_rule_ids": existing_rule
-            .map(|rule| vec![rule.rule_id.clone()])
-            .unwrap_or_default(),
-        "affected_assignment_ids": current_matches.clone().into_iter().collect::<Vec<_>>(),
-        "affected_artefact_ids": affected_artefact_ids.clone(),
-        "affected_roles": 1,
-        "affected_rules": if existing_rule.is_some() { 1 } else { 0 },
-        "current_matches": current_matches,
-        "new_matches": new_matches,
-        "added_matches": added_matches,
-        "removed_matches": removed_matches,
-        "affected_assignments": current_matches.len() + added_matches.len(),
-        "affected_artefacts": affected_artefact_ids.len(),
-        "downstream_review_work": {
-            "reclassification_required": !removed_matches.is_empty() || !added_matches.is_empty(),
         }
     }))
 }
@@ -828,40 +775,6 @@ pub(super) async fn resolve_rule_ref(
         .ok_or_else(|| anyhow!("rule reference `{rule_ref}` was not found"))
 }
 
-fn load_matchable_artefacts(
-    gateway: &dyn RelationalGateway,
-    repo_id: &str,
-) -> Result<Vec<MatchableArtefact>> {
-    gateway
-        .load_current_canonical_artefacts(repo_id)?
-        .into_iter()
-        .map(|artefact| {
-            Ok(MatchableArtefact {
-                artefact_id: artefact.artefact_id,
-                path: artefact.path,
-                language: Some(artefact.language),
-                canonical_kind: artefact.canonical_kind,
-                symbol_fqn: artefact.symbol_fqn,
-            })
-        })
-        .collect()
-}
-
-fn compute_rule_matches(
-    artefacts: &[MatchableArtefact],
-    selector: &RoleRuleCandidateSelector,
-    positive_conditions: &[RoleRuleCondition],
-    negative_conditions: &[RoleRuleCondition],
-) -> BTreeSet<String> {
-    artefacts
-        .iter()
-        .filter(|artefact| {
-            role_rule_matches(selector, positive_conditions, negative_conditions, artefact)
-        })
-        .map(|artefact| artefact.artefact_id.clone())
-        .collect()
-}
-
 fn assignment_target_key(assignment: &ArchitectureRoleAssignment) -> String {
     assignment
         .target
@@ -888,78 +801,4 @@ fn assignment_status_from_management_value(status: &str) -> Result<AssignmentSta
         "rejected" => Ok(AssignmentStatus::Rejected),
         other => bail!("unsupported assignment status `{other}`"),
     }
-}
-
-fn compute_stored_rule_matches(
-    artefacts: &[MatchableArtefact],
-    rule: &ArchitectureRoleRuleRecord,
-) -> Result<BTreeSet<String>> {
-    if let (Ok(selector), Ok(positive), Ok(negative)) = (
-        parse_rule_selector(&rule.candidate_selector),
-        parse_rule_conditions(&rule.positive_conditions),
-        parse_rule_conditions(&rule.negative_conditions),
-    ) {
-        return Ok(compute_rule_matches(
-            artefacts, &selector, &positive, &negative,
-        ));
-    }
-
-    let selector = serde_json::from_value::<RoleCandidateSelector>(rule.candidate_selector.clone())
-        .with_context(|| format!("parse fact-backed selector for rule `{}`", rule.rule_id))?;
-    let positive =
-        serde_json::from_value::<Vec<RoleFactCondition>>(rule.positive_conditions.clone())
-            .with_context(|| {
-                format!(
-                    "parse fact-backed positive conditions for rule `{}`",
-                    rule.rule_id
-                )
-            })?;
-    let negative =
-        serde_json::from_value::<Vec<RoleFactCondition>>(rule.negative_conditions.clone())
-            .with_context(|| {
-                format!(
-                    "parse fact-backed negative conditions for rule `{}`",
-                    rule.rule_id
-                )
-            })?;
-
-    Ok(artefacts
-        .iter()
-        .filter(|artefact| role_rule_contract_matches(&selector, &positive, &negative, artefact))
-        .map(|artefact| artefact.artefact_id.clone())
-        .collect())
-}
-
-pub(super) fn canonical_rule_hash(spec: &RuleSpecFile) -> Result<String> {
-    let bytes = serde_json::to_vec(&rule_spec_storage_payload(spec)?)
-        .context("serialise rule spec for hashing")?;
-    Ok(hex::encode(Sha256::digest(bytes)))
-}
-
-#[derive(Debug, Serialize)]
-struct RuleSpecStoragePayload {
-    candidate_selector: Value,
-    positive_conditions: Value,
-    negative_conditions: Value,
-    score: Value,
-}
-
-fn rule_spec_storage_payload(spec: &RuleSpecFile) -> Result<RuleSpecStoragePayload> {
-    Ok(RuleSpecStoragePayload {
-        candidate_selector: serde_json::to_value(role_rule_candidate_selector_contract(
-            &spec.candidate_selector,
-        ))?,
-        positive_conditions: serde_json::to_value(role_rule_conditions_contract(
-            &spec.positive_conditions,
-        )?)?,
-        negative_conditions: serde_json::to_value(role_rule_conditions_contract(
-            &spec.negative_conditions,
-        )?)?,
-        score: serde_json::to_value(&spec.score)?,
-    })
-}
-
-fn sha256_json(value: &Value) -> Result<String> {
-    let bytes = serde_json::to_vec(value).context("serialise proposal payload for hashing")?;
-    Ok(hex::encode(Sha256::digest(bytes)))
 }

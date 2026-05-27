@@ -53,6 +53,15 @@ bitloops daemon enable --install-embeddings
 
 Interactive `bitloops enable` also asks whether to install embeddings when they are not already configured. The prompt uses `[Y/n]`, so pressing `Enter` accepts the recommended setup.
 
+If you also want semantic summaries through the same `enable` flow, use:
+
+```bash
+bitloops enable --install-summaries
+bitloops enable --install-summaries --summaries-runtime platform --summaries-gateway-url https://gateway.example/v1/chat/completions
+```
+
+`--summaries-runtime platform` configures the hosted summaries gateway. Add `--summaries-gateway-url <https://.../v1/chat/completions>` or set `BITLOOPS_PLATFORM_GATEWAY_URL` only when you want to override the platform default endpoint. `--summaries-api-key-env` overrides the environment variable used for the hosted bearer token.
+
 If you want the hosted gateway runtime instead of the default local runtime:
 
 ```bash
@@ -181,6 +190,7 @@ Notes:
 - `summary_generation` is optional when `summary_mode = "auto"`. If it is unset or unavailable, Bitloops falls back to deterministic summaries.
 - `task = "text_generation"` profiles must declare `runtime`, `temperature`, and `max_output_tokens`, and `driver` is interpreted by `bitloops-inference`.
 - `bitloops inference install` installs or repairs the managed summary runtime. Interactive `bitloops enable` can bind summaries to a local Ollama model automatically when it is available, using `http://127.0.0.1:11434/api/chat`.
+- `bitloops enable --install-summaries` follows the same “install or prompt, then configure” shape as embeddings. Use `--summaries-runtime local` for local text generation or `--summaries-runtime platform` for the hosted gateway runtime.
 - Repo-policy `code_embeddings` and `summary_embeddings` can point at the same daemon embeddings profile or at different profiles.
 - For platform-specific config paths, use the configuration reference alongside your OS defaults.
 

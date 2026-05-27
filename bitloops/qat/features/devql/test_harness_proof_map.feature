@@ -23,6 +23,7 @@ Feature: TestHarness proof-map for pre-change safety assessment
 
   @devql @testharness
   Scenario: Tests query returns individual covering tests for `UserService.createUser`
+    Given I run TestHarness ingest-coverage for latest commit in bitloops
     Then TestHarness query for "UserService.createUser" at latest commit with view "tests" returns results in bitloops
     And TestHarness tests include at least 1 test with a classification in bitloops
 

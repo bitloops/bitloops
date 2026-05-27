@@ -7,7 +7,7 @@ use bitloops::adapters::agents::{
 use bitloops::config::settings::{load_settings, set_devql_producer_settings, settings_local_path};
 use bitloops::config::{
     RepoSemanticEmbeddingPolicy, SemanticCloneEmbeddingMode, SemanticClonesInferenceBindings,
-    resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path_for_repo,
+    SemanticSummaryMode, resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path_for_repo,
     resolve_store_backend_config_for_repo, set_repo_semantic_embedding_policy,
 };
 use bitloops::daemon::resolve_daemon_config;
@@ -133,6 +133,19 @@ fn enter_scenario_app_env(world: &QatWorld) -> ScenarioAppEnvGuard {
 fn with_scenario_app_env<T>(world: &QatWorld, f: impl FnOnce() -> T) -> T {
     let _guard = enter_scenario_app_env(world);
     f()
+}
+
+fn drain_lifecycle_stop_spool_for_scenario(world: &QatWorld) -> Result<()> {
+    with_scenario_app_env(world, || {
+        bitloops::daemon::drain_lifecycle_stop_spool_for_repo_for_tests(world.repo_dir())
+    })
+    .with_context(|| {
+        format!(
+            "draining lifecycle stop spool for QAT repo {}",
+            world.repo_dir().display()
+        )
+    })?;
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]

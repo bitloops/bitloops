@@ -2,7 +2,7 @@ pub use super::taxonomy::{RoleRuleCandidateSelector, RoleRuleCondition, RoleRule
 
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use super::taxonomy::{
@@ -20,6 +20,19 @@ pub struct CompiledArchitectureRoleRule {
     pub negative_conditions: Vec<RoleFactCondition>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SkippedDetectionRule {
+    pub rule_id: String,
+    pub role_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CompiledRulesWithDiagnostics {
+    pub rules: Vec<CompiledArchitectureRoleRule>,
+    pub skipped: Vec<SkippedDetectionRule>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RuleEvaluationResult {
     pub signals: Vec<ArchitectureRoleRuleSignal>,
@@ -28,27 +41,85 @@ pub struct RuleEvaluationResult {
 pub fn compile_detection_rules(
     rules: Vec<ArchitectureRoleDetectionRule>,
 ) -> Result<Vec<CompiledArchitectureRoleRule>> {
-    rules
-        .into_iter()
-        .map(|rule| {
-            let selector = parse_candidate_selector_contract(&rule)
-                .with_context(|| format!("parsing candidate selector for rule {}", rule.rule_id))?;
-            let positive_conditions = parse_conditions_contract(&rule.positive_conditions)
-                .with_context(|| {
-                    format!("parsing positive conditions for rule {}", rule.rule_id)
-                })?;
-            let negative_conditions = parse_conditions_contract(&rule.negative_conditions)
-                .with_context(|| {
-                    format!("parsing negative conditions for rule {}", rule.rule_id)
-                })?;
-            Ok(CompiledArchitectureRoleRule {
-                rule,
-                selector,
-                positive_conditions,
-                negative_conditions,
-            })
-        })
-        .collect()
+    rules.into_iter().map(compile_detection_rule).collect()
+}
+
+pub fn compile_detection_rules_lossy(
+    rules: Vec<ArchitectureRoleDetectionRule>,
+) -> CompiledRulesWithDiagnostics {
+    let mut compiled = CompiledRulesWithDiagnostics::default();
+    for rule in rules {
+        let rule_id = rule.rule_id.clone();
+        let role_id = rule.role_id.clone();
+        match compile_detection_rule(rule) {
+            Ok(rule) => compiled.rules.push(rule),
+            Err(error) => compiled.skipped.push(SkippedDetectionRule {
+                rule_id,
+                role_id,
+                reason: error.to_string(),
+            }),
+        }
+    }
+    compiled
+}
+
+fn compile_detection_rule(
+    rule: ArchitectureRoleDetectionRule,
+) -> Result<CompiledArchitectureRoleRule> {
+    let selector = parse_candidate_selector_contract(&rule)
+        .with_context(|| format!("parsing candidate selector for rule {}", rule.rule_id))?;
+    let positive_conditions = parse_conditions_contract(&rule.positive_conditions)
+        .with_context(|| format!("parsing positive conditions for rule {}", rule.rule_id))?;
+    let negative_conditions = parse_conditions_contract(&rule.negative_conditions)
+        .with_context(|| format!("parsing negative conditions for rule {}", rule.rule_id))?;
+    validate_condition_scores(&selector.required_facts, &rule.rule_id)?;
+    for group in &selector.required_fact_any_groups {
+        validate_condition_scores(group, &rule.rule_id)?;
+    }
+    validate_condition_scores(&positive_conditions, &rule.rule_id)?;
+    validate_condition_scores(&negative_conditions, &rule.rule_id)?;
+    validate_positive_evidence_shape(&positive_conditions, &rule.rule_id)?;
+    validate_rule_unit_interval("score", rule.score, &rule.rule_id)?;
+    validate_rule_unit_interval("min_positive_ratio", rule.min_positive_ratio, &rule.rule_id)?;
+    Ok(CompiledArchitectureRoleRule {
+        rule,
+        selector,
+        positive_conditions,
+        negative_conditions,
+    })
+}
+
+fn validate_condition_scores(conditions: &[RoleFactCondition], rule_id: &str) -> Result<()> {
+    for condition in conditions {
+        if !(0.0..=1.0).contains(&condition.score) {
+            bail!(
+                "rule {rule_id} condition {}.{} score must be between 0 and 1",
+                condition.kind,
+                condition.key
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_rule_unit_interval(field_name: &str, value: f64, rule_id: &str) -> Result<()> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        bail!("rule {rule_id} {field_name} must be between 0 and 1");
+    }
+    Ok(())
+}
+
+fn validate_positive_evidence_shape(conditions: &[RoleFactCondition], rule_id: &str) -> Result<()> {
+    if conditions.is_empty() {
+        return Ok(());
+    }
+    if conditions
+        .iter()
+        .all(|condition| condition.kind == "signature" && condition.key == "contains")
+    {
+        bail!("rule {rule_id} must include non-signature positive evidence");
+    }
+    Ok(())
 }
 
 fn parse_candidate_selector_contract(
@@ -84,23 +155,25 @@ pub fn evaluate_rules_over_facts(
             }
 
             let positive_match = matched_facts(&rule.positive_conditions, target_facts)?;
-            if positive_match.score > 0.0 {
+            let positive_ratio = positive_match.score_ratio();
+            if positive_ratio > 0.0 && positive_ratio >= rule.rule.min_positive_ratio {
                 rule_signals.push(signal_for(
                     rule,
                     target,
                     RoleSignalPolarity::Positive,
-                    positive_match.score,
+                    positive_ratio,
                     &positive_match.facts,
                 ));
             }
 
             let negative_match = matched_facts(&rule.negative_conditions, target_facts)?;
-            if negative_match.score > 0.0 {
+            let negative_ratio = negative_match.score_ratio();
+            if negative_ratio > 0.0 {
                 rule_signals.push(signal_for(
                     rule,
                     target,
                     RoleSignalPolarity::Negative,
-                    negative_match.score,
+                    negative_ratio,
                     &negative_match.facts,
                 ));
             }
@@ -200,8 +273,19 @@ fn selector_matches(
 
 #[derive(Debug, Clone, Default)]
 struct MatchedRoleFacts {
-    score: f64,
+    matched_score: f64,
+    total_score: f64,
     facts: Vec<ArchitectureArtefactFact>,
+}
+
+impl MatchedRoleFacts {
+    fn score_ratio(&self) -> f64 {
+        if self.total_score == 0.0 {
+            0.0
+        } else {
+            self.matched_score / self.total_score
+        }
+    }
 }
 
 fn matched_facts(
@@ -210,8 +294,9 @@ fn matched_facts(
 ) -> Result<MatchedRoleFacts> {
     let mut matched = MatchedRoleFacts::default();
     for condition in conditions {
+        matched.total_score += condition.score.max(0.0);
         if let Some(fact) = first_condition_match(condition, facts)? {
-            matched.score += condition.score;
+            matched.matched_score += condition.score.max(0.0);
             matched.facts.push(fact);
         }
     }
@@ -324,10 +409,203 @@ fn signal_for(
 #[cfg(test)]
 mod tests {
     use super::super::taxonomy::{
-        ArchitectureArtefactFact, ArchitectureRoleDetectionRule, RoleRuleLifecycle,
-        RoleSignalPolarity, RoleTarget,
+        ArchitectureArtefactFact, ArchitectureRoleDetectionRule, RoleFactCondition,
+        RoleFactConditionOp, RoleRuleLifecycle, RoleSignalPolarity, RoleTarget, TargetKind,
     };
     use super::*;
+
+    fn fact(kind: &str, key: &str, value: &str) -> ArchitectureArtefactFact {
+        ArchitectureArtefactFact {
+            repo_id: "repo-1".to_string(),
+            fact_id: format!("fact-{kind}-{key}-{value}"),
+            target: RoleTarget::file("bitloops/src/cli/main.rs"),
+            language: Some("rust".to_string()),
+            fact_kind: kind.to_string(),
+            fact_key: key.to_string(),
+            fact_value: value.to_string(),
+            source: "test".to_string(),
+            confidence: 1.0,
+            evidence: serde_json::json!([]),
+            generation_seq: 1,
+        }
+    }
+
+    fn condition(
+        kind: &str,
+        key: &str,
+        op: RoleFactConditionOp,
+        value: &str,
+        score: f64,
+    ) -> RoleFactCondition {
+        RoleFactCondition {
+            kind: kind.to_string(),
+            key: key.to_string(),
+            op,
+            value: value.to_string(),
+            score,
+        }
+    }
+
+    fn compiled_rule_with_score(
+        score: f64,
+        positive_conditions: Vec<RoleFactCondition>,
+    ) -> CompiledArchitectureRoleRule {
+        CompiledArchitectureRoleRule {
+            rule: ArchitectureRoleDetectionRule {
+                repo_id: "repo-1".to_string(),
+                rule_id: "rule-1".to_string(),
+                role_id: "role-1".to_string(),
+                version: 1,
+                lifecycle: RoleRuleLifecycle::Active,
+                priority: 10,
+                score,
+                min_positive_ratio: 0.0,
+                candidate_selector: serde_json::json!({ "targetKinds": ["file"] }),
+                positive_conditions: serde_json::json!([]),
+                negative_conditions: serde_json::json!([]),
+                provenance: serde_json::json!({ "source": "test" }),
+            },
+            selector: RoleCandidateSelector {
+                target_kinds: vec![TargetKind::File],
+                path_prefixes: Vec::new(),
+                path_suffixes: Vec::new(),
+                required_facts: Vec::new(),
+                required_fact_any_groups: Vec::new(),
+            },
+            positive_conditions,
+            negative_conditions: Vec::new(),
+        }
+    }
+
+    fn detection_rule_with_conditions(
+        positive_conditions: serde_json::Value,
+    ) -> ArchitectureRoleDetectionRule {
+        ArchitectureRoleDetectionRule {
+            repo_id: "repo-1".to_string(),
+            rule_id: "rule-1".to_string(),
+            role_id: "role-1".to_string(),
+            version: 1,
+            lifecycle: RoleRuleLifecycle::Active,
+            priority: 10,
+            score: 0.9,
+            min_positive_ratio: 1.0,
+            candidate_selector: serde_json::json!({ "targetKinds": ["file"] }),
+            positive_conditions,
+            negative_conditions: serde_json::json!([]),
+            provenance: serde_json::json!({ "source": "test" }),
+        }
+    }
+
+    #[test]
+    fn rule_signal_score_uses_normalized_positive_condition_ratio() -> anyhow::Result<()> {
+        let rule = compiled_rule_with_score(
+            0.90,
+            vec![
+                condition("path", "segment", RoleFactConditionOp::Eq, "cli", 0.60),
+                condition(
+                    "symbol",
+                    "name_suffix",
+                    RoleFactConditionOp::Eq,
+                    "Handler",
+                    0.40,
+                ),
+            ],
+        );
+        let facts = vec![fact("path", "segment", "cli")];
+
+        let result = evaluate_rules_over_facts(&[rule], &facts)?;
+
+        assert_eq!(result.signals.len(), 1);
+        assert!((result.signals[0].score - 0.54).abs() < 0.0001);
+        Ok(())
+    }
+
+    #[test]
+    fn classification_matches_file_role_and_analysis_mode_conditions() -> anyhow::Result<()> {
+        let rules = compile_detection_rules(vec![detection_rule_with_conditions(
+            serde_json::json!([
+                { "kind": "file", "key": "role", "op": "eq", "value": "source", "score": 0.5 },
+                { "kind": "file", "key": "analysis_mode", "op": "eq", "value": "code", "score": 0.5 }
+            ]),
+        )])?;
+        let facts = vec![
+            fact("file", "role", "source"),
+            fact("file", "analysis_mode", "code"),
+        ];
+
+        let result = evaluate_rules_over_facts(&rules, &facts)?;
+
+        assert_eq!(result.signals.len(), 1);
+        assert!((result.signals[0].score - 0.9).abs() < 0.0001);
+        Ok(())
+    }
+
+    #[test]
+    fn classification_matches_symbol_suffix_condition() -> anyhow::Result<()> {
+        let rules = compile_detection_rules(vec![detection_rule_with_conditions(
+            serde_json::json!([
+                { "kind": "symbol", "key": "name_suffix", "op": "eq", "value": "Handler", "score": 1.0 }
+            ]),
+        )])?;
+        let facts = vec![fact("symbol", "name_suffix", "Handler")];
+
+        let result = evaluate_rules_over_facts(&rules, &facts)?;
+
+        assert_eq!(result.signals.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn classification_matches_dependency_kind_and_count_conditions() -> anyhow::Result<()> {
+        let rules = compile_detection_rules(vec![detection_rule_with_conditions(
+            serde_json::json!([
+                { "kind": "dependency", "key": "outgoing_kind", "op": "eq", "value": "calls", "score": 0.5 },
+                { "kind": "dependency", "key": "outgoing_count", "op": "gte", "value": "2", "score": 0.5 }
+            ]),
+        )])?;
+        let facts = vec![
+            fact("dependency", "outgoing_kind", "calls"),
+            fact("dependency", "outgoing_count", "3"),
+        ];
+
+        let result = evaluate_rules_over_facts(&rules, &facts)?;
+
+        assert_eq!(result.signals.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn classification_rejects_signature_only_rule_as_active_signal() {
+        let err = compile_detection_rules(vec![detection_rule_with_conditions(
+            serde_json::json!([
+                { "kind": "signature", "key": "contains", "op": "eq", "value": "Repository", "score": 1.0 }
+            ]),
+        )])
+        .expect_err("signature-only rule should be rejected");
+
+        assert!(err.to_string().contains("signature"));
+    }
+
+    #[test]
+    fn compile_detection_rules_rejects_min_positive_ratio_outside_unit_interval() {
+        let mut too_high = detection_rule_with_conditions(serde_json::json!([
+            { "kind": "path", "key": "segment", "op": "eq", "value": "cli", "score": 1.0 }
+        ]));
+        too_high.min_positive_ratio = 1.01;
+
+        let err = compile_detection_rules(vec![too_high])
+            .expect_err("min_positive_ratio above 1 should be rejected");
+        assert!(err.to_string().contains("min_positive_ratio"));
+
+        let mut too_low = detection_rule_with_conditions(serde_json::json!([
+            { "kind": "path", "key": "segment", "op": "eq", "value": "cli", "score": 1.0 }
+        ]));
+        too_low.min_positive_ratio = -0.01;
+
+        let err = compile_detection_rules(vec![too_low])
+            .expect_err("min_positive_ratio below 0 should be rejected");
+        assert!(err.to_string().contains("min_positive_ratio"));
+    }
 
     #[test]
     fn rule_evaluation_emits_positive_and_negative_signals() -> anyhow::Result<()> {
@@ -368,6 +646,7 @@ mod tests {
             lifecycle: RoleRuleLifecycle::Active,
             priority: 10,
             score: 1.0,
+            min_positive_ratio: 1.0,
             candidate_selector: serde_json::json!({ "targetKinds": ["file"] }),
             positive_conditions: serde_json::json!([
                 { "kind": "path", "key": "segment", "op": "eq", "value": "cli", "score": 0.7 }
@@ -434,6 +713,7 @@ mod tests {
             lifecycle: RoleRuleLifecycle::Active,
             priority: 10,
             score: 1.0,
+            min_positive_ratio: 1.0,
             candidate_selector: serde_json::json!({ "targetKinds": ["file"] }),
             positive_conditions: serde_json::json!([
                 { "kind": "path", "key": "segment", "op": "eq", "value": "cli", "score": 0.7 }
@@ -470,6 +750,7 @@ mod tests {
             lifecycle: RoleRuleLifecycle::Active,
             priority: 10,
             score: 1.0,
+            min_positive_ratio: 1.0,
             candidate_selector: serde_json::json!({
                 "path_prefixes": ["src/cli"],
                 "languages": ["rust"]
@@ -563,6 +844,7 @@ mod tests {
             lifecycle: RoleRuleLifecycle::Active,
             priority: 10,
             score: 1.0,
+            min_positive_ratio: 1.0,
             candidate_selector: serde_json::json!({
                 "path_suffixes": ["run.rs"],
                 "languages": ["rust"]
@@ -621,6 +903,7 @@ mod tests {
             lifecycle: RoleRuleLifecycle::Active,
             priority: 10,
             score: 1.0,
+            min_positive_ratio: 1.0,
             candidate_selector: serde_json::json!({
                 "targetKinds": ["file"],
                 "requiredFacts": [
@@ -667,10 +950,11 @@ mod tests {
             version: 1,
             lifecycle: RoleRuleLifecycle::Active,
             priority: 10,
-            score: 1.0,
+            score: 0.5,
+            min_positive_ratio: 1.0,
             candidate_selector: serde_json::json!({ "targetKinds": ["file"] }),
             positive_conditions: serde_json::json!([
-                { "kind": "metrics", "key": "fan_in", "op": "gte", "value": "10", "score": 0.5 }
+                { "kind": "metrics", "key": "fan_in", "op": "gte", "value": "10", "score": 1.0 }
             ]),
             negative_conditions: serde_json::json!([]),
             provenance: serde_json::json!({ "source": "test" }),
@@ -678,7 +962,7 @@ mod tests {
 
         let result = evaluate_rules_over_facts(&rules, &facts)?;
 
-        assert_eq!(rules[0].positive_conditions[0].score, 0.5);
+        assert_eq!(rules[0].positive_conditions[0].score, 1.0);
         assert_eq!(result.signals.len(), 1);
         assert_eq!(result.signals[0].score, 0.5);
         Ok(())

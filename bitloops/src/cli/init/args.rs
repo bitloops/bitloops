@@ -7,6 +7,18 @@ use crate::cli::embeddings::EmbeddingsRuntime;
 
 pub(crate) const DEFAULT_INIT_INGEST_BACKFILL: usize = 25;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SummariesRuntime {
+    Local,
+    Platform,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SummaryEmbeddingsMode {
+    On,
+    Off,
+}
+
 #[derive(Subcommand, Debug, Clone)]
 pub enum InitCommand {
     /// Show init status for the current repository.
@@ -80,6 +92,14 @@ pub struct InitArgs {
     /// Select which embeddings runtime to configure during init.
     #[arg(long, value_enum)]
     pub embeddings_runtime: Option<EmbeddingsRuntime>,
+
+    /// Select which summaries runtime to configure during init.
+    #[arg(long, value_enum)]
+    pub summaries_runtime: Option<SummariesRuntime>,
+
+    /// Control summary embeddings setup during init.
+    #[arg(long, value_enum)]
+    pub summary_embeddings_mode: Option<SummaryEmbeddingsMode>,
 }
 
 fn parse_backfill_value(raw: &str) -> std::result::Result<usize, String> {

@@ -26,6 +26,126 @@ fn dashboard_bundle_version_app(
     )
 }
 
+struct BundleHttpFixture {
+    status_code: u16,
+    content_type: &'static str,
+    body: Vec<u8>,
+}
+
+struct BundleHttpServer {
+    url: String,
+    routes: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, BundleHttpFixture>>>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl BundleHttpServer {
+    fn start() -> std::io::Result<Self> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let url = format!("http://{}", listener.local_addr()?);
+        let routes = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            BundleHttpFixture,
+        >::new()));
+        let routes_for_thread = std::sync::Arc::clone(&routes);
+        let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown_for_thread = std::sync::Arc::clone(&shutdown);
+
+        let handle = std::thread::spawn(move || {
+            while !shutdown_for_thread.load(std::sync::atomic::Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+                        let mut buffer = [0_u8; 8192];
+                        let Ok(read) = std::io::Read::read(&mut stream, &mut buffer) else {
+                            continue;
+                        };
+                        let request = String::from_utf8_lossy(&buffer[..read]);
+                        let path = request
+                            .lines()
+                            .next()
+                            .and_then(|line| line.split_whitespace().nth(1))
+                            .unwrap_or("/");
+                        let routes = routes_for_thread.lock().expect("fixture routes");
+                        let (status_code, status_text, content_type, body) = match routes.get(path)
+                        {
+                            Some(fixture) => (
+                                fixture.status_code,
+                                status_text(fixture.status_code),
+                                fixture.content_type,
+                                fixture.body.clone(),
+                            ),
+                            None => (404, "Not Found", "text/plain", b"not found".to_vec()),
+                        };
+                        let response = format!(
+                            "HTTP/1.1 {status_code} {status_text}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+                        let _ = std::io::Write::write_all(&mut stream, &body);
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Ok(Self {
+            url,
+            routes,
+            shutdown,
+            handle: Some(handle),
+        })
+    }
+
+    fn insert(&self, path: &str, content_type: &'static str, body: impl Into<Vec<u8>>) {
+        self.routes.lock().expect("fixture routes").insert(
+            path.to_string(),
+            BundleHttpFixture {
+                status_code: 200,
+                content_type,
+                body: body.into(),
+            },
+        );
+    }
+}
+
+impl Drop for BundleHttpServer {
+    fn drop(&mut self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn start_bundle_http_server_or_skip(test_name: &str) -> Option<BundleHttpServer> {
+    match BundleHttpServer::start() {
+        Ok(server) => Some(server),
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!(
+                "skipping {test_name}: loopback sockets are unavailable in this environment ({err})"
+            );
+            None
+        }
+        Err(err) => panic!("bind bundle fixture for {test_name}: {err}"),
+    }
+}
+
+fn status_text(status_code: u16) -> &'static str {
+    match status_code {
+        200 => "OK",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "Status",
+    }
+}
+
 fn dashboard_health_query() -> &'static str {
     r#"
     {
@@ -2013,6 +2133,71 @@ async fn dashboard_fetch_bundle_returns_checksum_mismatch() {
 }
 
 #[tokio::test]
+async fn dashboard_fetch_bundle_does_not_fallback_on_checksum_mismatch() {
+    let repo = seed_dashboard_repo();
+    let bundle_parent = TempDir::new().expect("bundle parent");
+    let bundle_dir = bundle_parent.path().join("bundle");
+    let cdn = TempDir::new().expect("cdn temp");
+    let latest_archive = build_bundle_archive("3.0.0");
+    let fallback_archive = build_bundle_archive("2.9.0");
+    let fallback_checksum = checksum_hex(&fallback_archive);
+    fs::write(cdn.path().join("bundle-3.0.0.tar.zst"), latest_archive)
+        .expect("write latest archive");
+    fs::write(
+        cdn.path().join("bundle-3.0.0.tar.zst.sha256"),
+        "0000000000000000000000000000000000000000000000000000000000000000  bundle-3.0.0.tar.zst\n",
+    )
+    .expect("write latest checksum");
+    fs::write(cdn.path().join("bundle-2.9.0.tar.zst"), fallback_archive)
+        .expect("write fallback archive");
+    fs::write(
+        cdn.path().join("bundle-2.9.0.tar.zst.sha256"),
+        format!("{fallback_checksum}  bundle-2.9.0.tar.zst\n"),
+    )
+    .expect("write fallback checksum");
+    fs::write(
+        cdn.path().join("bundle_versions.json"),
+        r#"{
+            "versions": [
+                {
+                    "version": "3.0.0",
+                    "min_required_cli_version": "0.0.1",
+                    "max_required_cli_version": "latest",
+                    "download_url": "bundle-3.0.0.tar.zst",
+                    "checksum_url": "bundle-3.0.0.tar.zst.sha256"
+                },
+                {
+                    "version": "2.9.0",
+                    "min_required_cli_version": "0.0.1",
+                    "max_required_cli_version": "latest",
+                    "download_url": "bundle-2.9.0.tar.zst",
+                    "checksum_url": "bundle-2.9.0.tar.zst.sha256"
+                }
+            ]
+        }"#,
+    )
+    .expect("write manifest");
+    let base_url = format!("file://{}/", cdn.path().display());
+    let app = build_dashboard_router(
+        test_state(
+            repo.path().to_path_buf(),
+            ServeMode::HelloWorld,
+            bundle_dir.clone(),
+        )
+        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
+
+    let (_status, payload) =
+        request_dashboard_graphql(app, r#"mutation { fetchBundle { installedVersion } }"#).await;
+
+    assert_eq!(
+        payload["errors"][0]["extensions"]["code"], "checksum_mismatch",
+        "{payload:#}"
+    );
+    assert!(!bundle_dir.join("version.json").exists());
+}
+
+#[tokio::test]
 async fn dashboard_fetch_bundle_returns_no_compatible_version() {
     let repo = seed_dashboard_repo();
     let bundle_parent = TempDir::new().expect("bundle parent");
@@ -2054,6 +2239,143 @@ async fn dashboard_fetch_bundle_returns_bundle_download_failed() {
         payload["errors"][0]["extensions"]["code"],
         "bundle_download_failed"
     );
+}
+
+#[tokio::test]
+async fn dashboard_fetch_bundle_falls_back_one_version_when_latest_archive_404s() {
+    let repo = seed_dashboard_repo();
+    let bundle_parent = TempDir::new().expect("bundle parent");
+    let bundle_dir = bundle_parent.path().join("bundle");
+    let Some(server) = start_bundle_http_server_or_skip(
+        "dashboard_fetch_bundle_falls_back_one_version_when_latest_archive_404s",
+    ) else {
+        return;
+    };
+    let fallback_archive = build_bundle_archive("2.9.0");
+    let fallback_checksum = checksum_hex(&fallback_archive);
+    let manifest = format!(
+        r#"{{
+            "versions": [
+                {{
+                    "version": "3.0.0",
+                    "min_required_cli_version": "0.0.1",
+                    "max_required_cli_version": "latest",
+                    "download_url": "{base}/missing-3.0.0.tar.zst",
+                    "checksum_url": "{base}/missing-3.0.0.tar.zst.sha256"
+                }},
+                {{
+                    "version": "2.9.0",
+                    "min_required_cli_version": "0.0.1",
+                    "max_required_cli_version": "latest",
+                    "download_url": "{base}/bundle-2.9.0.tar.zst",
+                    "checksum_url": "{base}/bundle-2.9.0.tar.zst.sha256"
+                }}
+            ]
+        }}"#,
+        base = server.url
+    );
+    server.insert(
+        "/bundle_versions.json",
+        "application/json",
+        manifest.into_bytes(),
+    );
+    server.insert(
+        "/bundle-2.9.0.tar.zst",
+        "application/zstd",
+        fallback_archive,
+    );
+    server.insert(
+        "/bundle-2.9.0.tar.zst.sha256",
+        "text/plain",
+        format!("{fallback_checksum}  bundle-2.9.0.tar.zst\n"),
+    );
+    let app = build_dashboard_router(
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_manifest(
+                &format!("{}/bundle_versions.json", server.url),
+            )),
+    );
+
+    let (status, payload) =
+        request_dashboard_graphql(app, r#"mutation { fetchBundle { installedVersion } }"#).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        payload["data"]["fetchBundle"]["installedVersion"], "2.9.0",
+        "{payload:#}"
+    );
+}
+
+#[tokio::test]
+async fn dashboard_fetch_bundle_only_tries_one_fallback_after_latest_archive_404() {
+    let repo = seed_dashboard_repo();
+    let bundle_parent = TempDir::new().expect("bundle parent");
+    let bundle_dir = bundle_parent.path().join("bundle");
+    let Some(server) = start_bundle_http_server_or_skip(
+        "dashboard_fetch_bundle_only_tries_one_fallback_after_latest_archive_404",
+    ) else {
+        return;
+    };
+    let third_archive = build_bundle_archive("2.8.0");
+    let third_checksum = checksum_hex(&third_archive);
+    let manifest = format!(
+        r#"{{
+            "versions": [
+                {{
+                    "version": "3.0.0",
+                    "min_required_cli_version": "0.0.1",
+                    "max_required_cli_version": "latest",
+                    "download_url": "{base}/missing-3.0.0.tar.zst",
+                    "checksum_url": "{base}/missing-3.0.0.tar.zst.sha256"
+                }},
+                {{
+                    "version": "2.9.0",
+                    "min_required_cli_version": "0.0.1",
+                    "max_required_cli_version": "latest",
+                    "download_url": "{base}/missing-2.9.0.tar.zst",
+                    "checksum_url": "{base}/missing-2.9.0.tar.zst.sha256"
+                }},
+                {{
+                    "version": "2.8.0",
+                    "min_required_cli_version": "0.0.1",
+                    "max_required_cli_version": "latest",
+                    "download_url": "{base}/bundle-2.8.0.tar.zst",
+                    "checksum_url": "{base}/bundle-2.8.0.tar.zst.sha256"
+                }}
+            ]
+        }}"#,
+        base = server.url
+    );
+    server.insert(
+        "/bundle_versions.json",
+        "application/json",
+        manifest.into_bytes(),
+    );
+    server.insert("/bundle-2.8.0.tar.zst", "application/zstd", third_archive);
+    server.insert(
+        "/bundle-2.8.0.tar.zst.sha256",
+        "text/plain",
+        format!("{third_checksum}  bundle-2.8.0.tar.zst\n"),
+    );
+    let app = build_dashboard_router(
+        test_state(
+            repo.path().to_path_buf(),
+            ServeMode::HelloWorld,
+            bundle_dir.clone(),
+        )
+        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_manifest(
+            &format!("{}/bundle_versions.json", server.url),
+        )),
+    );
+
+    let (_status, payload) =
+        request_dashboard_graphql(app, r#"mutation { fetchBundle { installedVersion } }"#).await;
+
+    assert_eq!(
+        payload["errors"][0]["extensions"]["code"], "bundle_download_failed",
+        "{payload:#}"
+    );
+    assert!(!bundle_dir.join("version.json").exists());
 }
 
 #[tokio::test]

@@ -27,7 +27,10 @@ pub(crate) use assignments::{
     record_assignment_history, replace_assignments_for_paths, retire_role_and_mark_assignments,
     upsert_assignment,
 };
-pub use facts::{delete_role_facts_for_paths, load_facts_for_paths, replace_facts_for_paths};
+pub use facts::{
+    delete_role_facts_for_paths, load_current_role_facts, load_facts_for_paths,
+    replace_facts_for_paths,
+};
 pub use management::{
     AliasConflict, ArchitectureRoleAliasRecord, ArchitectureRoleAssignmentMigrationRecord,
     ArchitectureRoleProposalRecord, ArchitectureRoleRecord, ArchitectureRoleRuleRecord,

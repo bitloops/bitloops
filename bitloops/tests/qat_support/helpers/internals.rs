@@ -569,7 +569,8 @@ fn run_cursor_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
         &["hooks", "cursor", "stop"],
         "bitloops hooks cursor stop",
         &stop_payload,
-    )
+    )?;
+    drain_lifecycle_stop_spool_for_scenario(world)
 }
 
 fn run_gemini_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
@@ -680,7 +681,8 @@ fn run_copilot_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
         &["hooks", "copilot", "agent-stop"],
         "bitloops hooks copilot agent-stop",
         &stop_payload,
-    )
+    )?;
+    drain_lifecycle_stop_spool_for_scenario(world)
 }
 
 fn run_codex_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
@@ -736,7 +738,8 @@ fn run_codex_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
         &["hooks", "codex", "stop"],
         "bitloops hooks codex stop",
         &stop_payload,
-    )
+    )?;
+    drain_lifecycle_stop_spool_for_scenario(world)
 }
 
 fn run_opencode_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
@@ -1349,7 +1352,7 @@ fn simulate_claude_session_for_prompt(
         "bitloops hooks claude-code stop",
         &stop_payload,
     )?;
-    Ok(())
+    drain_lifecycle_stop_spool_for_scenario(world)
 }
 
 fn build_host_shell_command(world: &QatWorld, script: &str) -> Result<Command> {

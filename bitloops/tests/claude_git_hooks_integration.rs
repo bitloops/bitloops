@@ -255,6 +255,7 @@ fn stop(repo: &Path, session_id: &str, transcript_path: &str) {
     let input = format!(r#"{{"session_id":"{session_id}","transcript_path":"{transcript_path}"}}"#);
     let out = run_cmd(repo, &["hooks", "claude-code", "stop"], Some(&input));
     assert_success(&out, "hooks claude-code stop");
+    test_command_support::drain_lifecycle_stop_spool(repo);
 }
 
 fn write_test_session_state_for_logging(repo: &Path, session_id: &str) {

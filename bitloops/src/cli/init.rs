@@ -18,7 +18,7 @@ mod workflow_output;
 mod tests;
 
 pub use agent_selection::{InitAgentSelection, detect_or_select_agent};
-pub use args::{InitArgs, InitCommand, InitStatusArgs};
+pub use args::{InitArgs, InitCommand, InitStatusArgs, SummariesRuntime, SummaryEmbeddingsMode};
 
 pub(super) use args::{
     DEFAULT_INIT_INGEST_BACKFILL, normalize_cli_exclusions, normalize_exclude_from_paths,

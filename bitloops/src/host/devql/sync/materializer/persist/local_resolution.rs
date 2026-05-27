@@ -297,7 +297,6 @@ pub(super) fn load_current_targets_for_languages_with_connection(
         compatible_languages,
     )
 }
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;

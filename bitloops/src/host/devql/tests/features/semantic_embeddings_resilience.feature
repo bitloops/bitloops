@@ -17,18 +17,20 @@ Feature: Semantic and embeddings resilience BDD scenarios
   Scenario: SE2 Health resolves an arbitrary embedding profile name through the runtime
     Given a daemon config using the fake embeddings runtime:
       """
-      [semantic_clones]
-      summary_mode = "off"
-
-      [semantic_clones.inference]
-      code_embeddings = "default"
-
       [inference.profiles.default]
       task = "embeddings"
       driver = "bitloops_embeddings_ipc"
       runtime = "bitloops_local_embeddings"
       model = "bge-m3"
       cache_dir = ".bitloops/embeddings/default"
+      """
+    And a repo semantic policy:
+      """
+      [semantic_clones]
+      summary_mode = "off"
+
+      [semantic_clones.inference]
+      code_embeddings = "default"
       """
     When semantic clone health checks run
     Then semantic clone health includes:

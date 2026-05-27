@@ -1359,6 +1359,10 @@ async fn architecture_role_adjudication_workplane_job_loads_db_state_without_can
             "request": {
                 "repo_id": cfg.repo.repo_id,
                 "generation": 1,
+                "stable_request_key": "file:src/main.rs",
+                "facts_hash": "facts",
+                "rules_hash": "rules",
+                "cluster_key": null,
                 "target_kind": "file",
                 "path": "src/main.rs",
                 "reason": "unknown",

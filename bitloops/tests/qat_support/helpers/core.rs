@@ -1146,6 +1146,7 @@ fn run_init_bitloops_with_agent_config(
         !agent_names.is_empty(),
         "at least one agent must be provided for init"
     );
+    disable_semantic_work_for_qat_init(world)?;
 
     let normalised_agent_names = agent_names
         .iter()
@@ -1230,14 +1231,31 @@ fn build_init_bitloops_args_with_producer_contract_options(
 ) -> Vec<String> {
     vec![
         "init".to_string(),
-        "--install-default-daemon".to_string(),
         "--agent".to_string(),
         agent_name.to_string(),
-        "--no-embeddings".to_string(),
-        "--no-summaries".to_string(),
         format!("--sync={sync}"),
         "--ingest=false".to_string(),
     ]
+}
+
+fn qat_init_semantic_policy() -> RepoSemanticEmbeddingPolicy {
+    RepoSemanticEmbeddingPolicy {
+        present: true,
+        summary_mode: Some(SemanticSummaryMode::Off),
+        embedding_mode: Some(SemanticCloneEmbeddingMode::Off),
+        inference: SemanticClonesInferenceBindings::default(),
+    }
+}
+
+fn disable_semantic_work_for_qat_init(world: &QatWorld) -> Result<()> {
+    let policy_path = settings_local_path(world.repo_dir());
+    set_repo_semantic_embedding_policy(&policy_path, &qat_init_semantic_policy())
+        .with_context(|| {
+            format!(
+                "writing QAT init semantic policy {}",
+                policy_path.display()
+            )
+        })
 }
 
 pub fn run_init_bitloops_producer_contract_for_repo(
@@ -1248,6 +1266,7 @@ pub fn run_init_bitloops_producer_contract_for_repo(
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     enable_watcher_autostart_for_scenario(world)?;
+    disable_semantic_work_for_qat_init(world)?;
 
     let normalised_agent_name = normalise_onboarding_agent_name(agent_name);
     world.agent_name = Some(normalised_agent_name.to_string());
