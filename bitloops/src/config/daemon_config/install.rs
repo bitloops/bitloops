@@ -10,29 +10,26 @@ use crate::host::inference::{
 };
 use crate::utils::platform_dirs::ensure_parent_dir;
 
-use super::plans::{
-    DaemonEmbeddingsInstallMode, DaemonEmbeddingsInstallPlan, DaemonInferenceInstallPlan,
-};
+use super::plans::{DaemonEmbeddingsInstallPlan, DaemonInferenceInstallPlan};
 use super::toml::{
     ensure_child_table, ensure_table, inference_driver_for_profile, inference_runtime_for_profile,
-    selected_inference_profile_name,
+    strip_semantic_enablement,
 };
 
 pub(crate) fn prepare_daemon_embeddings_install(
     config_path: &Path,
 ) -> Result<DaemonEmbeddingsInstallPlan> {
-    prepare_daemon_embeddings_install_with_mode(config_path, true)
+    prepare_daemon_embeddings_install_with_mode(config_path)
 }
 
 pub(crate) fn prepare_daemon_local_embeddings_profile_install(
     config_path: &Path,
 ) -> Result<DaemonEmbeddingsInstallPlan> {
-    prepare_daemon_embeddings_install_with_mode(config_path, false)
+    prepare_daemon_embeddings_install_with_mode(config_path)
 }
 
 fn prepare_daemon_embeddings_install_with_mode(
     config_path: &Path,
-    respect_selected_profile: bool,
 ) -> Result<DaemonEmbeddingsInstallPlan> {
     const DEFAULT_LOCAL_PROFILE: &str = "local_code";
     const DEFAULT_LOCAL_MODEL: &str = "bge-m3";
@@ -56,28 +53,6 @@ fn prepare_daemon_embeddings_install_with_mode(
         None => DocumentMut::new(),
     };
 
-    if respect_selected_profile && let Some(profile_name) = selected_inference_profile_name(&doc) {
-        let profile_driver = inference_driver_for_profile(&doc, &profile_name);
-        let profile_runtime = inference_runtime_for_profile(&doc, &profile_name);
-        let mode = if profile_driver.as_deref() == Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER)
-            && profile_runtime.as_deref() == Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
-        {
-            DaemonEmbeddingsInstallMode::WarmExisting
-        } else {
-            DaemonEmbeddingsInstallMode::SkipHosted
-        };
-        return Ok(DaemonEmbeddingsInstallPlan {
-            config_path: config_path.to_path_buf(),
-            profile_name,
-            runtime_name: BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID.to_string(),
-            profile_driver,
-            mode,
-            config_modified: false,
-            original_contents,
-            prepared_contents: None,
-        });
-    }
-
     if let Some(kind) = inference_driver_for_profile(&doc, DEFAULT_LOCAL_PROFILE)
         && kind != BITLOOPS_EMBEDDINGS_IPC_DRIVER
     {
@@ -93,7 +68,7 @@ fn prepare_daemon_embeddings_install_with_mode(
         );
     }
 
-    let mut modified = false;
+    let mut modified = strip_semantic_enablement(&mut doc);
     {
         let inference = ensure_table(&mut doc, "inference");
 
@@ -198,8 +173,6 @@ fn prepare_daemon_embeddings_install_with_mode(
         config_path: config_path.to_path_buf(),
         profile_name: DEFAULT_LOCAL_PROFILE.to_string(),
         runtime_name: BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID.to_string(),
-        profile_driver: Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER.to_string()),
-        mode: DaemonEmbeddingsInstallMode::Bootstrap,
         config_modified: modified,
         original_contents,
         prepared_contents,
@@ -232,6 +205,7 @@ pub(crate) fn prepare_daemon_platform_embeddings_install(
             .with_context(|| format!("parsing Bitloops daemon config {}", config_path.display()))?,
         None => DocumentMut::new(),
     };
+    strip_semantic_enablement(&mut doc);
 
     {
         let inference = ensure_table(&mut doc, "inference");
@@ -267,8 +241,6 @@ pub(crate) fn prepare_daemon_platform_embeddings_install(
         config_path: config_path.to_path_buf(),
         profile_name: DEFAULT_PLATFORM_PROFILE.to_string(),
         runtime_name: BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID.to_string(),
-        profile_driver: Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER.to_string()),
-        mode: DaemonEmbeddingsInstallMode::Bootstrap,
         config_modified,
         original_contents,
         prepared_contents: config_modified.then_some(prepared_contents),
@@ -297,7 +269,7 @@ pub(crate) fn prepare_daemon_inference_install(
         None => DocumentMut::new(),
     };
 
-    let mut modified = false;
+    let mut modified = strip_semantic_enablement(&mut doc);
     let inference = ensure_table(&mut doc, "inference");
     let runtimes = ensure_child_table(inference, "runtimes");
     let runtime = ensure_child_table(runtimes, BITLOOPS_INFERENCE_RUNTIME_ID);

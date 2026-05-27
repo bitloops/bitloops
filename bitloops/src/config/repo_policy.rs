@@ -6,16 +6,22 @@ mod fingerprint;
 mod merge;
 #[path = "repo_policy/scope.rs"]
 mod scope;
+#[path = "repo_policy/source.rs"]
+mod source;
 #[cfg(test)]
 #[path = "repo_policy/tests.rs"]
 mod tests;
 #[path = "repo_policy/types.rs"]
 mod types;
 
-pub(crate) use self::discovery::validate_repo_policy_text;
 pub use self::discovery::{discover_repo_policy, discover_repo_policy_optional};
 pub use self::scope::{parse_exclusion_patterns, resolve_repo_policy_scope_exclusions};
+pub use self::source::{FileRepoPolicySource, RepoPolicySource};
 pub use self::types::{
     ImportedKnowledgeConfig, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,
     RepoPolicyExclusionFileReference, RepoPolicyScopeExclusions, RepoPolicySnapshot,
 };
+
+pub(crate) fn validate_repo_policy_text(raw: &str, path: &std::path::Path) -> anyhow::Result<()> {
+    FileRepoPolicySource.validate_text(raw, path)
+}

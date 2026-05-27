@@ -1146,6 +1146,7 @@ fn run_init_bitloops_with_agent_config(
         !agent_names.is_empty(),
         "at least one agent must be provided for init"
     );
+    disable_semantic_work_for_qat_init(world)?;
 
     let normalised_agent_names = agent_names
         .iter()
@@ -1230,14 +1231,31 @@ fn build_init_bitloops_args_with_producer_contract_options(
 ) -> Vec<String> {
     vec![
         "init".to_string(),
-        "--install-default-daemon".to_string(),
         "--agent".to_string(),
         agent_name.to_string(),
-        "--no-embeddings".to_string(),
-        "--no-summaries".to_string(),
         format!("--sync={sync}"),
         "--ingest=false".to_string(),
     ]
+}
+
+fn qat_init_semantic_policy() -> RepoSemanticEmbeddingPolicy {
+    RepoSemanticEmbeddingPolicy {
+        present: true,
+        summary_mode: Some(SemanticSummaryMode::Off),
+        embedding_mode: Some(SemanticCloneEmbeddingMode::Off),
+        inference: SemanticClonesInferenceBindings::default(),
+    }
+}
+
+fn disable_semantic_work_for_qat_init(world: &QatWorld) -> Result<()> {
+    let policy_path = settings_local_path(world.repo_dir());
+    set_repo_semantic_embedding_policy(&policy_path, &qat_init_semantic_policy())
+        .with_context(|| {
+            format!(
+                "writing QAT init semantic policy {}",
+                policy_path.display()
+            )
+        })
 }
 
 pub fn run_init_bitloops_producer_contract_for_repo(
@@ -1248,6 +1266,7 @@ pub fn run_init_bitloops_producer_contract_for_repo(
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     enable_watcher_autostart_for_scenario(world)?;
+    disable_semantic_work_for_qat_init(world)?;
 
     let normalised_agent_name = normalise_onboarding_agent_name(agent_name);
     world.agent_name = Some(normalised_agent_name.to_string());
@@ -1491,6 +1510,91 @@ pub fn assert_version_output(world: &mut QatWorld) -> Result<()> {
         stdout
     );
     Ok(())
+}
+
+pub fn run_installer_default_config_configure_flow(world: &mut QatWorld) -> Result<()> {
+    ensure_detached_daemon_for_configure_flow(world)?;
+
+    let default_config_path = world.run_dir().join("installer-default-config.toml");
+    let default_config_path = default_config_path.to_string_lossy().to_string();
+    let write_args = [
+        "curl-bash-post-install",
+        "--write-default-config",
+        default_config_path.as_str(),
+    ];
+    let write_label = format!("bitloops {}", write_args.join(" "));
+    let write_output = run_command_capture(
+        world,
+        &write_label,
+        build_bitloops_command(world, &write_args)?,
+    )?;
+    world.last_command_exit_code = Some(write_output.status.code().unwrap_or(-1));
+    world.last_command_stdout = Some(String::from_utf8_lossy(&write_output.stdout).to_string());
+    ensure_success(&write_output, &write_label)?;
+
+    run_configure_command(world, &["configure", "--file", default_config_path.as_str()])
+}
+
+pub fn run_configure_default_config(world: &mut QatWorld) -> Result<()> {
+    ensure_detached_daemon_for_configure_flow(world)?;
+    run_configure_command(world, &["configure", "--default-config"])
+}
+
+fn ensure_detached_daemon_for_configure_flow(world: &mut QatWorld) -> Result<()> {
+    if world.daemon_url.is_some() {
+        return Ok(());
+    }
+
+    let args = [
+        "daemon",
+        "start",
+        "--create-default-config",
+        "--no-telemetry",
+        "--http",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "0",
+        "--detached",
+    ];
+    let label = format!("bitloops {}", args.join(" "));
+    let output = run_command_capture(world, &label, build_bitloops_command(world, &args)?)?;
+    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    world.last_command_stdout = Some(stdout.clone());
+    ensure_success(&output, &label)?;
+    remember_daemon_url_from_output(world, &stdout);
+    ensure!(
+        world.daemon_url.is_some(),
+        "expected `{label}` output to include daemon URL, got:\n{}",
+        stdout
+    );
+    Ok(())
+}
+
+fn run_configure_command(world: &mut QatWorld, args: &[&str]) -> Result<()> {
+    let label = format!("bitloops {}", args.join(" "));
+    let output = run_command_capture(world, &label, build_bitloops_command(world, args)?)?;
+    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    world.last_command_stdout = Some(stdout.clone());
+    ensure_success(&output, &label)?;
+    remember_daemon_url_from_output(world, &stdout);
+    ensure!(
+        world.daemon_url.is_some(),
+        "expected `{label}` output to include daemon URL, got:\n{}",
+        stdout
+    );
+    Ok(())
+}
+
+fn remember_daemon_url_from_output(world: &mut QatWorld, stdout: &str) {
+    if let Some(url) = stdout
+        .split_whitespace()
+        .find(|part| part.starts_with("http://") || part.starts_with("https://"))
+    {
+        world.daemon_url = Some(url.trim_end_matches(|c| c == '.' || c == ',').to_string());
+    }
 }
 
 pub fn assert_daemon_config_exists(world: &QatWorld) -> Result<()> {

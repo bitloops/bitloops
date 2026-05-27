@@ -9,35 +9,65 @@ This quickstart assumes you want the current daemon-first Bitloops setup.
 
 If you are coming from the old JSON and repo-local storage model, read the [upgrade note](../reference/upgrading-to-the-daemon-architecture.md).
 
-## 1. Install Bitloops
+## 1. Install Bitloops With The Default Config
 
-Choose one install method:
+For the fastest scripted setup, pass the installer default-config flag. This installs Bitloops, writes the generated default daemon config, runs the non-interactive configure flow for that default config, creates the default local stores, and starts or reuses the daemon.
+
+macOS, Linux, WSL:
 
 ```bash
-curl -fsSL https://bitloops.com/install.sh | bash
+curl -fsSL https://bitloops.com/install.sh | bash -s -- --default-config
 ```
+
+Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((irm https://bitloops.com/install.ps1))) -DefaultConfig
+```
+
+Windows CMD:
+
+```cmd
+curl.exe -fsSL https://bitloops.com/install.cmd -o install.cmd
+install.cmd --default-config
+```
+
+## 2. Or Configure Manually
+
+If you want to review settings in the browser, install without the default-config flag, then run:
+
+```bash
+bitloops configure --web
+```
+
+`bitloops configure --web` creates the default daemon config and local stores if needed, starts or reuses the daemon, and opens the dashboard configuration page.
+
+If you install with Cargo, run the same manual configure step after install:
 
 ```bash
 cargo install bitloops
+bitloops configure --web
 ```
 
-## 2. Fastest Start: Initialise A Project
+For fully custom scripted setup, provide a complete daemon TOML file:
 
 ```bash
-bitloops init --install-default-daemon
+bitloops configure --file /path/to/config.toml
 ```
 
-This is the fastest way to get started from inside a git repository or subproject. It bootstraps the default daemon service if needed, creates or updates `.bitloops.local.toml`, adds it to `.git/info/exclude`, and installs or reconciles hooks for the selected agents.
+## 3. Initialise A Project
+
+```bash
+bitloops init
+```
+
+Run this from inside a git repository or subproject. It creates or updates `.bitloops.local.toml`, adds it to `.git/info/exclude`, installs or reconciles hooks for the selected agents, and binds the repo to an existing daemon config when one is available.
 
 Use `--sync=true` when you want the initial current-state sync immediately:
 
 ```bash
-bitloops init --install-default-daemon --sync=true
+bitloops init --sync=true
 ```
-
-When you use `bitloops init --install-default-daemon` and embeddings are not already configured, interactive init asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now. Bitloops cloud is the recommended default. If you choose the local runtime, Bitloops installs the managed standalone `bitloops-local-embeddings` binary when needed and warms that profile. If init also runs sync or ingest, that managed runtime download happens afterwards.
-
-In an interactive terminal, plain `bitloops init` also asks whether you want to install that same default local embeddings setup when embeddings are still unconfigured.
 
 `bitloops init` can also queue an initial DevQL current-state sync after hook setup. Use `--sync=true` when you want that sync immediately, or `--sync=false` when you want to skip it. If you omit `--sync` in an interactive terminal, Bitloops asks after hook installation whether you want to sync the codebase now.
 
@@ -51,15 +81,15 @@ If you want to pin the supported agent set during bootstrap, repeat `--agent <na
 bitloops init --sync=false --agent claude-code --agent codex
 ```
 
-If telemetry consent is unresolved for an existing daemon config, interactive `bitloops init` can ask again. Non-interactive runs require an explicit telemetry flag.
+Daemon-only settings such as telemetry, inference, capability packs, and stores stay in `bitloops configure`.
 
-## 3. Start The Daemon Explicitly When You Need To
+## 4. Start The Daemon Explicitly When You Need To
 
 ```bash
 bitloops start --create-default-config
 ```
 
-Use this path when you want to bootstrap the default daemon before initialising a repo, or when you want to inspect or customise the daemon config separately.
+Use this lower-level path when you want to bootstrap or start the daemon without opening the configuration flow.
 
 On a fresh machine, use `--create-default-config` once. This writes the default global daemon config at the platform config location and creates the default local SQLite, DuckDB, and blob-store paths.
 
@@ -71,7 +101,7 @@ If you are using a repo-scoped or test-specific daemon config instead of the def
 bitloops start --config ./config.toml --bootstrap-local-stores
 ```
 
-## 4. Add Optional Shared Project Policy
+## 5. Add Optional Shared Project Policy
 
 If you want shared capture policy in git, create `.bitloops.toml` in the project root:
 
@@ -87,7 +117,7 @@ watch_poll_fallback_ms = 2500
 
 Keep `.bitloops.local.toml` for local-only overrides.
 
-## 5. Start Or Open Bitloops
+## 6. Start Or Open Bitloops
 
 Open the dashboard:
 

@@ -378,6 +378,29 @@ fn build_init_bitloops_args_supports_repeated_agent_flags() {
 }
 
 #[test]
+fn build_init_bitloops_args_with_producer_contract_options_matches_current_init_cli() {
+    let args = build_init_bitloops_args_with_producer_contract_options("claude-code", true);
+    assert_eq!(
+        args,
+        vec![
+            "init",
+            "--agent",
+            "claude-code",
+            "--sync=true",
+            "--ingest=false"
+        ]
+    );
+}
+
+#[test]
+fn qat_init_semantic_policy_disables_background_semantic_work() {
+    let policy = qat_init_semantic_policy();
+    assert_eq!(policy.summary_mode, Some(SemanticSummaryMode::Off));
+    assert_eq!(policy.embedding_mode, Some(SemanticCloneEmbeddingMode::Off));
+    assert_eq!(policy.inference, SemanticClonesInferenceBindings::default());
+}
+
+#[test]
 fn parse_ingest_summary_field_reads_key_value_pairs() {
     let stdout = "DevQL ingest complete: commits_processed=0, checkpoint_companions_processed=0, events_inserted=0, artefacts_upserted=0";
     assert_eq!(
@@ -839,6 +862,111 @@ fn render_guide_aligned_semantic_clones_config_uses_auto_summary_fake_profile_an
     assert!(config.contains("driver = \"bitloops_embeddings_ipc\""));
     assert!(config.contains("model = \"qat-test-model\""));
     assert!(config.contains("model = \"qat-summary-model\""));
+}
+
+#[test]
+fn write_scenario_repo_semantic_clone_policy_enables_summary_fake_lane() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = temp.path().join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    let run_dir = temp.path().join("run");
+    fs::create_dir_all(&run_dir).expect("create run dir");
+
+    let world = QatWorld {
+        run_dir: Some(run_dir),
+        repo_dir: Some(repo_dir.clone()),
+        ..Default::default()
+    };
+
+    write_scenario_repo_semantic_clone_policy(&world).expect("write semantic clone policy");
+
+    let policy = bitloops::config::repo_semantic_embedding_policy(&repo_dir)
+        .expect("read semantic clone policy");
+    assert_eq!(policy.summary_mode, Some(SemanticSummaryMode::Auto));
+    assert_eq!(
+        policy.embedding_mode,
+        Some(SemanticCloneEmbeddingMode::Deterministic)
+    );
+    assert_eq!(
+        policy.inference.summary_generation.as_deref(),
+        Some("summary_fake")
+    );
+    assert_eq!(policy.inference.code_embeddings.as_deref(), Some("fake"));
+    assert_eq!(policy.inference.summary_embeddings.as_deref(), Some("fake"));
+}
+
+#[test]
+fn render_context_guidance_fake_config_updates_existing_inference_binding_without_duplicate_table()
+{
+    let base = r#"
+[context_guidance]
+
+[context_guidance.inference]
+guidance_generation = "guidance_llm"
+
+[inference.profiles.guidance_llm]
+task = "text_generation"
+driver = "ollama_chat"
+"#;
+
+    let config = render_context_guidance_fake_config_into(
+        base,
+        "sh",
+        &["fake-text-generation-runtime.sh".to_string()],
+    )
+    .expect("render context guidance fake config");
+
+    assert_eq!(config.matches("[context_guidance.inference]").count(), 1);
+    assert!(config.contains("guidance_generation = \"guidance_fake\""));
+    let parsed = config
+        .parse::<toml_edit::DocumentMut>()
+        .expect("merged config should parse");
+    assert_eq!(
+        parsed["inference"]["runtimes"]["bitloops_local_text_generation"]["command"].as_str(),
+        Some("sh")
+    );
+    assert_eq!(
+        parsed["inference"]["profiles"]["guidance_fake"]["runtime"].as_str(),
+        Some("bitloops_local_text_generation")
+    );
+}
+
+#[test]
+fn render_architecture_role_inference_config_updates_existing_binding_without_duplicate_table() {
+    let base = r#"
+[architecture]
+
+[architecture.inference]
+fact_synthesis = "architecture_fact_synthesis_codex"
+role_adjudication = "architecture_role_adjudication_codex"
+
+[inference.profiles.architecture_fact_synthesis_codex]
+task = "structured_generation"
+driver = "codex"
+"#;
+
+    let config = render_architecture_role_inference_config_into(
+        base,
+        "sh",
+        &["seed-runtime.sh".to_string()],
+        "bash",
+        &["adjudication-runtime.sh".to_string()],
+    )
+    .expect("render architecture role fake config");
+
+    assert_eq!(config.matches("[architecture.inference]").count(), 1);
+    assert!(config.contains("fact_synthesis = \"qat_architecture_roles_seed\""));
+    let parsed = config
+        .parse::<toml_edit::DocumentMut>()
+        .expect("merged config should parse");
+    assert_eq!(
+        parsed["inference"]["runtimes"]["qat_architecture_roles_seed_runtime"]["command"].as_str(),
+        Some("sh")
+    );
+    assert_eq!(
+        parsed["inference"]["profiles"]["qat_architecture_roles_adjudication"]["runtime"].as_str(),
+        Some("qat_architecture_roles_adjudication_runtime")
+    );
 }
 
 #[test]

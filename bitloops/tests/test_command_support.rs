@@ -170,6 +170,12 @@ pub fn drain_lifecycle_spool(repo: &Path) {
     });
 }
 
+#[cfg(feature = "slow-tests")]
+#[allow(dead_code)]
+pub fn drain_lifecycle_stop_spool(repo: &Path) {
+    drain_lifecycle_spool(repo);
+}
+
 pub fn enter_repo_app_env(repo: &Path) -> RepoAppEnvGuard {
     let paths = repo_app_paths(repo);
     enter_repo_app_paths(&paths)

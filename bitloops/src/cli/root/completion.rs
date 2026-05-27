@@ -25,6 +25,10 @@ pub(crate) fn write_completion(w: &mut dyn Write, shell: CompletionShell) -> Res
         sub.name("daemon-supervisor-internal")
             .bin_name(format!("{ROOT_NAME} daemon-supervisor-internal"))
     });
+    cmd = cmd.mut_subcommand("__delayed-daemon-restart", |sub| {
+        sub.name("delayed-daemon-restart-internal")
+            .bin_name(format!("{ROOT_NAME} delayed-daemon-restart-internal"))
+    });
     cmd = cmd.mut_subcommand("__send_analytics", |sub| {
         sub.name("send-analytics-internal")
             .bin_name(format!("{ROOT_NAME} send-analytics-internal"))

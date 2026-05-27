@@ -5,7 +5,10 @@ use crate::capability_packs::semantic_clones::runtime_config::{
     SummaryProviderMode, resolve_semantic_clones_config, resolve_summary_provider,
 };
 use crate::capability_packs::semantic_clones::upsert_semantic_feature_rows;
-use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
+use crate::config::{
+    BITLOOPS_CONFIG_RELATIVE_PATH, RepoSemanticEmbeddingPolicy, SemanticCloneEmbeddingMode,
+    SemanticClonesInferenceBindings, SemanticSummaryMode,
+};
 use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, write_committed};
 use crate::host::devql::{
     RelationalStorage, build_capability_host, execute_ingest_with_observer, execute_sync,
@@ -262,14 +265,6 @@ sqlite_path = ".bitloops/stores/relational/relational.db"
 [stores.events]
 duckdb_path = ".bitloops/stores/events.duckdb"
 
-[semantic_clones]
-summary_mode = "off"
-embedding_mode = "deterministic"
-
-[semantic_clones.inference]
-code_embeddings = "{profile_name}"
-summary_embeddings = "{profile_name}"
-
 [inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
 args = [{runtime_args}]
@@ -285,25 +280,49 @@ model = {model:?}
         ),
     )
     .expect("write daemon embedding config");
+    crate::config::set_repo_semantic_embedding_policy(
+        &crate::config::settings::settings_local_path(repo_root),
+        &RepoSemanticEmbeddingPolicy {
+            present: true,
+            summary_mode: Some(SemanticSummaryMode::Off),
+            embedding_mode: Some(SemanticCloneEmbeddingMode::Deterministic),
+            inference: SemanticClonesInferenceBindings {
+                summary_generation: None,
+                code_embeddings: Some(profile_name.to_string()),
+                summary_embeddings: Some(profile_name.to_string()),
+            },
+        },
+    )
+    .expect("write repo embedding policy");
 }
 
 fn remove_summary_embedding_slot(repo_root: &Path, profile_name: &str) {
-    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    let config = fs::read_to_string(&config_path).expect("read daemon embedding config");
-    let summary_slot = format!("summary_embeddings = \"{profile_name}\"\n");
-    fs::write(config_path, config.replace(&summary_slot, ""))
-        .expect("write daemon code-only embedding config");
+    crate::config::set_repo_semantic_embedding_policy(
+        &crate::config::settings::settings_local_path(repo_root),
+        &RepoSemanticEmbeddingPolicy {
+            present: true,
+            summary_mode: Some(SemanticSummaryMode::Off),
+            embedding_mode: Some(SemanticCloneEmbeddingMode::Deterministic),
+            inference: SemanticClonesInferenceBindings {
+                summary_generation: None,
+                code_embeddings: Some(profile_name.to_string()),
+                summary_embeddings: None,
+            },
+        },
+    )
+    .expect("write repo code-only embedding policy");
 }
 
 fn activate_summary_embedding_slot_for_workplane(repo_root: &Path) {
-    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    let config = fs::read_to_string(&config_path).expect("read daemon embedding config");
-    let config = config.replace("summary_mode = \"off\"", "summary_mode = \"auto\"");
-    let config = config.replace(
-        "[semantic_clones.inference]\n",
-        "[semantic_clones.inference]\nsummary_generation = \"summary_generation_for_tests\"\n",
-    );
-    fs::write(config_path, config).expect("write summary embedding active daemon config");
+    let mut policy = crate::config::repo_semantic_embedding_policy(repo_root)
+        .expect("read repo semantic policy");
+    policy.summary_mode = Some(SemanticSummaryMode::Auto);
+    policy.inference.summary_generation = Some("summary_generation_for_tests".to_string());
+    crate::config::set_repo_semantic_embedding_policy(
+        &crate::config::settings::settings_local_path(repo_root),
+        &policy,
+    )
+    .expect("write summary embedding active repo policy");
 }
 
 fn write_repo_embedding_policy_off(repo_root: &Path) {
@@ -1341,6 +1360,10 @@ async fn architecture_role_adjudication_workplane_job_loads_db_state_without_can
             "request": {
                 "repo_id": cfg.repo.repo_id,
                 "generation": 1,
+                "stable_request_key": "file:src/main.rs",
+                "facts_hash": "facts",
+                "rules_hash": "rules",
+                "cluster_key": null,
                 "target_kind": "file",
                 "path": "src/main.rs",
                 "reason": "unknown",

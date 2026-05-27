@@ -6,15 +6,11 @@ use anyhow::{Context, Result};
 mod agent_hooks;
 mod agent_selection;
 mod args;
-mod cloud_login_status;
-mod context_guidance_setup;
-mod daemon_bootstrap;
-mod embeddings_setup;
 mod final_setup;
 mod progress;
 mod repo_excludes;
+mod semantic_setup;
 mod status;
-mod summary_setup;
 mod workflow;
 mod workflow_output;
 
@@ -22,34 +18,21 @@ mod workflow_output;
 mod tests;
 
 pub use agent_selection::{InitAgentSelection, detect_or_select_agent};
-pub use args::{InitArgs, InitCommand, InitStatusArgs};
+pub use args::{InitArgs, InitCommand, InitStatusArgs, SummariesRuntime, SummaryEmbeddingsMode};
 
 pub(super) use args::{
     DEFAULT_INIT_INGEST_BACKFILL, normalize_cli_exclusions, normalize_exclude_from_paths,
 };
-#[cfg(test)]
-pub(super) use cloud_login_status::with_cloud_login_status_hook;
-pub(super) use context_guidance_setup::choose_context_guidance_setup_during_init;
-pub(super) use daemon_bootstrap::{
-    maybe_enable_default_daemon_service, maybe_install_default_daemon,
-};
-#[cfg(test)]
-pub(super) use daemon_bootstrap::{
-    with_enable_default_daemon_service_hook, with_install_default_daemon_hook,
-};
-#[cfg(test)]
-pub(super) use embeddings_setup::prompt_install_embeddings_setup_selection;
-pub(super) use embeddings_setup::{
-    InitEmbeddingsSetupSelection, should_install_embeddings_during_init,
-};
-#[cfg(test)]
-pub(super) use final_setup::InitFinalSetupSelection;
 pub(super) use final_setup::{InitFinalSetupPromptOptions, choose_final_setup_options};
 pub(super) use repo_excludes::ensure_repo_init_files_excluded;
 pub(crate) use repo_excludes::{
     clear_repo_local_policy_excluded, clear_repo_managed_skill_files_excluded,
 };
-pub(super) use summary_setup::choose_summary_setup_during_init;
+pub(super) use semantic_setup::{
+    InitEmbeddingsSetupSelection, InitSummaryEmbeddingsSetupSelection,
+    choose_embeddings_setup_during_init, choose_summary_embeddings_setup_during_init,
+    choose_summary_setup_during_init,
+};
 
 pub type AgentSelector = dyn Fn(&[String], bool) -> std::result::Result<InitAgentSelection, String>;
 

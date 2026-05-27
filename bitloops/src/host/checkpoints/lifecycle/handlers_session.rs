@@ -19,6 +19,7 @@ use crate::host::checkpoints::session::phase::{
     transition_with_context as transition_session_with_context,
 };
 use crate::host::checkpoints::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL;
+use crate::host::hooks::runtime::agent_runtime::interactions::interaction_actor_identity;
 use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{
@@ -109,9 +110,14 @@ pub fn handle_lifecycle_session_start_for_repo(
 
     if let Some(spool) = resolve_interaction_spool(repo_root) {
         let model = resolve_interaction_model(&event.model, &state.transcript_path);
+        let (actor_id, actor_name, actor_email, actor_source) = interaction_actor_identity();
         let session = InteractionSession {
             session_id: session_id.clone(),
             repo_id: spool.repo_id().to_string(),
+            actor_id: actor_id.clone(),
+            actor_name: actor_name.clone(),
+            actor_email: actor_email.clone(),
+            actor_source: actor_source.clone(),
             agent_type: state.agent_type.clone(),
             model: model.clone(),
             first_prompt: state.first_prompt.clone(),
@@ -133,6 +139,10 @@ pub fn handle_lifecycle_session_start_for_repo(
             session_id: session_id.clone(),
             turn_id: None,
             repo_id: spool.repo_id().to_string(),
+            actor_id,
+            actor_name,
+            actor_email,
+            actor_source,
             event_type: InteractionEventType::SessionStart,
             event_time: now.clone(),
             agent_type: state.agent_type.clone(),
@@ -287,9 +297,14 @@ fn handle_lifecycle_turn_start_for_repo_inner(
     let turn_number = state.pending.step_count + 1;
     if let Some(spool) = resolve_interaction_spool(repo_root) {
         let model = resolve_interaction_model(&event.model, &state.transcript_path);
+        let (actor_id, actor_name, actor_email, actor_source) = interaction_actor_identity();
         let session = InteractionSession {
             session_id: session_id.clone(),
             repo_id: spool.repo_id().to_string(),
+            actor_id: actor_id.clone(),
+            actor_name: actor_name.clone(),
+            actor_email: actor_email.clone(),
+            actor_source: actor_source.clone(),
             agent_type: state.agent_type.clone(),
             model: model.clone(),
             first_prompt: state.first_prompt.clone(),
@@ -310,6 +325,10 @@ fn handle_lifecycle_turn_start_for_repo_inner(
             turn_id: state.turn_id.clone(),
             session_id: session_id.clone(),
             repo_id: spool.repo_id().to_string(),
+            actor_id: actor_id.clone(),
+            actor_name: actor_name.clone(),
+            actor_email: actor_email.clone(),
+            actor_source: actor_source.clone(),
             turn_number,
             prompt: prompt_text.clone(),
             agent_type: state.agent_type.clone(),
@@ -327,6 +346,10 @@ fn handle_lifecycle_turn_start_for_repo_inner(
             session_id: session_id.clone(),
             turn_id: Some(state.turn_id.clone()),
             repo_id: spool.repo_id().to_string(),
+            actor_id,
+            actor_name,
+            actor_email,
+            actor_source,
             event_type: InteractionEventType::TurnStart,
             event_time: now.clone(),
             agent_type: state.agent_type.clone(),

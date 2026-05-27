@@ -199,6 +199,7 @@ fn cursor_stop(repo: &Path, conversation_id: &str, transcript_path: &str) {
     );
     let out = run_cmd(repo, &["hooks", "cursor", "stop"], Some(&input));
     assert_success(&out, "hooks cursor stop");
+    test_command_support::drain_lifecycle_stop_spool(repo);
 }
 
 fn write_transcript(path: &Path, prompt: &str, response: &str) {

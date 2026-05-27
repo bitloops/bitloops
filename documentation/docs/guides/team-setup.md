@@ -28,13 +28,23 @@ Each developer may also keep:
 
 ### 1. Fastest onboarding path
 
-The fastest way to get started from inside the repository is:
+For scripted onboarding, run the installer with its default-config flag, then initialise the repository:
 
 ```bash
-bitloops init --install-default-daemon --sync=true
+curl -fsSL https://bitloops.com/install.sh | bash -s -- --default-config
+bitloops init --sync=true
 ```
 
-That single command bootstraps the default daemon service if needed, creates `.bitloops.local.toml`, installs hooks, and follows the initial current-state sync. Use the explicit `bitloops start --create-default-config` path below when someone needs to inspect or customise their daemon config before bootstrapping the repo.
+On Windows, use the same installer intent with PowerShell `-DefaultConfig` or CMD `--default-config`. This configures the daemon with the generated default config, creates `.bitloops.local.toml`, installs hooks, and follows the initial current-state sync.
+
+The manual browser-based alternative is:
+
+```bash
+bitloops configure --web
+bitloops init --sync=true
+```
+
+Use the lower-level `bitloops start --create-default-config` path below only when someone needs to start the daemon without opening configuration or running the installer configure step.
 
 ```bash
 bitloops start --create-default-config
@@ -62,23 +72,20 @@ token = "${GITHUB_TOKEN}"
 From the repository root or a subproject directory:
 
 ```bash
-bitloops init --install-default-daemon --sync=true
 bitloops init --sync=true
 ```
 
-The fastest default path is `bitloops init --install-default-daemon --sync=true`. Use plain `bitloops init` when the daemon is already running, or when a developer has already bootstrapped their daemon separately.
+The fastest scripted path is the installer default-config flow, then `bitloops init --sync=true`. The manual alternative is `bitloops configure --web`, then `bitloops init --sync=true`.
 
 This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, and installs or reconciles hooks.
 
-When you use `bitloops init --install-default-daemon` and embeddings are not already configured, interactive init asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now. Bitloops cloud is the recommended default, and the managed local runtime still downloads and warms asynchronously when that local option is selected.
-
-In an interactive terminal, plain `bitloops init` also asks whether you want to install that same default local embeddings setup when embeddings are still unconfigured.
+Daemon-level inference, telemetry, and capability-pack settings belong to `bitloops configure --web`.
 
 `bitloops init` can also queue an initial DevQL current-state sync after hooks are installed. Use `--sync=true` to run it immediately, or `--sync=false` to skip it. If you omit `--sync` in an interactive terminal, Bitloops asks after hook setup whether you want to sync the codebase.
 
 In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.
 
-`bitloops init` still does not run DevQL ingest. Use `bitloops devql tasks enqueue --kind ingest` when you want to populate checkpoint, commit, and event history.
+`bitloops init` does not run DevQL ingest unless you opt in. Use `--ingest=true` during init, or run `bitloops devql tasks enqueue --kind ingest` later, when you want to populate checkpoint, commit, and event history.
 
 Use `--agent <name>` repeatedly when a team wants to pin the supported agent set during bootstrap. For example:
 
@@ -86,7 +93,7 @@ Use `--agent <name>` repeatedly when a team wants to pin the supported agent set
 bitloops init --sync=false --agent claude-code --agent codex
 ```
 
-If telemetry consent later becomes unresolved for an existing daemon config, interactive `bitloops init` can ask again. Non-interactive runs require an explicit telemetry flag.
+If telemetry consent later becomes unresolved for an existing daemon config, resolve it with `bitloops configure --web` or by installing a complete daemon config with `bitloops configure --file <path>`.
 
 ### 4. Commit shared project policy when you need it
 

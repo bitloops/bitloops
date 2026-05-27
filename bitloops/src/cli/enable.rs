@@ -20,12 +20,12 @@ use crate::cli::embeddings::{
     platform_embeddings_gateway_url_override,
 };
 use crate::cli::inference::{
-    ContextGuidanceSetupSelection, SummarySetupSelection, TextGenerationRuntime,
+    ContextGuidanceSetupSelection, TextGenerationRuntime,
     configure_cloud_context_guidance_generation, configure_cloud_summary_generation,
     configure_local_context_guidance_generation, configure_local_summary_generation,
     context_guidance_generation_configured, platform_context_guidance_gateway_url_override,
     platform_summary_gateway_url_override, prompt_context_guidance_setup_selection,
-    prompt_summary_setup_selection, summary_generation_configured,
+    summary_generation_configured,
 };
 use crate::cli::root::DisableArgs;
 use crate::cli::telemetry_consent;
@@ -110,6 +110,22 @@ pub struct EnableArgs {
     /// Environment variable that contains the platform gateway bearer token.
     #[arg(long)]
     pub embeddings_api_key_env: Option<String>,
+
+    /// Configure and bootstrap local summaries so sync can include them.
+    #[arg(long, default_value_t = false)]
+    pub install_summaries: bool,
+
+    /// Select which summaries runtime to configure when summaries are installed.
+    #[arg(long, value_enum)]
+    pub summaries_runtime: Option<TextGenerationRuntime>,
+
+    /// Public platform chat completions endpoint used when `--summaries-runtime platform` is selected.
+    #[arg(long)]
+    pub summaries_gateway_url: Option<String>,
+
+    /// Environment variable that contains the platform gateway bearer token for summaries.
+    #[arg(long)]
+    pub summaries_api_key_env: Option<String>,
 
     /// Configure context guidance text generation when capture is enabled.
     #[arg(long, default_value_t = false)]
@@ -385,6 +401,13 @@ fn enable_uses_context_guidance_flags(args: &EnableArgs) -> bool {
         || args.context_guidance_api_key_env.is_some()
 }
 
+fn enable_uses_summaries_flags(args: &EnableArgs) -> bool {
+    args.install_summaries
+        || args.summaries_runtime.is_some()
+        || args.summaries_gateway_url.is_some()
+        || args.summaries_api_key_env.is_some()
+}
+
 fn validate_context_guidance_enable_args(args: &EnableArgs) -> Result<()> {
     if args.context_guidance_runtime == Some(TextGenerationRuntime::Local)
         && (args.context_guidance_gateway_url.is_some()
@@ -395,6 +418,17 @@ fn validate_context_guidance_enable_args(args: &EnableArgs) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+fn validate_summaries_enable_args(args: &EnableArgs) -> Result<()> {
+    if args.summaries_runtime == Some(TextGenerationRuntime::Local)
+        && (args.summaries_gateway_url.is_some() || args.summaries_api_key_env.is_some())
+    {
+        bail!(
+            "`--summaries-gateway-url` and `--summaries-api-key-env` require `--summaries-runtime platform`"
+        );
+    }
     Ok(())
 }
 
@@ -416,6 +450,7 @@ pub(crate) async fn run_with_io(
     input: &mut dyn BufRead,
 ) -> Result<()> {
     validate_context_guidance_enable_args(&args)?;
+    validate_summaries_enable_args(&args)?;
 
     if let Some(agent) = args.agent.as_deref() {
         bail!(
@@ -458,6 +493,11 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
     if enable_uses_context_guidance_flags(&args) && !capture_selected {
         bail!(
             "`--install-context-guidance`, `--context-guidance-runtime`, `--context-guidance-gateway-url`, and `--context-guidance-api-key-env` require `--capture`"
+        );
+    }
+    if enable_uses_summaries_flags(&args) && !capture_selected {
+        bail!(
+            "`--install-summaries`, `--summaries-runtime`, `--summaries-gateway-url`, and `--summaries-api-key-env` require `--capture`"
         );
     }
 
@@ -538,6 +578,13 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
         .embeddings_api_key_env
         .as_deref()
         .unwrap_or(DEFAULT_EMBEDDINGS_API_KEY_ENV);
+    let summaries_runtime = args
+        .summaries_runtime
+        .unwrap_or(TextGenerationRuntime::Local);
+    let summaries_api_key_env = args
+        .summaries_api_key_env
+        .as_deref()
+        .unwrap_or(DEFAULT_EMBEDDINGS_API_KEY_ENV);
     let capture_was_disabled = !current_state.capture_enabled;
 
     if capture_selected
@@ -595,14 +642,24 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
         return Ok(());
     }
 
-    if capture_was_disabled {
-        match choose_summary_setup(&cwd, out, input).await? {
-            SummarySetupSelection::Cloud => {
+    if capture_selected
+        && (capture_was_disabled || args.install_summaries)
+        && should_install_summaries(&cwd, args.install_summaries, out, input)?
+    {
+        match summaries_runtime {
+            TextGenerationRuntime::Platform => {
                 crate::cli::login::ensure_logged_in().await?;
-                let gateway_url_override = platform_summary_gateway_url_override();
+                let gateway_url_override = args
+                    .summaries_gateway_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .or_else(platform_summary_gateway_url_override);
                 let message = configure_cloud_summary_generation(
                     &cwd,
                     gateway_url_override.as_deref(),
+                    Some(summaries_api_key_env),
                 )
                 .map_err(|err| {
                     anyhow::anyhow!(
@@ -611,14 +668,13 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
                 })?;
                 writeln!(out, "{message}")?;
             }
-            SummarySetupSelection::Local => {
+            TextGenerationRuntime::Local => {
                 configure_local_summary_generation(&cwd, out, input, true).map_err(|err| {
                     anyhow::anyhow!(
                         "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
                     )
                 })?;
             }
-            SummarySetupSelection::Skip => {}
         }
     }
 
@@ -683,6 +739,27 @@ fn should_install_embeddings(
     prompt_install_embeddings(out, input)
 }
 
+fn should_install_summaries(
+    repo_root: &Path,
+    explicit_install: bool,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<bool> {
+    if explicit_install {
+        return Ok(true);
+    }
+
+    if !telemetry_consent::can_prompt_interactively() {
+        return Ok(false);
+    }
+
+    if summary_generation_configured(repo_root) {
+        return Ok(false);
+    }
+
+    prompt_install_summaries(out, input)
+}
+
 fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Result<bool> {
     writeln!(out)?;
     writeln!(
@@ -706,24 +783,27 @@ fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Re
     }
 }
 
-async fn choose_summary_setup(
-    repo_root: &Path,
-    out: &mut dyn Write,
-    input: &mut dyn BufRead,
-) -> Result<SummarySetupSelection> {
-    if !telemetry_consent::can_prompt_interactively() {
-        return Ok(SummarySetupSelection::Skip);
+fn prompt_install_summaries(out: &mut dyn Write, input: &mut dyn BufRead) -> Result<bool> {
+    writeln!(out)?;
+    writeln!(
+        out,
+        "Install local summaries as well? This is recommended and lets sync include summaries."
+    )?;
+
+    loop {
+        write!(out, "Install summaries now? [Y/n] ")?;
+        out.flush()?;
+
+        let mut line = String::new();
+        input
+            .read_line(&mut line)
+            .context("reading summaries install prompt response")?;
+        match line.trim().to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => writeln!(out, "Please answer yes or no.")?,
+        }
     }
-
-    if summary_generation_configured(repo_root) {
-        return Ok(SummarySetupSelection::Skip);
-    }
-
-    let cloud_logged_in = crate::daemon::resolve_workos_session_status()
-        .await?
-        .is_some();
-
-    prompt_summary_setup_selection(out, input, true, false, cloud_logged_in)
 }
 
 async fn choose_context_guidance_setup(

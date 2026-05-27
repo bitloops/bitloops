@@ -90,8 +90,9 @@ pub(super) async fn start_detached(
                 daemon_config.config_path.display()
             )
         })?;
-        log::debug!("spawned detached daemon pid={}", child.id());
-        wait_until_ready(READY_TIMEOUT).await
+        let child_pid = child.id();
+        log::debug!("spawned detached daemon pid={child_pid}");
+        wait_until_ready_for_spawned_daemon(child, "detached", READY_TIMEOUT).await
     }
     .await;
     if let Err(err) = &result {
@@ -338,6 +339,56 @@ pub(super) async fn wait_until_ready(timeout: Duration) -> Result<DaemonRuntimeS
                 "Bitloops daemon did not become ready within {} seconds",
                 timeout.as_secs()
             );
+        }
+
+        if let Some(state) = read_runtime_state(Path::new("."))?
+            && daemon_http_ready(&state).await
+        {
+            return Ok(state);
+        }
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+pub(super) async fn wait_until_ready_for_spawned_daemon(
+    mut child: std::process::Child,
+    launch_mode: &str,
+    timeout: Duration,
+) -> Result<DaemonRuntimeState> {
+    let pid = child.id();
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("checking spawned {launch_mode} daemon pid={pid} status"))?
+        {
+            if let Err(cleanup_err) =
+                cleanup_spawned_daemon_after_startup_failure(&mut child, launch_mode)
+            {
+                log::warn!(
+                    "failed to clean runtime state after spawned {launch_mode} daemon pid={pid} exited before readiness: {cleanup_err:#}"
+                );
+            }
+            bail!("spawned {launch_mode} daemon pid={pid} exited before becoming ready: {status}");
+        }
+
+        if started.elapsed() > timeout {
+            let err = anyhow::anyhow!(
+                "Bitloops daemon did not become ready within {} seconds",
+                timeout.as_secs()
+            );
+            log::warn!(
+                "spawned {launch_mode} daemon pid={pid} failed to become ready; stopping spawned process before returning startup failure: {err:#}"
+            );
+            if let Err(cleanup_err) =
+                cleanup_spawned_daemon_after_startup_failure(&mut child, launch_mode)
+            {
+                log::error!(
+                    "failed to stop spawned {launch_mode} daemon pid={pid} after startup failure: {cleanup_err:#}"
+                );
+            }
+            return Err(err);
         }
 
         if let Some(state) = read_runtime_state(Path::new("."))?

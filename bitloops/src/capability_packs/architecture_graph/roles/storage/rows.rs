@@ -75,6 +75,7 @@ pub(super) fn detection_rule_from_row(row: Value) -> Result<ArchitectureRoleDete
         lifecycle: role_rule_lifecycle_from_db(&row_string(&row, "lifecycle")?)?,
         priority: row_i64(&row, "priority")?,
         score: row_f64(&row, "score")?,
+        min_positive_ratio: row_f64(&row, "min_positive_ratio")?,
         candidate_selector: row_json(&row, "candidate_selector_json", json!({}))?,
         positive_conditions: row_json(&row, "positive_conditions_json", json!([]))?,
         negative_conditions: row_json(&row, "negative_conditions_json", json!([]))?,

@@ -250,7 +250,7 @@ mod tests {
             architecture: ArchitectureConfig {
                 inference: ArchitectureInferenceBindings {
                     fact_synthesis: Some("local_agent".to_string()),
-                    role_adjudication: Some("local_role_adjudicator".to_string()),
+                    role_adjudication: Some("architecture_role_adjudication_codex".to_string()),
                 },
             },
             ..Default::default()
@@ -270,7 +270,7 @@ mod tests {
                 .get("architecture_graph")
                 .and_then(|slots| slots.get("role_adjudication"))
                 .map(String::as_str),
-            Some("local_role_adjudicator")
+            Some("architecture_role_adjudication_codex")
         );
     }
 }

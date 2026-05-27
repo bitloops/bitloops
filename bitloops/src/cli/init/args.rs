@@ -4,9 +4,20 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use crate::cli::embeddings::EmbeddingsRuntime;
-use crate::cli::inference::TextGenerationRuntime;
 
 pub(crate) const DEFAULT_INIT_INGEST_BACKFILL: usize = 50;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SummariesRuntime {
+    Local,
+    Platform,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SummaryEmbeddingsMode {
+    On,
+    Off,
+}
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum InitCommand {
@@ -39,10 +50,6 @@ pub struct InitArgs {
     #[command(subcommand)]
     pub command: Option<InitCommand>,
 
-    /// Bootstrap and start the default Bitloops daemon service if it is not already running.
-    #[arg(long, default_value_t = false)]
-    pub install_default_daemon: bool,
-
     /// Remove and reinstall existing hooks for selected agents.
     #[arg(long, short = 'f')]
     pub force: bool,
@@ -55,22 +62,6 @@ pub struct InitArgs {
     /// Target specific agent setups (repeatable).
     #[arg(long = "agent", value_name = "AGENT")]
     pub agent: Vec<String>,
-
-    /// Enable anonymous telemetry for this CLI version.
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
-    pub telemetry: Option<bool>,
-
-    /// Disable anonymous telemetry for this CLI version.
-    #[arg(
-        long = "no-telemetry",
-        conflicts_with = "telemetry",
-        default_value_t = false
-    )]
-    pub no_telemetry: bool,
-
-    /// Accepted for compatibility; `bitloops init` no longer runs the initial baseline sync.
-    #[arg(long, default_value_t = false)]
-    pub skip_baseline: bool,
 
     /// Queue an initial DevQL sync after hook setup.
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
@@ -98,53 +89,17 @@ pub struct InitArgs {
     #[arg(long = "exclude-from")]
     pub exclude_from: Vec<String>,
 
-    /// Select which embeddings runtime to configure when embeddings are installed during init.
+    /// Select which embeddings runtime to configure during init.
     #[arg(long, value_enum)]
     pub embeddings_runtime: Option<EmbeddingsRuntime>,
 
-    /// Skip embeddings setup during init.
-    #[arg(
-        long,
-        default_value_t = false,
-        conflicts_with = "embeddings_runtime",
-        conflicts_with = "embeddings_gateway_url",
-        conflicts_with = "embeddings_api_key_env"
-    )]
-    pub no_embeddings: bool,
-
-    /// Skip semantic summaries setup during init.
-    #[arg(long, default_value_t = false)]
-    pub no_summaries: bool,
-
-    /// Select which text-generation runtime to configure for context guidance during init.
+    /// Select which summaries runtime to configure during init.
     #[arg(long, value_enum)]
-    pub context_guidance_runtime: Option<TextGenerationRuntime>,
+    pub summaries_runtime: Option<SummariesRuntime>,
 
-    /// Skip context guidance setup during init.
-    #[arg(
-        long,
-        default_value_t = false,
-        conflicts_with = "context_guidance_runtime",
-        conflicts_with = "context_guidance_gateway_url",
-        conflicts_with = "context_guidance_api_key_env"
-    )]
-    pub no_context_guidance: bool,
-
-    /// Public platform embeddings endpoint used when `--embeddings-runtime platform` is selected.
-    #[arg(long)]
-    pub embeddings_gateway_url: Option<String>,
-
-    /// Environment variable that contains the platform gateway bearer token.
-    #[arg(long, default_value = "BITLOOPS_PLATFORM_GATEWAY_TOKEN")]
-    pub embeddings_api_key_env: String,
-
-    /// Public platform chat completions endpoint used when `--context-guidance-runtime platform` is selected.
-    #[arg(long)]
-    pub context_guidance_gateway_url: Option<String>,
-
-    /// Environment variable that contains the platform gateway bearer token for context guidance.
-    #[arg(long)]
-    pub context_guidance_api_key_env: Option<String>,
+    /// Control summary embeddings setup during init.
+    #[arg(long, value_enum)]
+    pub summary_embeddings_mode: Option<SummaryEmbeddingsMode>,
 }
 
 fn parse_backfill_value(raw: &str) -> std::result::Result<usize, String> {

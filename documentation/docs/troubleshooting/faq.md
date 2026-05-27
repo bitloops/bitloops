@@ -54,7 +54,7 @@ Machine-scoped settings such as:
 - dashboard defaults
 - daemon runtime defaults
 
-`bitloops enable --install-embeddings` can create the default local embeddings profile for you when it is missing. `bitloops init --install-default-daemon` can instead configure Bitloops cloud, the local runtime, or skip embeddings when the repo does not already have an active embeddings profile.
+`bitloops configure --web` owns daemon-level inference and capability settings. `bitloops enable --install-embeddings` can still create the default local embeddings profile for a repo when it is missing.
 
 ### How do I turn on local embeddings now?
 
@@ -63,7 +63,6 @@ Use one of these paths:
 ```bash
 bitloops enable --install-embeddings
 bitloops daemon enable --install-embeddings
-bitloops init --install-default-daemon --sync=true
 ```
 
 Interactive `bitloops enable` also offers embeddings install automatically when embeddings are not already configured, with a default-yes `[Y/n]` prompt.
@@ -80,18 +79,18 @@ No. It launches the browser and ensures the daemon is running.
 
 ### What creates the daemon config now?
 
-Interactive `bitloops start` prompts to create the default daemon config when it is missing. For scripted or non-interactive setups, use `bitloops start --create-default-config` together with an explicit telemetry flag. `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
+Use `bitloops configure --web` to create or edit daemon config interactively. For scripted installs, run the installer with `--default-config` or provide a full TOML file to `bitloops configure --file /path/to/config.toml`.
 
 If you already have a custom config file and only need the matching local file-backed stores, use `bitloops start --config /path/to/config.toml --bootstrap-local-stores`.
 
 ### When does Bitloops ask about telemetry?
 
-On a fresh machine, the first interactive prompt happens during `bitloops start` when the default daemon config is created.
+On a fresh machine, telemetry consent is part of daemon configuration.
 
 After that:
 
-- `bitloops init` and `bitloops enable` only ask when the daemon config already existed and telemetry consent is unresolved
-- non-interactive `start`, `init`, or `enable` require `--telemetry`, `--telemetry=false`, or `--no-telemetry` when consent is unresolved
+- `bitloops configure --web` exposes telemetry alongside the other daemon settings
+- `bitloops start` and `bitloops enable` can still accept `--telemetry`, `--telemetry=false`, or `--no-telemetry` when needed
 - a previous opt-in carries forward across CLI upgrades
 - a previous opt-out is cleared on a newer CLI version so Bitloops can ask again later
 

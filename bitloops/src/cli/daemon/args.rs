@@ -132,6 +132,17 @@ pub struct DaemonRestartArgs {
     pub config: Option<PathBuf>,
 }
 
+#[derive(Args, Debug, Clone)]
+pub struct DelayedDaemonRestartArgs {
+    /// Path to the Bitloops daemon config file.
+    #[arg(long, value_name = "PATH")]
+    pub config: PathBuf,
+
+    /// Delay before restarting, in milliseconds.
+    #[arg(long = "delay-ms", default_value_t = 750)]
+    pub delay_ms: u64,
+}
+
 #[derive(Args, Debug, Clone, Default)]
 pub struct DaemonLogsArgs {
     /// Print the last N lines from the daemon log.

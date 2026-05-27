@@ -4,6 +4,8 @@ use super::common::{normalize_repo_path, render_dependency_context, split_identi
 use super::{MAX_SUMMARY_BODY_CHARS, SemanticFeatureInput};
 
 const MINIMUM_SUMMARY_LENGTH: usize = 12;
+const MAX_SUMMARY_SIGNATURE_CHARS: usize = 500;
+const MAX_SUMMARY_DOCSTRING_CHARS: usize = 1_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticSummaryCandidate {
@@ -81,14 +83,11 @@ impl SemanticSummaryProvider for DeterministicFallbackSummaryProvider {
 }
 
 fn build_semantic_summary_prompt(input: &SemanticFeatureInput) -> String {
-    let body = input.body.trim();
-    let body = if body.chars().count() > MAX_SUMMARY_BODY_CHARS {
-        body.chars()
-            .take(MAX_SUMMARY_BODY_CHARS)
-            .collect::<String>()
-    } else {
-        body.to_string()
-    };
+    let body = normalize_summary_prompt_field(Some(input.body.as_str()), MAX_SUMMARY_BODY_CHARS);
+    let signature =
+        normalize_summary_prompt_field(input.signature.as_deref(), MAX_SUMMARY_SIGNATURE_CHARS);
+    let docstring =
+        normalize_summary_prompt_field(input.docstring.as_deref(), MAX_SUMMARY_DOCSTRING_CHARS);
 
     let dependency_context = render_dependency_context(&input.dependency_signals);
 
@@ -118,13 +117,21 @@ body:\n{body}",
         path = normalize_repo_path(&input.path),
         symbol_fqn = input.symbol_fqn,
         name = input.name,
-        signature = input.signature.as_deref().unwrap_or(""),
+        signature = signature,
         modifiers = input.modifiers.join(", "),
-        docstring = input.docstring.as_deref().unwrap_or(""),
+        docstring = docstring,
         parent_kind = input.parent_kind.as_deref().unwrap_or(""),
         dependencies = dependency_context,
         body = body,
     )
+}
+
+fn normalize_summary_prompt_field(value: Option<&str>, max_chars: usize) -> String {
+    let trimmed = value.unwrap_or("").trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    trimmed.chars().take(max_chars).collect()
 }
 
 fn parse_semantic_summary_candidate_text(content: &str) -> Option<String> {
@@ -539,6 +546,38 @@ mod tests {
             .nth(1)
             .expect("prompt should include body section");
         assert_eq!(body_section.chars().count(), MAX_SUMMARY_BODY_CHARS);
+    }
+
+    #[test]
+    fn semantic_features_prompt_truncates_signature_and_docstring() {
+        let mut input = sample_input("function", "normalizeEmail");
+        input.signature = Some("s".repeat(650));
+        input.docstring = Some("d".repeat(1_250));
+
+        let prompt = build_semantic_summary_prompt(&input);
+        let signature_line = prompt
+            .lines()
+            .find(|line| line.starts_with("signature: "))
+            .expect("prompt should include signature");
+        let docstring_line = prompt
+            .lines()
+            .find(|line| line.starts_with("docstring: "))
+            .expect("prompt should include docstring");
+
+        assert_eq!(
+            signature_line
+                .trim_start_matches("signature: ")
+                .chars()
+                .count(),
+            500
+        );
+        assert_eq!(
+            docstring_line
+                .trim_start_matches("docstring: ")
+                .chars()
+                .count(),
+            1_000
+        );
     }
 
     #[test]

@@ -23,6 +23,7 @@ use crate::host::checkpoints::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL;
 use crate::host::checkpoints::transcript::metadata::{
     build_session_metadata_bundle, extract_prompts_from_transcript_bytes,
 };
+use crate::host::hooks::runtime::agent_runtime::interactions::interaction_actor_identity;
 use crate::host::interactions::model::resolve_interaction_model_from_bytes;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::tool_events::{
@@ -238,11 +239,16 @@ pub(crate) fn handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
     let model = resolve_interaction_model_from_bytes(&event.model, &transcript_data);
 
     if let Some(spool) = resolve_interaction_spool(repo_root) {
+        let (actor_id, actor_name, actor_email, actor_source) = interaction_actor_identity();
         let session = session_before_capture
             .as_ref()
             .map(|state| InteractionSession {
                 session_id: session_id.clone(),
                 repo_id: spool.repo_id().to_string(),
+                actor_id: actor_id.clone(),
+                actor_name: actor_name.clone(),
+                actor_email: actor_email.clone(),
+                actor_source: actor_source.clone(),
                 agent_type: state.agent_type.clone(),
                 model: model.clone(),
                 first_prompt: state.first_prompt.clone(),
@@ -267,6 +273,10 @@ pub(crate) fn handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
             .unwrap_or(InteractionSession {
                 session_id: session_id.clone(),
                 repo_id: spool.repo_id().to_string(),
+                actor_id: actor_id.clone(),
+                actor_name: actor_name.clone(),
+                actor_email: actor_email.clone(),
+                actor_source: actor_source.clone(),
                 agent_type: ctx.agent_type.clone(),
                 model: model.clone(),
                 first_prompt: last_prompt.clone(),
@@ -288,6 +298,10 @@ pub(crate) fn handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
             turn_id: turn_id.clone(),
             session_id: session_id.clone(),
             repo_id: spool.repo_id().to_string(),
+            actor_id: actor_id.clone(),
+            actor_name: actor_name.clone(),
+            actor_email: actor_email.clone(),
+            actor_source: actor_source.clone(),
             turn_number,
             prompt: all_prompts
                 .last()
@@ -328,10 +342,10 @@ pub(crate) fn handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
                 session_id: &session_id,
                 turn_id: &turn.turn_id,
                 branch: "",
-                actor_id: "",
-                actor_name: "",
-                actor_email: "",
-                actor_source: "",
+                actor_id: &actor_id,
+                actor_name: &actor_name,
+                actor_email: &actor_email,
+                actor_source: &actor_source,
                 event_time: &interaction_now,
                 agent_type: &ctx.agent_type,
                 model: &model,
@@ -359,6 +373,10 @@ pub(crate) fn handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
             session_id: session_id.to_string(),
             turn_id: Some(turn_id.clone()),
             repo_id: spool.repo_id().to_string(),
+            actor_id,
+            actor_name,
+            actor_email,
+            actor_source,
             event_type: InteractionEventType::TurnEnd,
             event_time: interaction_now.clone(),
             sequence_number: transcript_derived_turn_end_sequence(&derived_tool_events),
