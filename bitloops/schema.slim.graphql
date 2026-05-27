@@ -1287,7 +1287,6 @@ type Commit {
 	committedAt: DateTime!
 	branch: String
 	filesChanged: [String!]!
-	hunks(path: String): [CommitHunk!]!
 	checkpoints(first: Int, after: String, last: Int, before: String): CheckpointConnection!
 }
 
@@ -1300,26 +1299,6 @@ type CommitConnection {
 type CommitEdge {
 	node: Commit!
 	cursor: String!
-}
-
-type CommitHunk {
-	commitSha: String!
-	pathBefore: String
-	pathAfter: String
-	changeKind: String!
-	hunkIndex: Int!
-	oldStart: Int!
-	oldLineCount: Int!
-	newStart: Int!
-	newLineCount: Int!
-	addedLines: [CommitHunkLine!]!
-	deletedLines: [CommitHunkLine!]!
-	patch: String!
-}
-
-type CommitHunkLine {
-	lineNumber: Int!
-	content: String!
 }
 
 enum ContextGuidanceCategory {
@@ -1726,11 +1705,6 @@ type IngestResult {
 	checkpointCompanionsProcessed: Int!
 	eventsInserted: Int!
 	artefactsUpserted: Int!
-	fileDeltasUpserted: Int!
-	hunksUpserted: Int!
-	addedLinesIngested: Int!
-	deletedLinesIngested: Int!
-	binaryDeltasUpserted: Int!
 	semanticFeatureRowsUpserted: Int!
 	semanticFeatureRowsSkipped: Int!
 	symbolEmbeddingRowsUpserted: Int!
@@ -1761,11 +1735,6 @@ type IngestionProgressEvent {
 	currentCommitSha: String
 	eventsInserted: Int!
 	artefactsUpserted: Int!
-	fileDeltasUpserted: Int!
-	hunksUpserted: Int!
-	addedLinesIngested: Int!
-	deletedLinesIngested: Int!
-	binaryDeltasUpserted: Int!
 }
 
 type InitSchemaResult {
