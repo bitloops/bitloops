@@ -18,7 +18,8 @@ use super::ollama::{
 };
 use super::profiles::{
     write_context_guidance_profile, write_platform_context_guidance_profile,
-    write_platform_summary_profile, write_summary_profile,
+    write_platform_summary_profile, write_platform_summary_profile_with_api_key_env,
+    write_summary_profile,
 };
 #[cfg(test)]
 use super::profiles::{
@@ -70,11 +71,12 @@ pub(crate) fn configure_local_summary_generation(
 pub(crate) fn configure_cloud_summary_generation(
     repo_root: &Path,
     gateway_url_override: Option<&str>,
+    api_key_env: Option<&str>,
 ) -> Result<String> {
     let _ = install_or_bootstrap_inference(repo_root)?;
     let execution = apply_prepared_summary_setup(
         repo_root,
-        prepare_cloud_summary_generation_plan(gateway_url_override),
+        prepare_cloud_summary_generation_plan(gateway_url_override, api_key_env),
     )?;
     Ok(execution.message)
 }
@@ -148,11 +150,12 @@ pub(crate) fn configure_cloud_bitloops_inference(
 
 pub(crate) fn prepare_cloud_summary_generation_plan(
     gateway_url_override: Option<&str>,
+    api_key_env: Option<&str>,
 ) -> PreparedSummarySetupPlan {
     PreparedSummarySetupPlan {
         action: PreparedSummarySetupAction::ConfigureCloud {
             gateway_url_override: gateway_url_override.map(str::to_string),
-            api_key_env: None,
+            api_key_env: api_key_env.map(str::to_string),
         },
     }
 }
@@ -568,9 +571,17 @@ fn apply_prepared_summary_setup(
         }
         PreparedSummarySetupAction::ConfigureCloud {
             gateway_url_override,
-            api_key_env: _,
+            api_key_env,
         } => {
-            write_platform_summary_profile(repo_root, gateway_url_override.as_deref())?;
+            if let Some(api_key_env) = api_key_env {
+                write_platform_summary_profile_with_api_key_env(
+                    repo_root,
+                    gateway_url_override.as_deref(),
+                    &api_key_env,
+                )?;
+            } else {
+                write_platform_summary_profile(repo_root, gateway_url_override.as_deref())?;
+            }
             Ok(SummarySetupExecutionResult {
                 outcome: SummarySetupOutcome::Configured {
                     model_name: DEFAULT_PLATFORM_SUMMARY_MODEL.to_string(),
@@ -643,14 +654,22 @@ where
         }
         PreparedSummarySetupAction::ConfigureCloud {
             gateway_url_override,
-            api_key_env: _,
+            api_key_env,
         } => {
             report(SummarySetupProgress {
                 phase: SummarySetupPhase::WritingProfile,
                 message: Some("Applying Bitloops cloud summary profile".to_string()),
                 ..Default::default()
             })?;
-            write_platform_summary_profile(repo_root, gateway_url_override.as_deref())?;
+            if let Some(api_key_env) = api_key_env {
+                write_platform_summary_profile_with_api_key_env(
+                    repo_root,
+                    gateway_url_override.as_deref(),
+                    &api_key_env,
+                )?;
+            } else {
+                write_platform_summary_profile(repo_root, gateway_url_override.as_deref())?;
+            }
             Ok(SummarySetupExecutionResult {
                 outcome: SummarySetupOutcome::Configured {
                     model_name: DEFAULT_PLATFORM_SUMMARY_MODEL.to_string(),

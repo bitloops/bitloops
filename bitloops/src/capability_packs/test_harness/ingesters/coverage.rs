@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -8,6 +9,7 @@ use crate::capability_packs::test_harness::ingest::coverage;
 use crate::host::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
+use crate::host::checkpoints::strategy::manual_commit::{run_git, try_head_hash};
 use crate::models::{CoverageFormat, ScopeKind};
 
 use super::super::types::TEST_HARNESS_COVERAGE_INGESTER_ID;
@@ -15,7 +17,8 @@ use super::super::types::TEST_HARNESS_COVERAGE_INGESTER_ID;
 #[derive(Debug, Deserialize)]
 struct CoverageIngestPayload {
     coverage_path: String,
-    commit_sha: String,
+    commit_sha: Option<String>,
+    #[serde(default = "default_scope_kind")]
     scope_kind: String,
     tool: String,
     test_artefact_id: Option<String>,
@@ -73,28 +76,81 @@ impl IngesterHandler for CoverageIngestIngester {
                 ctx.repo_root().join(&path)
             };
 
+            let commit_sha = payload
+                .commit_sha
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
             let relational = ctx.host_relational();
+
+            if let Some(commit_sha) = commit_sha {
+                let mut g = store
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("test harness store lock poisoned: {e}"))?;
+                let summary = coverage::execute(
+                    &mut *g,
+                    relational,
+                    &coverage_path,
+                    commit_sha,
+                    scope_kind,
+                    &payload.tool,
+                    payload.test_artefact_id.as_deref(),
+                    format,
+                )?;
+
+                let human = coverage::format_summary(commit_sha, &summary);
+                return Ok(IngestResult::new(
+                    json!({
+                        "capability": "test_harness",
+                        "ingester": TEST_HARNESS_COVERAGE_INGESTER_ID,
+                        "status": "ok",
+                        "reference_mode": "commit",
+                        "commit_sha": commit_sha,
+                        "summary": {
+                            "format": summary.format.as_str(),
+                            "scope_kind": summary.scope_kind.to_string(),
+                            "hits": summary.hits,
+                            "classifications": summary.classifications,
+                            "diagnostics": summary.diagnostics,
+                        }
+                    }),
+                    human,
+                ));
+            }
+
+            let observed_head_sha = try_head_hash(ctx.repo_root())
+                .context("resolve current git HEAD for coverage provenance")?;
+            let provenance = coverage::CurrentCoverageProvenance {
+                observed_head_sha: observed_head_sha.clone(),
+                repo_dirty: repo_dirty(ctx.repo_root()),
+                coverage_file_modified_at_unix: file_modified_unix(&coverage_path),
+                ingested_at_unix: unix_now(),
+                coverage_path: coverage_metadata_path(ctx.repo_root(), &coverage_path),
+            };
             let mut g = store
                 .lock()
                 .map_err(|e| anyhow::anyhow!("test harness store lock poisoned: {e}"))?;
-            let summary = coverage::execute(
+            let summary = coverage::execute_current(
                 &mut *g,
                 relational,
                 &coverage_path,
-                &payload.commit_sha,
+                &ctx.repo().repo_id,
                 scope_kind,
                 &payload.tool,
                 payload.test_artefact_id.as_deref(),
                 format,
+                provenance,
             )?;
 
-            let human = coverage::format_summary(&payload.commit_sha, &summary);
+            let human = coverage::format_current_summary(&summary, observed_head_sha.as_deref());
             Ok(IngestResult::new(
                 json!({
                     "capability": "test_harness",
                     "ingester": TEST_HARNESS_COVERAGE_INGESTER_ID,
                     "status": "ok",
-                    "commit_sha": payload.commit_sha,
+                    "reference_mode": "current",
+                    "commit_sha": "current",
+                    "observed_head_sha": observed_head_sha,
                     "summary": {
                         "format": summary.format.as_str(),
                         "scope_kind": summary.scope_kind.to_string(),
@@ -107,4 +163,45 @@ impl IngesterHandler for CoverageIngestIngester {
             ))
         })
     }
+}
+
+fn default_scope_kind() -> String {
+    ScopeKind::Workspace.to_string()
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn file_modified_unix(path: &Path) -> Option<u64> {
+    std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
+}
+
+fn coverage_metadata_path(repo_root: &Path, coverage_path: &Path) -> String {
+    if let Ok(relative) = coverage_path.strip_prefix(repo_root) {
+        return relative.to_string_lossy().to_string();
+    }
+
+    coverage_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| coverage_path.display().to_string())
+}
+
+fn repo_dirty(repo_root: &Path) -> Option<bool> {
+    run_git(
+        repo_root,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )
+    .ok()
+    .map(|status| !status.is_empty())
 }

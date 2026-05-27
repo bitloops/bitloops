@@ -22,56 +22,62 @@ bitloops help devql
 
 ## Initial Setup
 
+### `bitloops configure`
+
+Configures the global daemon. This is machine-level setup, not repo setup.
+
+```bash
+bitloops configure --web
+bitloops configure --file /path/to/config.toml
+bitloops configure --file /path/to/config.toml --no-start
+bitloops configure --default-config
+bitloops configure --default-config --no-start
+```
+
+Notes:
+
+- `--web` creates the default daemon config and local stores if needed, starts or reuses the daemon, and opens `/settings/configuration` in the dashboard.
+- Saving daemon configuration in the dashboard schedules a daemon restart so runtime, inference, capability-pack, store, telemetry, logging, knowledge, semantic clone, context guidance, architecture, and dashboard settings take effect.
+- `--file <path>` treats the file as a complete daemon `config.toml`, validates it, installs it at the default daemon config path, ensures local stores exist, then restarts the daemon if it is running or starts it detached if it is not.
+- `--default-config` installs the generated default daemon config directly and starts or reuses the daemon.
+- `--no-start` can be combined with `--file` or `--default-config` to install the config without starting or restarting the daemon. It is not valid with `--web`, which needs a running daemon to open the dashboard.
+- Installers also accept a default-config flag for scripted setup. On macOS, Linux, and WSL use `install.sh --default-config`; on Windows PowerShell use `-DefaultConfig`; on Windows CMD use `--default-config` or `/default-config`. The installers materialize the same default daemon TOML before running `bitloops configure --file`.
+- The manual alternative is to install Bitloops without the default-config flag, run `bitloops configure --web`, then run `bitloops init` inside each repo.
+
 ### `bitloops init`
 
 Bootstraps the current project or subproject.
 
 ```bash
-bitloops init --install-default-daemon
-bitloops init --install-default-daemon --sync=true
-bitloops init --install-default-daemon --embeddings-runtime platform --embeddings-gateway-url https://gateway.example/v1/embeddings
-bitloops init --install-default-daemon --no-embeddings
 bitloops init
 bitloops init --sync=true
 bitloops init --sync=false
+bitloops init --sync=false --ingest=false --agent claude-code --agent codex
 ```
 
 Notes:
 
-- The fastest way to get started on a fresh machine from inside a repository is `bitloops init --install-default-daemon`.
-- Run `bitloops start` first when the daemon is already configured.
-- Use `bitloops start --create-default-config` first when you want to bootstrap or customise the daemon separately before running `init`.
-- When `--install-default-daemon` is used and embeddings are not configured yet, interactive `init` now asks how Bitloops should configure embeddings: Bitloops cloud, local runtime, or skip for now. The interactive default is Bitloops cloud.
+- Run `bitloops configure --web` first on a fresh machine. `init` never creates, starts, restarts, or configures the daemon.
 - `init` treats the current working directory as the Bitloops project root.
 - `init` creates or updates `.bitloops.local.toml`.
 - `.bitloops.local.toml` is added to `.git/info/exclude`.
 - `init` installs git hooks plus the selected agent hooks.
 - `init` replaces `[agents].supported` with the current selection on rerun.
-- In an interactive terminal, when embeddings are not already configured, plain `init` asks whether to install the default local embeddings setup and defaults to `Yes` with `[Y/n]`.
-- In non-interactive mode, plain `init` does not change embeddings config.
-- In non-interactive mode, `init --install-default-daemon` requires an explicit embeddings choice when embeddings are still unconfigured: `--embeddings-runtime local`, `--embeddings-runtime platform`, or `--no-embeddings`.
-- If embeddings are already configured through repo policy, `init --install-default-daemon` preserves those repo profile bindings. Legacy daemon-global embedding bindings are migrated into repo policy.
+- `init` binds `.bitloops.local.toml` to an already-running daemon config or an existing default daemon config when available.
 - `init` can queue an initial DevQL current-state sync after hook setup.
-- With `--install-default-daemon`, init-triggered sync and ingest run first. The managed embeddings runtime download then runs afterwards when the default local runtime still needs to be installed.
-- Use `--embeddings-runtime platform` when you want init to configure the hosted gateway runtime instead of the local runtime. Add `--embeddings-gateway-url <https://.../v1/embeddings>` or set `BITLOOPS_PLATFORM_GATEWAY_URL` only when you want to override the platform default endpoint.
-- `--embeddings-api-key-env <NAME>` changes the environment variable that the managed platform runtime reads for its bearer token. The default is `BITLOOPS_PLATFORM_GATEWAY_TOKEN`.
-- `--no-embeddings` writes repo policy with `[semantic_clones].embedding_mode = "off"` during `init`.
 - `--sync=true` queues that sync and follows it to completion.
 - `--sync=false` skips the initial sync explicitly.
 - If `--sync` is omitted in an interactive terminal, `init` asks whether you want to sync the codebase after hooks are installed.
 - In non-interactive mode, `init` requires `--sync=true` or `--sync=false`.
-- `init` can also run DevQL ingest when you opt in with `--ingest=true` or accept the interactive prompt. The `--skip-baseline` flag is accepted for compatibility only.
+- `init` can also run DevQL ingest when you opt in with `--ingest=true` or accept the interactive prompt. `--backfill=N` bounds ingest to the latest N commits.
+- After repo policy changes, `init` asks a running daemon to reconcile the repo watcher so changes take effect without a daemon restart.
+- `init --summaries-runtime local|platform` only applies when summaries are not already configured. It follows the same “explicit runtime only when unconfigured” rule as the embeddings runtime flag.
+- `init --summary-embeddings-mode on|off` explicitly controls summary embeddings setup for this init run. `off` skips the summary-embeddings prompt and unsets the summary embeddings binding; `on` requires summaries to be enabled and, in non-interactive mode, fails if no embeddings provider is already configured or explicitly selected.
 - Use `--agent <name>` repeatedly to pin the supported agent set. For example:
 
   ```bash
   bitloops init --sync=false --agent claude-code --agent codex
   ```
-
-- `init` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
-- First-run telemetry consent belongs to `bitloops start` when the default daemon config is created for the first time.
-- `init` only prompts for telemetry when the daemon config already existed and consent later became unresolved, for example after a CLI upgrade cleared a previous opt-out.
-- In non-interactive mode, unresolved telemetry consent requires an explicit telemetry flag.
-- If `init` newly adds embeddings config and the runtime bootstrap fails, Bitloops reverts only those embeddings-related daemon-config changes, keeps the rest of init intact, and exits non-zero.
 
 ### `bitloops enable`
 
@@ -84,6 +90,8 @@ bitloops enable --devql-guidance
 bitloops enable --capture --devql-guidance
 bitloops enable --install-embeddings
 bitloops enable --install-embeddings --embeddings-runtime platform --embeddings-gateway-url https://gateway.example/v1/embeddings
+bitloops enable --install-summaries
+bitloops enable --install-summaries --summaries-runtime platform --summaries-gateway-url https://gateway.example/v1/chat/completions
 bitloops daemon enable
 bitloops daemon enable --install-embeddings
 ```
@@ -100,9 +108,14 @@ Notes:
 - `--install-embeddings`, `--embeddings-runtime`, `--embeddings-gateway-url`, and `--embeddings-api-key-env` require `--capture`.
 - `--install-embeddings` is an explicit non-interactive opt-in to configure the needed daemon runtime/profile, write repo semantic embedding policy, and then run the existing runtime warm/bootstrap path. When the selected runtime is the default local Bitloops-managed runtime, Bitloops also installs or updates the standalone `bitloops-local-embeddings` binary automatically.
 - Add `--embeddings-runtime platform` when you want `enable` to install and configure the hosted gateway runtime instead. Add `--embeddings-gateway-url <https://.../v1/embeddings>` or set `BITLOOPS_PLATFORM_GATEWAY_URL` only when you want to override the platform default endpoint. `--embeddings-api-key-env` overrides the bearer-token environment variable name.
+- `--install-summaries`, `--summaries-runtime`, `--summaries-gateway-url`, and `--summaries-api-key-env` require `--capture`.
+- `--install-summaries` is the summaries equivalent of the embeddings install path: it configures the summary runtime/profile and repo-local summary binding before capture continues. When the selected runtime is `local`, Bitloops configures the local managed text-generation runtime. When the selected runtime is `platform`, Bitloops configures the hosted gateway runtime.
+- Add `--summaries-runtime platform` when you want `enable` to configure the hosted summaries runtime instead. Add `--summaries-gateway-url <https://.../v1/chat/completions>` or set `BITLOOPS_PLATFORM_GATEWAY_URL` only when you want to override the platform default endpoint. `--summaries-api-key-env` overrides the bearer-token environment variable name used by the hosted summaries runtime.
 - In an interactive terminal, when `--install-embeddings` is absent and embeddings are not already configured, `enable` asks whether to install embeddings and includes them in sync. The prompt defaults to `Yes` with `[Y/n]`; blank input, `y`, and `yes` all opt in.
+- In an interactive terminal, when `--install-summaries` is absent and summaries are not already configured, `enable` asks whether to install summaries and includes them in sync. The prompt defaults to `Yes` with `[Y/n]`; blank input, `y`, and `yes` all opt in.
 - Guidance-only `enable --devql-guidance` does not prompt for telemetry or embeddings setup unless you pass an explicit telemetry flag.
 - If repo policy already binds embedding profiles, `enable` preserves those repo bindings. Legacy daemon-global embedding bindings are migrated into repo policy.
+- If repo policy already binds summary generation, `enable` preserves those repo bindings and does not rebind summaries unless you explicitly opt into the summaries install path.
 - Embeddings setup targets the effective daemon config in this order: `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE`, the nearest repo `config.toml`, then the default global config.
 - If no project config is found before the enclosing `.git` root, Bitloops tells you to run `bitloops init`.
 - `enable` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.

@@ -39,6 +39,8 @@ mod auth;
 mod capability_events;
 #[path = "daemon/config.rs"]
 mod config;
+#[path = "daemon/config_reload.rs"]
+mod config_reload;
 #[path = "daemon/embeddings_bootstrap.rs"]
 mod embeddings_bootstrap;
 #[path = "daemon/enrichment.rs"]
@@ -86,6 +88,9 @@ pub use self::auth::{
 };
 pub(crate) use self::capability_events::SyncGenerationInput;
 pub use self::capability_events::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
+pub(crate) use self::config_reload::{
+    DaemonConfigApplyReport, apply_daemon_config_change_after_save, schedule_delayed_daemon_restart,
+};
 pub use self::enrichment::EnrichmentControlResult;
 pub(crate) use self::enrichment::EnrichmentControlState as PersistedEnrichmentQueueState;
 pub use self::enrichment::EnrichmentCoordinator;
@@ -108,6 +113,8 @@ pub(crate) use self::server_runtime::{
     RepoWatcherReconcileAction, RepoWatcherReconcileResult, reconcile_bound_repo_watcher,
     reconcile_bound_repo_watcher_explicit,
 };
+#[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
+pub use self::tasks::drain_lifecycle_stop_spool_for_repo_for_tests;
 pub use self::tasks::{DevqlTaskCoordinator, DevqlTaskEnqueueResult};
 pub(crate) use self::types::BlockedMailboxStatus;
 pub(crate) use self::types::EmbeddingsBootstrapState as PersistedEmbeddingsBootstrapState;

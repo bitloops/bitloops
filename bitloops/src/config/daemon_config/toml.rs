@@ -19,38 +19,42 @@ pub(super) fn ensure_child_table<'a>(table: &'a mut Table, key: &str) -> &'a mut
         .expect("TOML item should be a table after initialisation")
 }
 
-/// Reads legacy daemon-global semantic embedding bindings for migration and
-/// warm-existing installer behavior.
-pub(super) fn selected_inference_profile_name(doc: &DocumentMut) -> Option<String> {
-    let inference = doc
-        .as_table()
-        .get("semantic_clones")?
-        .as_table()?
-        .get("inference")?
-        .as_table()?;
+pub(super) fn strip_semantic_enablement(doc: &mut DocumentMut) -> bool {
+    let Some(semantic_item) = doc.as_table_mut().get_mut("semantic_clones") else {
+        return false;
+    };
+    let Some(semantic) = semantic_item.as_table_mut() else {
+        return false;
+    };
 
-    for key in ["code_embeddings", "summary_embeddings"] {
-        let Some(value) = inference
-            .get(key)
-            .and_then(Item::as_value)
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-        else {
-            continue;
-        };
-        if value.is_empty() {
-            continue;
-        }
-        if matches!(
-            value.to_ascii_lowercase().as_str(),
-            "none" | "disabled" | "off"
-        ) {
-            continue;
-        }
-        return Some(value.to_string());
+    let mut modified = false;
+    for key in ["summary_mode", "embedding_mode"] {
+        modified |= semantic.remove(key).is_some();
     }
 
-    None
+    if let Some(inference) = semantic.get_mut("inference").and_then(Item::as_table_mut) {
+        for key in [
+            "summary_generation",
+            "code_embeddings",
+            "summary_embeddings",
+        ] {
+            modified |= inference.remove(key).is_some();
+        }
+    }
+    if semantic
+        .get("inference")
+        .and_then(Item::as_table)
+        .is_some_and(Table::is_empty)
+    {
+        semantic.remove("inference");
+        modified = true;
+    }
+    if semantic.is_empty() {
+        doc.as_table_mut().remove("semantic_clones");
+        modified = true;
+    }
+
+    modified
 }
 
 pub(super) fn inference_driver_for_profile(

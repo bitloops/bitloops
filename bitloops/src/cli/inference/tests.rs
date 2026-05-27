@@ -17,7 +17,10 @@ use crate::cli::inference::{
     summary_generation_configured, with_managed_inference_install_hook, with_ollama_probe_hook,
 };
 use crate::cli::terminal_picker::with_single_select_hook;
-use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_inference_capability_config_for_repo};
+use crate::config::{
+    BITLOOPS_CONFIG_RELATIVE_PATH, REPO_POLICY_LOCAL_FILE_NAME,
+    resolve_inference_capability_config_for_repo,
+};
 
 #[test]
 fn cloud_bitloops_inference_setup_configures_all_generation_slots() {
@@ -56,12 +59,23 @@ fn cloud_bitloops_inference_setup_configures_all_generation_slots() {
 
     let rendered = std::fs::read_to_string(repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH))
         .expect("read config");
-    assert!(rendered.contains("summary_generation = \"summary_llm\""));
+    assert!(
+        !rendered.contains("summary_generation = \"summary_llm\""),
+        "semantic summary binding should be repo-local:\n{rendered}"
+    );
     assert!(rendered.contains("guidance_generation = \"guidance_llm\""));
     assert!(rendered.contains("fact_synthesis = \"architecture_fact_synthesis\""));
     assert!(rendered.contains("role_adjudication = \"architecture_role_adjudication\""));
     assert!(rendered.contains("task = \"structured_generation\""));
     assert!(rendered.contains("max_output_tokens = 1024"));
+    let repo_policy =
+        std::fs::read_to_string(repo_root.join(REPO_POLICY_LOCAL_FILE_NAME)).expect("read policy");
+    assert!(repo_policy.contains("summary_mode = \"auto\""));
+    assert!(repo_policy.contains("summary_generation = \"summary_llm\""));
+    assert!(
+        !repo_policy.contains("embedding_mode = "),
+        "summary setup should not write embedding choices:\n{repo_policy}"
+    );
 }
 
 #[test]
@@ -108,12 +122,19 @@ fn local_bitloops_inference_setup_configures_all_generation_slots() {
 
     let rendered = std::fs::read_to_string(repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH))
         .expect("read config");
-    assert!(rendered.contains("summary_generation = \"summary_local\""));
+    assert!(
+        !rendered.contains("summary_generation = \"summary_local\""),
+        "semantic summary binding should be repo-local:\n{rendered}"
+    );
     assert!(rendered.contains("guidance_generation = \"guidance_local\""));
     assert!(rendered.contains("fact_synthesis = \"architecture_fact_synthesis_local\""));
     assert!(rendered.contains("role_adjudication = \"architecture_role_adjudication_local\""));
     assert!(rendered.contains("driver = \"ollama_chat\""));
     assert!(rendered.contains("base_url = \"http://127.0.0.1:11434/api/chat\""));
+    let repo_policy =
+        std::fs::read_to_string(repo_root.join(REPO_POLICY_LOCAL_FILE_NAME)).expect("read policy");
+    assert!(repo_policy.contains("summary_mode = \"auto\""));
+    assert!(repo_policy.contains("summary_generation = \"summary_local\""));
 }
 
 #[test]
@@ -351,7 +372,7 @@ fn summary_setup_can_write_platform_profile() {
                 },
             )
         },
-        || configure_cloud_summary_generation(&configure_root, None),
+        || configure_cloud_summary_generation(&configure_root, None, None),
     )
     .expect("configure cloud summaries");
 
@@ -362,7 +383,10 @@ fn summary_setup_can_write_platform_profile() {
     assert!(summary_generation_configured(&repo_root));
 
     let rendered = std::fs::read_to_string(&config_path).expect("read config");
-    assert!(rendered.contains("summary_generation = \"summary_llm\""));
+    assert!(
+        !rendered.contains("[semantic_clones"),
+        "daemon config should only hold summary profile/runtime definitions:\n{rendered}"
+    );
     assert!(rendered.contains("[inference.runtimes.bitloops_inference]"));
     assert!(rendered.contains(&format!(
         "command = \"{}\"",
@@ -376,6 +400,47 @@ fn summary_setup_can_write_platform_profile() {
     assert!(rendered.contains("api_key = \"${BITLOOPS_PLATFORM_GATEWAY_TOKEN}\""));
     assert!(rendered.contains("max_output_tokens = 200"));
     assert!(!rendered.contains("base_url = "));
+
+    let repo_policy =
+        std::fs::read_to_string(repo_root.join(REPO_POLICY_LOCAL_FILE_NAME)).expect("read policy");
+    assert!(repo_policy.contains("summary_mode = \"auto\""));
+    assert!(repo_policy.contains("summary_generation = \"summary_llm\""));
+}
+
+#[test]
+fn summary_setup_can_write_platform_profile_with_api_key_override() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(&config_path, "").expect("write config");
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+
+    with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || {
+            configure_cloud_summary_generation(
+                &configure_root,
+                Some("https://platform.example.com/v1/chat/completions"),
+                Some("CUSTOM_SUMMARIES_TOKEN"),
+            )
+        },
+    )
+    .expect("configure cloud summaries");
+
+    let rendered = std::fs::read_to_string(&config_path).expect("read config");
+    assert!(rendered.contains("api_key = \"${CUSTOM_SUMMARIES_TOKEN}\""));
+    assert!(rendered.contains("base_url = \"https://platform.example.com/v1/chat/completions\""));
 }
 
 #[test]
@@ -462,14 +527,15 @@ fn summary_setup_reenables_summary_mode_after_off_opt_out() {
     let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
     std::fs::create_dir_all(config_path.parent().expect("config parent"))
         .expect("create config parent");
+    std::fs::write(&config_path, "").expect("write config");
     std::fs::write(
-        &config_path,
+        repo_root.join(REPO_POLICY_LOCAL_FILE_NAME),
         r#"
 [semantic_clones]
 summary_mode = "off"
 "#,
     )
-    .expect("write config");
+    .expect("write policy");
     let install_root = repo_root.clone();
     let configure_root = repo_root.clone();
 
@@ -483,15 +549,21 @@ summary_mode = "off"
                 },
             )
         },
-        || configure_cloud_summary_generation(&configure_root, None),
+        || configure_cloud_summary_generation(&configure_root, None, None),
     )
     .expect("configure cloud summaries");
 
     assert!(summary_generation_configured(&repo_root));
 
     let rendered = std::fs::read_to_string(&config_path).expect("read config");
-    assert!(rendered.contains("summary_mode = \"auto\""));
-    assert!(rendered.contains("summary_generation = \"summary_llm\""));
+    assert!(
+        !rendered.contains("[semantic_clones"),
+        "daemon config should not hold summary enablement:\n{rendered}"
+    );
+    let repo_policy =
+        std::fs::read_to_string(repo_root.join(REPO_POLICY_LOCAL_FILE_NAME)).expect("read policy");
+    assert!(repo_policy.contains("summary_mode = \"auto\""));
+    assert!(repo_policy.contains("summary_generation = \"summary_llm\""));
 }
 
 #[test]
@@ -519,6 +591,7 @@ fn summary_setup_can_write_platform_profile_with_url_override() {
             configure_cloud_summary_generation(
                 &configure_root,
                 Some("https://platform.example.com/v1/chat/completions"),
+                None,
             )
         },
     )
@@ -554,9 +627,10 @@ fn cloud_summary_setup_prepared_plan_reports_progress_and_writes_profile() {
         || {
             execute_prepared_summary_setup_with_progress(
                 &configure_root,
-                prepare_cloud_summary_generation_plan(Some(
-                    "https://platform.example.com/v1/chat/completions",
-                )),
+                prepare_cloud_summary_generation_plan(
+                    Some("https://platform.example.com/v1/chat/completions"),
+                    None,
+                ),
                 |progress| {
                     progress_events.push(progress);
                     Ok(())
@@ -583,12 +657,19 @@ fn cloud_summary_setup_prepared_plan_reports_progress_and_writes_profile() {
     assert!(summary_generation_configured(&repo_root));
 
     let rendered = std::fs::read_to_string(&config_path).expect("read config");
-    assert!(rendered.contains("summary_generation = \"summary_llm\""));
+    assert!(
+        !rendered.contains("[semantic_clones"),
+        "daemon config should not hold summary enablement:\n{rendered}"
+    );
     assert!(rendered.contains("driver = \"bitloops_platform_chat\""));
     assert!(rendered.contains("model = \"ministral-3-3b-instruct\""));
     assert!(rendered.contains("api_key = \"${BITLOOPS_PLATFORM_GATEWAY_TOKEN}\""));
     assert!(rendered.contains("max_output_tokens = 200"));
     assert!(rendered.contains("base_url = \"https://platform.example.com/v1/chat/completions\""));
+    let repo_policy =
+        std::fs::read_to_string(repo_root.join(REPO_POLICY_LOCAL_FILE_NAME)).expect("read policy");
+    assert!(repo_policy.contains("summary_mode = \"auto\""));
+    assert!(repo_policy.contains("summary_generation = \"summary_llm\""));
 }
 
 #[test]
@@ -884,11 +965,14 @@ max_output_tokens = 200
     let doc = rendered
         .parse::<DocumentMut>()
         .expect("parse updated config");
-    let summary_generation = doc["semantic_clones"]["inference"]["summary_generation"]
-        .as_value()
-        .and_then(|value| value.as_str())
-        .expect("summary generation binding");
-    assert_eq!(summary_generation, "summary_local_1");
+    assert!(
+        doc.get("semantic_clones").is_none(),
+        "daemon config should not hold summary enablement:\n{rendered}"
+    );
+    let repo_policy =
+        std::fs::read_to_string(repo_root.join(REPO_POLICY_LOCAL_FILE_NAME)).expect("read policy");
+    assert!(repo_policy.contains("summary_mode = \"auto\""));
+    assert!(repo_policy.contains("summary_generation = \"summary_local_1\""));
 
     let legacy_profile = doc["inference"]["profiles"]["summary_local"]
         .as_table()
@@ -1025,7 +1109,7 @@ max_output_tokens = 200
     );
     assert!(
         summary_generation_configured(&repo_root),
-        "summary generation should resolve from the bound daemon config"
+        "summary generation should resolve from repo policy plus bound daemon profiles"
     );
 
     let capability = resolve_inference_capability_config_for_repo(&repo_root);
@@ -1036,18 +1120,16 @@ max_output_tokens = 200
             .summary_generation
             .as_deref(),
         Some("summary_local"),
-        "capability resolution should prefer the bound daemon config"
+        "capability resolution should use the repo policy binding"
     );
 
     let bound_rendered = std::fs::read_to_string(&bound_config_path).expect("read bound config");
     let bound_doc = bound_rendered
         .parse::<DocumentMut>()
         .expect("parse bound config");
-    assert_eq!(
-        bound_doc["semantic_clones"]["inference"]["summary_generation"]
-            .as_value()
-            .and_then(|value| value.as_str()),
-        Some("summary_local")
+    assert!(
+        bound_doc.get("semantic_clones").is_none(),
+        "bound daemon config should not hold summary enablement:\n{bound_rendered}"
     );
     assert_eq!(
         bound_doc["inference"]["profiles"]["summary_local"]["runtime"]
@@ -1055,6 +1137,11 @@ max_output_tokens = 200
             .and_then(|value| value.as_str()),
         Some("bitloops_inference")
     );
+
+    let repo_policy =
+        std::fs::read_to_string(repo_root.join(REPO_POLICY_LOCAL_FILE_NAME)).expect("read policy");
+    assert!(repo_policy.contains("summary_mode = \"auto\""));
+    assert!(repo_policy.contains("summary_generation = \"summary_local\""));
 
     let local_rendered = std::fs::read_to_string(&local_config_path).expect("read local config");
     assert!(

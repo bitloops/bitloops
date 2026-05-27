@@ -39,6 +39,33 @@ pub fn ingest_llvm_json(
     repo_id: &str,
     capture_id: &str,
 ) -> Result<(Vec<CoverageHitRecord>, Vec<CoverageDiagnosticRecord>)> {
+    ingest_llvm_json_with_lookup(json_path, commit_sha, repo_id, capture_id, |file_path| {
+        relational.load_artefacts_for_file_lines(commit_sha, file_path)
+    })
+}
+
+pub fn ingest_llvm_json_current(
+    relational: &dyn RelationalGateway,
+    json_path: &Path,
+    repo_id: &str,
+    commit_sha: &str,
+    capture_id: &str,
+) -> Result<(Vec<CoverageHitRecord>, Vec<CoverageDiagnosticRecord>)> {
+    ingest_llvm_json_with_lookup(json_path, commit_sha, repo_id, capture_id, |file_path| {
+        relational.load_current_artefacts_for_file_lines(repo_id, file_path)
+    })
+}
+
+fn ingest_llvm_json_with_lookup<F>(
+    json_path: &Path,
+    commit_sha: &str,
+    repo_id: &str,
+    capture_id: &str,
+    mut load_artefacts: F,
+) -> Result<(Vec<CoverageHitRecord>, Vec<CoverageDiagnosticRecord>)>
+where
+    F: FnMut(&str) -> Result<Vec<(String, i64, i64)>>,
+{
     let raw = fs::read_to_string(json_path)
         .with_context(|| format!("failed to read LLVM JSON file {}", json_path.display()))?;
 
@@ -52,7 +79,7 @@ pub fn ingest_llvm_json(
     for data in &export.data {
         for file in &data.files {
             let line_hits = extract_line_hits(&file.segments);
-            let artefacts = relational.load_artefacts_for_file_lines(commit_sha, &file.filename)?;
+            let artefacts = load_artefacts(&file.filename)?;
 
             if artefacts.is_empty() {
                 diagnostics.push(CoverageDiagnosticRecord {

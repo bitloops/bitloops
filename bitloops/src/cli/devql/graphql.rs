@@ -30,10 +30,9 @@ pub(crate) use self::subscription::next_runtime_event_via_subscription;
 #[cfg(test)]
 pub(crate) use self::types::RuntimeInitLaneQueueGraphqlRecord;
 pub(crate) use self::types::{
-    EmbeddingsBootstrapResultGraphqlRecord, RuntimeEmbeddingsBootstrapRequestInput,
-    RuntimeInitLaneGraphqlRecord, RuntimeInitLaneProgressGraphqlRecord,
-    RuntimeInitSessionGraphqlRecord, RuntimeSnapshotGraphqlRecord, RuntimeStartInitInput,
-    RuntimeSummaryBootstrapRequestInput, RuntimeSummaryBootstrapRunGraphqlRecord,
+    EmbeddingsBootstrapResultGraphqlRecord, RuntimeInitLaneGraphqlRecord,
+    RuntimeInitLaneProgressGraphqlRecord, RuntimeInitSessionGraphqlRecord,
+    RuntimeSnapshotGraphqlRecord, RuntimeStartInitInput, RuntimeSummaryBootstrapRunGraphqlRecord,
     RuntimeWatcherReconcileGraphqlRecord, SummaryBootstrapResultGraphqlRecord, TaskGraphqlRecord,
     TaskQueueControlGraphqlRecord, TaskQueueGraphqlRecord,
 };

@@ -19,7 +19,7 @@ Run the repo-scoped commands below from inside a Git repository or Bitloops proj
 - either the Bitloops-managed embeddings install flow or a manually installed `bitloops-local-embeddings` / `bitloops-platform-embeddings` binary
 - a text-generation provider API key if you want LLM semantic summaries
 
-In a source checkout, build and install `bitloops`. For the default local Bitloops-managed runtime, explicit setup flows such as `bitloops init --install-default-daemon`, `bitloops enable --install-embeddings`, and `bitloops embeddings install` can install the standalone `bitloops-local-embeddings` binary for you. If you are wiring a custom runtime manually, install the matching standalone binary from the `bitloops/bitloops-embeddings` GitHub releases for your platform:
+In a source checkout, build and install `bitloops`. For the default local Bitloops-managed runtime, explicit setup flows such as `bitloops enable --install-embeddings` and `bitloops embeddings install` can install the standalone `bitloops-local-embeddings` binary for you. If you are wiring a custom runtime manually, install the matching standalone binary from the `bitloops/bitloops-embeddings` GitHub releases for your platform:
 
 ```bash
 cargo build
@@ -35,18 +35,14 @@ No Python interpreter is required for the embeddings runtime binary.
 
 Bitloops can now set up embeddings for you without manual `config.toml` edits.
 
-If you are bootstrapping a repo and want `init` to install the default daemon first:
+If you are bootstrapping a repo, configure the daemon first:
 
 ```bash
-bitloops init --install-default-daemon --sync=true
+bitloops configure --web
+bitloops init --sync=true
 ```
 
-When embeddings are not already configured, `bitloops init --install-default-daemon`:
-
-- bootstraps the default daemon config if needed
-- in interactive terminals, asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now
-- recommends Bitloops cloud in that prompt
-- configures the selected embeddings runtime before init-triggered sync, except for the local managed runtime bootstrap which still downloads and warms asynchronously
+Use the dashboard configuration page for daemon-level inference and capability-pack settings. `bitloops init` remains repo-scoped and can queue the initial sync.
 
 If the repo is already initialised and you just want to add embeddings:
 
@@ -57,13 +53,22 @@ bitloops daemon enable --install-embeddings
 
 Interactive `bitloops enable` also asks whether to install embeddings when they are not already configured. The prompt uses `[Y/n]`, so pressing `Enter` accepts the recommended setup.
 
+If you also want semantic summaries through the same `enable` flow, use:
+
+```bash
+bitloops enable --install-summaries
+bitloops enable --install-summaries --summaries-runtime platform --summaries-gateway-url https://gateway.example/v1/chat/completions
+```
+
+`--summaries-runtime platform` configures the hosted summaries gateway. Add `--summaries-gateway-url <https://.../v1/chat/completions>` or set `BITLOOPS_PLATFORM_GATEWAY_URL` only when you want to override the platform default endpoint. `--summaries-api-key-env` overrides the environment variable used for the hosted bearer token.
+
 If you want the hosted gateway runtime instead of the default local runtime:
 
 ```bash
 bitloops embeddings install --runtime platform --gateway-url https://gateway.example/v1/embeddings
 ```
 
-`bitloops init` and `bitloops enable` accept the same hosted mode through `--embeddings-runtime platform`. Add `--embeddings-gateway-url https://gateway.example/v1/embeddings` or set `BITLOOPS_PLATFORM_GATEWAY_URL` only when you want to override the platform default endpoint. The managed platform runtime reads its bearer token from `BITLOOPS_PLATFORM_GATEWAY_TOKEN` by default; override that with `--embeddings-api-key-env`.
+`bitloops enable` accepts the same hosted mode through `--embeddings-runtime platform`. Add `--embeddings-gateway-url https://gateway.example/v1/embeddings` or set `BITLOOPS_PLATFORM_GATEWAY_URL` only when you want to override the platform default endpoint. The managed platform runtime reads its bearer token from `BITLOOPS_PLATFORM_GATEWAY_TOKEN` by default; override that with `--embeddings-api-key-env`.
 
 ## Config Location And Targeting
 
@@ -184,7 +189,8 @@ Notes:
 
 - `summary_generation` is optional when `summary_mode = "auto"`. If it is unset or unavailable, Bitloops falls back to deterministic summaries.
 - `task = "text_generation"` profiles must declare `runtime`, `temperature`, and `max_output_tokens`, and `driver` is interpreted by `bitloops-inference`.
-- `bitloops inference install` installs or repairs the managed summary runtime. Interactive `bitloops enable` and `bitloops init --install-default-daemon` can bind summaries to a local Ollama model automatically when it is available, using `http://127.0.0.1:11434/api/chat`.
+- `bitloops inference install` installs or repairs the managed summary runtime. Interactive `bitloops enable` can bind summaries to a local Ollama model automatically when it is available, using `http://127.0.0.1:11434/api/chat`.
+- `bitloops enable --install-summaries` follows the same “install or prompt, then configure” shape as embeddings. Use `--summaries-runtime local` for local text generation or `--summaries-runtime platform` for the hosted gateway runtime.
 - Repo-policy `code_embeddings` and `summary_embeddings` can point at the same daemon embeddings profile or at different profiles.
 - For platform-specific config paths, use the configuration reference alongside your OS defaults.
 
@@ -205,7 +211,7 @@ What this does:
 
 This is the best first check that the configured embeddings runtime command works.
 
-`bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` reuse this same warm/bootstrap path automatically; `bitloops embeddings pull local_code` remains useful when you want to rerun it explicitly.
+`bitloops enable --install-embeddings` reuses this same warm/bootstrap path automatically; `bitloops embeddings pull local_code` remains useful when you want to rerun it explicitly.
 
 ## Verify Health
 
@@ -309,9 +315,9 @@ startup_timeout_secs = 120
 request_timeout_secs = 120
 ```
 
-### Enable or init succeeded, but embeddings setup failed
+### Enable succeeded, but embeddings setup failed
 
-If Bitloops reports that core `enable` or `init` succeeded but embeddings setup failed, the command already rolled back only the new embeddings-related daemon-config changes from that invocation.
+If Bitloops reports that core `enable` succeeded but embeddings setup failed, the command already rolled back only the new embeddings-related daemon-config changes from that invocation.
 
 After fixing the local runtime, rerun one of:
 

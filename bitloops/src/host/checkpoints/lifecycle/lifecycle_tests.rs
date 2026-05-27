@@ -223,6 +223,22 @@ fn setup_git_repo(dir: &tempfile::TempDir) {
     run(&["commit", "-m", "initial"]);
 }
 
+fn git_output(repo_root: &Path, args: &[&str]) -> String {
+    let out = git_command()
+        .args(args)
+        .current_dir(repo_root)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
 // CLI-866
 #[test]
 fn test_dispatch_lifecycle_event_nil_agent() {
@@ -287,6 +303,103 @@ fn test_handle_lifecycle_session_start_persists_session_state() {
         assert_eq!(state.agent_type, "copilot");
         assert!(state.last_interaction_time.is_some());
     });
+}
+
+/// Regression test: lifecycle handlers must stamp the WorkOS actor identity onto
+/// `interaction_sessions` rows so the dashboard's Actor column is populated.
+/// Without the fix the row's actor_* columns were empty even when the user was
+/// authenticated. See `interaction_actor_identity` and the lifecycle handlers
+/// in `handlers_session.rs` / `handlers_tail.rs` / `turn_end.rs`.
+#[test]
+fn test_handle_lifecycle_session_start_stamps_workos_actor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    setup_git_repo(&dir);
+
+    crate::utils::platform_dirs::with_test_platform_dir_overrides(
+        crate::utils::platform_dirs::TestPlatformDirOverrides {
+            config_root: Some(dir.path().join("config")),
+            data_root: Some(dir.path().join("data")),
+            cache_root: Some(dir.path().join("cache")),
+            state_root: Some(dir.path().join("state")),
+        },
+        || {
+            with_cwd(dir.path(), || {
+                // Seed a fake WorkOS auth session into the (now-isolated)
+                // daemon runtime store so `interaction_actor_identity` returns
+                // a non-empty identity.
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("epoch")
+                    .as_secs();
+                let state = crate::daemon::PersistedWorkosAuthSessionState {
+                    version: 1,
+                    client_id: "test_client".to_string(),
+                    base_url: "https://example.test".to_string(),
+                    keyring_service: "test_kr".to_string(),
+                    keyring_account: "test_client".to_string(),
+                    user_id: Some("user_actor_stamp".to_string()),
+                    user_email: Some("actor@example.test".to_string()),
+                    user_first_name: Some("Actor".to_string()),
+                    user_last_name: Some("Stamp".to_string()),
+                    organisation_id: None,
+                    authentication_method: Some("Password".to_string()),
+                    token_type: Some("Bearer".to_string()),
+                    session_id: Some("sid-actor-stamp".to_string()),
+                    subject: Some("user_actor_stamp".to_string()),
+                    access_token_expires_at_unix: Some(now.saturating_add(600)),
+                    authenticated_at_unix: now.saturating_sub(60),
+                    updated_at_unix: now.saturating_sub(60),
+                };
+                crate::host::runtime_store::DaemonSqliteRuntimeStore::open()
+                    .expect("open daemon runtime store")
+                    .save_workos_auth_session_state(&state)
+                    .expect("seed workos session state");
+
+                let adapter = ClaudeCodeLifecycleAdapter;
+                let mut event = sample_event(LifecycleEventType::SessionStart);
+                event.session_id = "actor-stamp-session".to_string();
+                event.session_ref = dir
+                    .path()
+                    .join("transcript.jsonl")
+                    .to_string_lossy()
+                    .to_string();
+
+                handle_lifecycle_session_start(&adapter, &event)
+                    .expect("session start should record interaction session");
+
+                let (name, email, source) = session_actor_for(dir.path(), "actor-stamp-session");
+                assert_eq!(
+                    name, "Actor Stamp",
+                    "actor_name should be the WorkOS display label"
+                );
+                assert_eq!(
+                    email, "actor@example.test",
+                    "actor_email should match seeded session"
+                );
+                assert_eq!(
+                    source, "workos",
+                    "actor_source should be tagged as 'workos'"
+                );
+            });
+        },
+    );
+}
+
+fn session_actor_for(repo_root: &Path, session_id: &str) -> (String, String, String) {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT actor_name, actor_email, actor_source
+         FROM interaction_sessions WHERE session_id = ?1",
+        [session_id],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        },
+    )
+    .unwrap_or_else(|err| panic!("read actor for {session_id}: {err}"))
 }
 
 #[test]
@@ -534,6 +647,74 @@ fn test_handle_lifecycle_turn_end_persists_transcript_fragment() {
         );
         assert_eq!(latest_session_model(dir.path()), "gemini-2.5-pro");
         assert_eq!(latest_turn_model(dir.path()), "gemini-2.5-pro");
+    });
+}
+
+#[test]
+fn test_handle_lifecycle_turn_end_uses_hook_workspace_snapshot_after_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let transcript_dir = tempfile::tempdir().unwrap();
+    let transcript_path = transcript_dir.path().join("transcript.jsonl");
+    std::fs::write(
+        &transcript_path,
+        "{\"model\":\"claude-test\",\"messages\":[{\"type\":\"user\",\"content\":\"Update tracked file\"},{\"type\":\"assistant\",\"content\":\"Done\"}]}\n",
+    )
+    .unwrap();
+
+    let initial_head = git_output(dir.path(), &["rev-parse", "HEAD"]);
+    let session_id = "snapshot-after-commit";
+    let backend = create_session_backend_or_local(dir.path());
+    backend
+        .save_session(&SessionState {
+            session_id: session_id.to_string(),
+            base_commit: initial_head,
+            transcript_path: transcript_path.to_string_lossy().to_string(),
+            phase: SessionPhase::Active,
+            agent_type: crate::adapters::agents::AGENT_NAME_CLAUDE_CODE.to_string(),
+            turn_id: "turn-snapshot-after-commit".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    std::fs::write(dir.path().join("README.md"), "changed by agent\n").unwrap();
+    let workspace_snapshot = super::capture_workspace_snapshot_for_lifecycle_stop(dir.path());
+    assert_eq!(workspace_snapshot.modified_files, vec!["README.md"]);
+
+    git_output(dir.path(), &["add", "README.md"]);
+    git_output(dir.path(), &["commit", "-m", "agent commit"]);
+
+    let adapter = ClaudeCodeLifecycleAdapter;
+    let mut event = sample_event(LifecycleEventType::TurnEnd);
+    event.session_id = session_id.to_string();
+    event.session_ref = transcript_path.to_string_lossy().to_string();
+
+    with_cwd(dir.path(), || {
+        super::handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
+            dir.path(),
+            &adapter,
+            &event,
+            Some(workspace_snapshot),
+        )
+        .expect("turn end should preserve hook-time changed files");
+
+        let payload = latest_turn_end_payload(dir.path());
+        assert_eq!(
+            payload["files_modified"],
+            serde_json::json!(["README.md"]),
+            "turn_end payload should use hook-time files even after commit"
+        );
+
+        let store = crate::host::runtime_store::RepoSqliteRuntimeStore::open(dir.path()).unwrap();
+        let conn = rusqlite::Connection::open(store.db_path()).unwrap();
+        let modified_files: String = conn
+            .query_row(
+                "SELECT modified_files FROM temporary_checkpoints WHERE session_id = ?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .expect("temporary checkpoint row");
+        assert_eq!(modified_files, r#"["README.md"]"#);
     });
 }
 

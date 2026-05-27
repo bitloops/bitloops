@@ -303,6 +303,18 @@ fn stop(repo: &Path, session_id: &str, transcript_path: &str) {
     let input = format!(r#"{{"session_id":"{session_id}","transcript_path":"{transcript_path}"}}"#);
     let out = run_cmd(repo, &["hooks", "claude-code", "stop"], Some(&input));
     assert_success(&out, "hooks claude-code stop");
+    drain_lifecycle_stop_spool_if_bound(repo);
+}
+
+fn drain_lifecycle_stop_spool_if_bound(repo: &Path) {
+    test_command_support::with_repo_app_env(repo, || {
+        let policy = bitloops::config::discover_repo_policy_optional(repo)
+            .expect("discover repo policy before draining lifecycle stop spool");
+        if policy.daemon_config_path.is_some() {
+            bitloops::daemon::drain_lifecycle_stop_spool_for_repo_for_tests(repo)
+                .expect("drain lifecycle stop spool for e2e scenario repo");
+        }
+    });
 }
 
 fn session_end(repo: &Path, session_id: &str, transcript_path: &str) {

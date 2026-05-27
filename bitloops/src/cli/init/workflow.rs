@@ -1,54 +1,44 @@
 use std::io::{BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::workflow_output::{
-    InitSetupHandoffOptions, planned_integrations, write_default_daemon_bootstrap,
-    write_init_setup_handoff, write_integrations_installed, write_integrations_installing,
+    planned_integrations, write_integrations_installed, write_integrations_installing,
 };
 use super::{
     AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitAgentSelection, InitArgs,
-    InitEmbeddingsSetupSelection, InitFinalSetupPromptOptions,
-    choose_context_guidance_setup_during_init, choose_final_setup_options,
-    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_init_files_excluded,
-    maybe_enable_default_daemon_service, maybe_install_default_daemon, normalize_cli_exclusions,
-    normalize_exclude_from_paths, should_install_embeddings_during_init,
+    InitEmbeddingsSetupSelection, InitFinalSetupPromptOptions, InitSummaryEmbeddingsSetupSelection,
+    choose_embeddings_setup_during_init, choose_final_setup_options,
+    choose_summary_embeddings_setup_during_init, choose_summary_setup_during_init,
+    detect_or_select_agent, ensure_repo_init_files_excluded, normalize_cli_exclusions,
+    normalize_exclude_from_paths,
 };
 use crate::adapters::agents::AgentAdapterRegistry;
-use crate::capability_packs::semantic_clones::workplane::{
-    activate_selected_pipeline_mailboxes, deactivate_embedding_pipeline_mailboxes,
-};
 use crate::cli::embeddings::{
-    install_or_bootstrap_embeddings, install_or_configure_platform_embeddings,
-    platform_embeddings_gateway_url_override,
+    EmbeddingsInstallState, inspect_embeddings_install_state, install_or_bootstrap_embeddings,
+    install_or_configure_platform_embeddings, platform_embeddings_gateway_url_override,
 };
 use crate::cli::inference::{
-    ContextGuidanceSetupSelection, PreparedSummarySetupAction, SummarySetupSelection,
-    TextGenerationRuntime, configure_cloud_context_guidance_generation,
-    configure_cloud_summary_generation, configure_local_context_guidance_generation,
-    configure_local_summary_generation, platform_context_guidance_gateway_url_override,
-    platform_summary_gateway_url_override, prepare_cloud_summary_generation_plan,
-    prepare_local_summary_generation_plan, summary_generation_configured,
+    SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
+    platform_summary_gateway_url_override, summary_generation_configured,
 };
 use crate::cli::telemetry_consent;
+use crate::config::REPO_POLICY_LOCAL_FILE_NAME;
 use crate::config::settings::{
-    DEFAULT_STRATEGY, load_settings, repo_semantic_embedding_policy,
-    restore_repo_semantic_embedding_policy, set_devql_producer_settings,
+    DEFAULT_STRATEGY, load_settings, repo_semantic_embedding_policy, set_devql_producer_settings,
     set_repo_semantic_embedding_policy, set_scope_exclusions,
     write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance,
 };
 use crate::config::{
-    DaemonEmbeddingsInstallPlan, REPO_POLICY_LOCAL_FILE_NAME, RepoSemanticEmbeddingPolicy,
-    SemanticCloneEmbeddingMode, default_daemon_config_exists,
-    prepare_daemon_local_embeddings_profile_install, resolve_semantic_clones_config_for_repo,
+    RepoSemanticEmbeddingPolicy, SemanticCloneEmbeddingMode, SemanticClonesInferenceBindings,
+    SemanticSummaryMode,
 };
 
-struct PreparedEmbeddingsBootstrapRequest {
-    request: crate::cli::devql::graphql::RuntimeEmbeddingsBootstrapRequestInput,
-    rollback_plan: Option<DaemonEmbeddingsInstallPlan>,
-}
+const DEFAULT_INIT_CODE_EMBEDDINGS_PROFILE: &str = "platform_code";
+const DEFAULT_INIT_SUMMARY_GENERATION_PROFILE: &str = "summary_llm";
+const DEFAULT_INIT_SUMMARY_EMBEDDINGS_PROFILE: &str = "platform_code";
 
 fn resolve_cli_agents(values: &[String]) -> Result<Vec<String>> {
     let registry = AgentAdapterRegistry::builtin();
@@ -65,19 +55,6 @@ fn resolve_cli_agents(values: &[String]) -> Result<Vec<String>> {
     Ok(resolved)
 }
 
-fn validate_context_guidance_init_args(args: &InitArgs) -> Result<()> {
-    if args.context_guidance_runtime == Some(TextGenerationRuntime::Local)
-        && (args.context_guidance_gateway_url.is_some()
-            || args.context_guidance_api_key_env.is_some())
-    {
-        bail!(
-            "`--context-guidance-gateway-url` and `--context-guidance-api-key-env` require `--context-guidance-runtime platform`"
-        );
-    }
-
-    Ok(())
-}
-
 pub(crate) async fn run_for_project_root(
     args: InitArgs,
     project_root: &Path,
@@ -86,13 +63,9 @@ pub(crate) async fn run_for_project_root(
     select_fn: Option<&AgentSelector>,
 ) -> Result<()> {
     let git_root = crate::cli::enable::find_repo_root(project_root)?;
-    let daemon_config_existed_at_entry = default_daemon_config_exists()?;
-    let telemetry_choice =
-        telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
     if args.backfill.is_some() && args.ingest == Some(false) {
         bail!("`bitloops init --backfill` cannot be combined with `--ingest=false`.");
     }
-    validate_context_guidance_init_args(&args)?;
     let effective_ingest = if args.backfill.is_some() {
         Some(true)
     } else {
@@ -107,73 +80,7 @@ pub(crate) async fn run_for_project_root(
         );
     }
 
-    if !daemon_config_existed_at_entry
-        && args.install_default_daemon
-        && telemetry_choice.is_none()
-        && !telemetry_consent::can_prompt_interactively()
-    {
-        bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
-    }
-
-    maybe_install_default_daemon(args.install_default_daemon, telemetry_choice).await?;
-    let daemon_runtime = crate::daemon::runtime_state()?;
-    let daemon_service = crate::daemon::service_metadata()?;
-    let daemon_config_path = if let Some(runtime) = daemon_runtime.as_ref() {
-        Some(
-            runtime
-                .config_path
-                .canonicalize()
-                .unwrap_or_else(|_| runtime.config_path.clone()),
-        )
-    } else if args.install_default_daemon {
-        Some(bound_running_daemon_config_path().await?)
-    } else {
-        None
-    };
-    if args.install_default_daemon {
-        let port = daemon_runtime
-            .as_ref()
-            .map(|runtime| runtime.port)
-            .unwrap_or(crate::api::DEFAULT_DASHBOARD_PORT);
-        write_default_daemon_bootstrap(
-            out,
-            daemon_config_path
-                .as_deref()
-                .expect("install default daemon should resolve a daemon config path"),
-            port,
-        )?;
-    }
-    let should_manage_telemetry_via_daemon =
-        args.install_default_daemon || daemon_config_existed_at_entry;
-    let should_prompt_for_telemetry = if should_manage_telemetry_via_daemon {
-        telemetry_consent::ensure_default_daemon_running().await?;
-        if let Some(choice) = telemetry_choice {
-            let persisted = telemetry_consent::update_cli_telemetry_consent_via_daemon(
-                project_root,
-                Some(choice),
-            )
-            .await?;
-            if persisted.needs_prompt {
-                bail!("failed to persist telemetry consent");
-            }
-            false
-        } else {
-            let state =
-                telemetry_consent::update_cli_telemetry_consent_via_daemon(project_root, None)
-                    .await?;
-            if state.needs_prompt && !telemetry_consent::can_prompt_interactively() {
-                bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
-            }
-            state.needs_prompt
-        }
-    } else {
-        false
-    };
-    let daemon_already_always_on = args.install_default_daemon
-        && (daemon_runtime
-            .as_ref()
-            .is_some_and(|runtime| runtime.mode == crate::daemon::DaemonMode::Service)
-            || daemon_service.is_some());
+    let daemon_config_path = existing_daemon_config_path()?;
     let selection = if !args.agent.is_empty() {
         InitAgentSelection {
             agents: resolve_cli_agents(&args.agent)?,
@@ -184,30 +91,13 @@ pub(crate) async fn run_for_project_root(
     };
     let selected_agents = selection.agents;
     ensure_repo_init_files_excluded(&git_root, project_root, &selected_agents)?;
+
     let strategy = load_settings(project_root)
         .map(|settings| settings.strategy)
         .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
     let scope_exclude = normalize_cli_exclusions(&args.exclude);
     let scope_exclude_from = normalize_exclude_from_paths(project_root, &args.exclude_from)?;
-    if let Some(target_daemon_config_path) = daemon_config_path.as_deref() {
-        let source_daemon_config_path =
-            crate::config::resolve_preferred_daemon_config_path_for_repo(project_root)
-                .ok()
-                .filter(|path| path.is_file())
-                .or_else(|| {
-                    target_daemon_config_path
-                        .is_file()
-                        .then(|| target_daemon_config_path.to_path_buf())
-                });
-        if let Some(source_daemon_config_path) = source_daemon_config_path {
-            crate::config::persist_daemon_store_backend_selection(
-                &source_daemon_config_path,
-                target_daemon_config_path,
-            )?;
-        }
-    }
     let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
-    let previous_embeddings_policy = repo_semantic_embedding_policy(project_root)?;
     write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance(
         &local_policy_path,
         &strategy,
@@ -218,6 +108,16 @@ pub(crate) async fn run_for_project_root(
     if !scope_exclude.is_empty() || !scope_exclude_from.is_empty() {
         set_scope_exclusions(&local_policy_path, &scope_exclude, &scope_exclude_from)?;
     }
+    let semantic_policy = configure_init_semantic_policy(
+        &local_policy_path,
+        project_root,
+        args.embeddings_runtime,
+        args.summaries_runtime,
+        args.summary_embeddings_mode,
+        out,
+        input,
+    )
+    .await?;
 
     let settings = load_settings(project_root).unwrap_or_default();
     let _git_count = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
@@ -245,285 +145,38 @@ pub(crate) async fn run_for_project_root(
         out.write_all(&surface_updates)?;
         out.flush()?;
     }
-    let mut embeddings_bootstrap = None;
-    let mut embeddings_bootstrap_rollback_plan = None;
-    let mut prepared_summary_setup = None;
-    let mut login_required = false;
-    let embeddings_selection =
-        should_install_embeddings_during_init(project_root, &args, out, input)?;
-    match embeddings_selection {
-        InitEmbeddingsSetupSelection::Unchanged => {}
-        InitEmbeddingsSetupSelection::Existing => {
-            persist_init_embeddings_policy(
-                project_root,
-                &local_policy_path,
-                InitEmbeddingsSetupSelection::Existing,
-                None,
-            )?;
-        }
-        InitEmbeddingsSetupSelection::Cloud => {
-            login_required = true;
-            let gateway_url =
-                platform_embeddings_gateway_url_override(args.embeddings_gateway_url.as_deref());
-            if args.install_default_daemon {
-                let prepared_bootstrap = resolve_embeddings_bootstrap_request(
-                    project_root,
-                    InitEmbeddingsSetupSelection::Cloud,
-                    gateway_url.as_deref(),
-                    Some(args.embeddings_api_key_env.as_str()),
-                )?;
-                persist_init_embeddings_policy(
-                    project_root,
-                    &local_policy_path,
-                    InitEmbeddingsSetupSelection::Cloud,
-                    Some(&prepared_bootstrap.request.profile_name),
-                )?;
-                embeddings_bootstrap_rollback_plan = prepared_bootstrap.rollback_plan;
-                embeddings_bootstrap = Some(prepared_bootstrap.request);
-            } else {
-                for line in install_or_configure_platform_embeddings(
-                    project_root,
-                    gateway_url.as_deref(),
-                    &args.embeddings_api_key_env,
-                )? {
-                    writeln!(out, "{line}")?;
-                }
-            }
-        }
-        InitEmbeddingsSetupSelection::Local => {
-            if args.install_default_daemon {
-                let prepared_bootstrap = resolve_embeddings_bootstrap_request(
-                    project_root,
-                    InitEmbeddingsSetupSelection::Local,
-                    None,
-                    None,
-                )?;
-                persist_init_embeddings_policy(
-                    project_root,
-                    &local_policy_path,
-                    InitEmbeddingsSetupSelection::Local,
-                    Some(&prepared_bootstrap.request.profile_name),
-                )?;
-                embeddings_bootstrap_rollback_plan = prepared_bootstrap.rollback_plan;
-                embeddings_bootstrap = Some(prepared_bootstrap.request);
-            } else {
-                install_embeddings_during_init(project_root, out)?;
-            }
-        }
-        InitEmbeddingsSetupSelection::Skip => {
-            persist_init_embeddings_policy(
-                project_root,
-                &local_policy_path,
-                InitEmbeddingsSetupSelection::Skip,
-                None,
-            )?;
-        }
-    }
-    let summary_selection = choose_summary_setup_during_init(
-        project_root,
-        args.install_default_daemon,
-        args.no_summaries,
-        out,
-        input,
-    )
-    .await?;
-    if matches!(summary_selection, SummarySetupSelection::Cloud) {
-        login_required = true;
-    }
-    let context_guidance_selection =
-        choose_context_guidance_setup_during_init(project_root, &args, out, input).await?;
-    if matches!(
-        context_guidance_selection,
-        ContextGuidanceSetupSelection::Cloud
-    ) {
-        login_required = true;
-    }
-    if login_required {
-        crate::cli::login::ensure_logged_in().await?;
-    }
-    match summary_selection {
-        SummarySetupSelection::Cloud => {
-            let gateway_url_override = platform_summary_gateway_url_override();
-            if args.install_default_daemon {
-                prepared_summary_setup = Some(prepare_cloud_summary_generation_plan(
-                    gateway_url_override.as_deref(),
-                ));
-            } else {
-                let message = configure_cloud_summary_generation(
-                    project_root,
-                    gateway_url_override.as_deref(),
-                )
-                .map_err(|err| {
-                    anyhow::anyhow!(
-                        "Bitloops init completed, but semantic summary setup failed: {err:#}"
-                    )
-                })?;
-                writeln!(out, "{message}")?;
-            }
-        }
-        SummarySetupSelection::Local => {
-            if args.install_default_daemon {
-                prepared_summary_setup = Some(
-                    prepare_local_summary_generation_plan(
-                        out,
-                        input,
-                        telemetry_consent::can_prompt_interactively(),
-                    )
-                    .map_err(|err| {
-                        anyhow::anyhow!(
-                            "Bitloops init completed, but semantic summary setup failed: {err:#}"
-                        )
-                    })?,
-                );
-            } else {
-                configure_local_summary_generation(
-                    project_root,
-                    out,
-                    input,
-                    telemetry_consent::can_prompt_interactively(),
-                )
-                .map_err(|err| {
-                    anyhow::anyhow!(
-                        "Bitloops init completed, but semantic summary setup failed: {err:#}"
-                    )
-                })?;
-            }
-        }
-        SummarySetupSelection::Skip => {}
-    }
-    match context_guidance_selection {
-        ContextGuidanceSetupSelection::Cloud => {
-            let api_key_env = args
-                .context_guidance_api_key_env
-                .as_deref()
-                .unwrap_or(crate::cli::inference::DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV);
-            let gateway_url_override = platform_context_guidance_gateway_url_override(
-                args.context_guidance_gateway_url.as_deref(),
-            );
-            let message = configure_cloud_context_guidance_generation(
-                project_root,
-                gateway_url_override.as_deref(),
-                Some(api_key_env),
-            )
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "Bitloops init completed, but context guidance setup failed: {err:#}"
-                )
-            })?;
-            writeln!(out, "{message}")?;
-        }
-        ContextGuidanceSetupSelection::Local => {
-            configure_local_context_guidance_generation(
-                project_root,
-                out,
-                input,
-                telemetry_consent::can_prompt_interactively(),
-            )
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "Bitloops init completed, but context guidance setup failed: {err:#}"
-                )
-            })?;
-        }
-        ContextGuidanceSetupSelection::Skip => {}
-    }
-    let summaries_selected =
-        prepared_summary_setup.is_some() || summary_generation_configured(project_root);
+
     let final_setup_selection = choose_final_setup_options(
         args.sync,
         out,
         input,
         effective_ingest,
         InitFinalSetupPromptOptions {
-            show_telemetry: should_prompt_for_telemetry,
-            show_auto_start_daemon: args.install_default_daemon && !daemon_already_always_on,
+            show_sync_and_ingest: true,
+            show_telemetry: false,
+            show_auto_start_daemon: false,
         },
     )?;
-    if args.install_default_daemon {
-        maybe_enable_default_daemon_service(
-            final_setup_selection.auto_start_daemon,
-            daemon_config_path
-                .as_deref()
-                .expect("install default daemon should resolve a daemon config path"),
-            should_prompt_for_telemetry
-                .then_some(final_setup_selection.telemetry)
-                .or(telemetry_choice),
-        )
-        .await?;
-    }
-    if should_prompt_for_telemetry {
-        let persisted = telemetry_consent::update_cli_telemetry_consent_via_daemon(
-            project_root,
-            Some(final_setup_selection.telemetry),
-        )
-        .await?;
-        if persisted.needs_prompt {
-            bail!("failed to persist telemetry consent");
-        }
-    }
     let should_sync = final_setup_selection.sync;
     let should_ingest = final_setup_selection.ingest;
     set_devql_producer_settings(&local_policy_path, should_sync, should_ingest)?;
-    let semantic_policy = resolve_semantic_clones_config_for_repo(project_root);
-    let code_embeddings_selected = semantic_policy.embedding_mode
-        != SemanticCloneEmbeddingMode::Off
-        && semantic_policy
-            .inference
-            .code_embeddings
-            .as_deref()
-            .is_some_and(|profile| !profile.trim().is_empty());
-    let summary_embeddings_selected = semantic_policy.embedding_mode
-        != SemanticCloneEmbeddingMode::Off
-        && semantic_policy
-            .inference
-            .summary_embeddings
-            .as_deref()
-            .is_some_and(|profile| !profile.trim().is_empty());
-    let run_code_embeddings = should_sync && code_embeddings_selected;
-    let run_summaries = should_sync && summaries_selected;
-    let run_summary_embeddings = run_summaries && summary_embeddings_selected;
-    if args.install_default_daemon {
-        activate_selected_init_mailboxes(
-            &git_root,
-            run_code_embeddings,
-            run_summaries,
-            run_summary_embeddings,
-        )?;
-    }
-    crate::cli::watcher_bootstrap::reconcile_repo_watcher(project_root)
-        .await
-        .map_err(|err| {
-            anyhow::anyhow!("Bitloops init completed, but DevQL watcher reconcile failed: {err:#}")
-        })?;
+    let semantic_selection = init_semantic_runtime_selection(should_sync, &semantic_policy);
 
-    if args.install_default_daemon {
-        write_init_setup_handoff(
-            out,
-            InitSetupHandoffOptions {
-                run_sync: should_sync,
-                run_ingest: should_ingest,
-                run_code_embeddings,
-                run_summaries,
-                run_summary_embeddings,
-                prepare_embeddings_runtime: embeddings_bootstrap.is_some() && !run_code_embeddings,
-                prepare_summary_generation: prepared_summary_setup.is_some() && !run_summaries,
-            },
-        )
-        .await?;
+    if crate::daemon::daemon_url()?.is_some() {
+        crate::cli::watcher_bootstrap::reconcile_repo_watcher(project_root)
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "Bitloops init completed, but DevQL watcher reconcile failed: {err:#}"
+                )
+            })?;
     }
-    if should_sync
-        || should_ingest
-        || embeddings_bootstrap.is_some()
-        || prepared_summary_setup.is_some()
-    {
-        let has_embeddings_bootstrap = embeddings_bootstrap.is_some();
+
+    if should_sync || should_ingest {
         let scope = crate::devql_transport::discover_slim_cli_repo_scope(Some(project_root))?;
         let ingest_backfill =
             should_ingest.then_some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL));
-        let summaries_bootstrap = prepared_summary_setup
-            .as_ref()
-            .map(runtime_summary_bootstrap_request_from_plan);
-        let init_progress_result = run_dual_init_progress(
+        run_dual_init_progress(
             out,
             &scope,
             InitProgressOptions {
@@ -531,329 +184,445 @@ pub(crate) async fn run_for_project_root(
                     repo_id: scope.repo.repo_id.clone(),
                     run_sync: should_sync,
                     run_ingest: should_ingest,
-                    run_code_embeddings,
-                    run_summaries,
-                    run_summary_embeddings,
+                    run_code_embeddings: semantic_selection.run_code_embeddings,
+                    run_summaries: semantic_selection.run_summaries,
+                    run_summary_embeddings: semantic_selection.run_summary_embeddings,
                     ingest_backfill,
-                    embeddings_bootstrap,
-                    summaries_bootstrap,
+                    embeddings_bootstrap: None,
+                    summaries_bootstrap: None,
                 },
-                show_live_progress_notice: !args.install_default_daemon,
+                show_live_progress_notice: true,
             },
         )
-        .await;
-        if let Err(err) = init_progress_result {
-            if has_embeddings_bootstrap {
-                if let Some(plan) = embeddings_bootstrap_rollback_plan.as_ref() {
-                    plan.rollback().with_context(|| {
-                        format!(
-                            "rolling back daemon embeddings config after failed init bootstrap: {err:#}"
-                        )
-                    })?;
-                }
-                restore_repo_semantic_embedding_policy(
-                    &local_policy_path,
-                    &previous_embeddings_policy,
-                )
-                .with_context(|| {
-                    format!("restoring repo embedding policy after failed init bootstrap: {err:#}")
-                })?;
-                deactivate_embedding_pipeline_mailboxes(
-                    project_root,
-                    "init_embeddings_bootstrap_rollback",
-                )
-                .with_context(|| {
-                    format!("deactivating embedding mailboxes after failed init bootstrap: {err:#}")
-                })?;
-            }
-            return Err(err);
-        }
+        .await?;
     }
+
     Ok(())
 }
 
-fn persist_init_embeddings_policy(
-    repo_root: &Path,
+fn ensure_init_semantic_policy(
     local_policy_path: &Path,
-    selection: InitEmbeddingsSetupSelection,
-    selected_profile_name: Option<&str>,
-) -> Result<()> {
-    let policy = match selection {
-        InitEmbeddingsSetupSelection::Unchanged => return Ok(()),
-        InitEmbeddingsSetupSelection::Skip => RepoSemanticEmbeddingPolicy::disabled(),
-        InitEmbeddingsSetupSelection::Cloud | InitEmbeddingsSetupSelection::Local => {
-            RepoSemanticEmbeddingPolicy::enabled_with_profile(selected_profile_name.unwrap_or(
-                match selection {
-                    InitEmbeddingsSetupSelection::Cloud => "platform_code",
-                    _ => "local_code",
-                },
-            ))
-        }
-        InitEmbeddingsSetupSelection::Existing => {
-            let existing_policy = repo_semantic_embedding_policy(repo_root)?;
-            let code_profile = existing_policy
-                .inference
-                .code_embeddings
-                .as_deref()
-                .map(str::trim)
-                .filter(|profile| !profile.is_empty())
-                .map(str::to_string);
-            let summary_profile = existing_policy
-                .inference
-                .summary_embeddings
-                .as_deref()
-                .map(str::trim)
-                .filter(|profile| !profile.is_empty())
-                .map(str::to_string);
-            if code_profile.is_some() || summary_profile.is_some() {
-                RepoSemanticEmbeddingPolicy {
-                    present: true,
-                    embedding_mode: existing_policy
-                        .embedding_mode
-                        .or(Some(SemanticCloneEmbeddingMode::SemanticAwareOnce)),
-                    inference: crate::config::SemanticClonesInferenceBindings {
-                        summary_generation: existing_policy.inference.summary_generation,
-                        code_embeddings: code_profile,
-                        summary_embeddings: summary_profile,
-                    },
-                }
-            } else {
-                legacy_daemon_semantic_embedding_policy(repo_root).unwrap_or_else(|| {
-                    RepoSemanticEmbeddingPolicy::enabled_with_profile("local_code")
-                })
-            }
-        }
-    };
-    set_repo_semantic_embedding_policy(local_policy_path, &policy)
-}
-
-fn legacy_daemon_semantic_embedding_policy(
-    repo_root: &Path,
-) -> Option<RepoSemanticEmbeddingPolicy> {
-    let config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)
-        .or_else(|_| crate::config::resolve_daemon_config_path_for_repo(repo_root))
-        .ok()?;
-    let capability =
-        crate::cli::embeddings::embedding_capability_for_config_path(&config_path).ok()?;
-    let code_profile = non_empty_profile_name(
-        capability
-            .semantic_clones
-            .inference
-            .code_embeddings
-            .as_deref(),
-    );
-    let summary_profile = non_empty_profile_name(
-        capability
-            .semantic_clones
-            .inference
-            .summary_embeddings
-            .as_deref(),
-    );
-    if code_profile.is_some() || summary_profile.is_some() {
-        return Some(RepoSemanticEmbeddingPolicy {
-            present: true,
-            embedding_mode: Some(capability.semantic_clones.embedding_mode),
-            inference: crate::config::SemanticClonesInferenceBindings {
-                summary_generation: capability.semantic_clones.inference.summary_generation,
-                code_embeddings: code_profile,
-                summary_embeddings: summary_profile,
-            },
-        });
+    project_root: &Path,
+) -> Result<RepoSemanticEmbeddingPolicy> {
+    let existing = repo_semantic_embedding_policy(project_root)?;
+    if existing.present {
+        return Ok(existing);
     }
 
-    crate::cli::embeddings::selected_inference_profile_name(&capability)
-        .map(RepoSemanticEmbeddingPolicy::enabled_with_profile)
+    let policy = default_init_semantic_policy();
+    set_repo_semantic_embedding_policy(local_policy_path, &policy)?;
+    Ok(policy)
 }
 
-fn non_empty_profile_name(value: Option<&str>) -> Option<String> {
-    value
+async fn configure_init_semantic_policy(
+    local_policy_path: &Path,
+    project_root: &Path,
+    explicit_embeddings_runtime: Option<crate::cli::embeddings::EmbeddingsRuntime>,
+    explicit_summaries_runtime: Option<crate::cli::init::SummariesRuntime>,
+    explicit_summary_embeddings_mode: Option<crate::cli::init::SummaryEmbeddingsMode>,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<RepoSemanticEmbeddingPolicy> {
+    let existing = repo_semantic_embedding_policy(project_root)?;
+    if existing.present
+        && explicit_embeddings_runtime.is_none()
+        && explicit_summaries_runtime.is_none()
+        && explicit_summary_embeddings_mode.is_none()
+        && !init_semantic_policy_needs_provider_setup(project_root, &existing)
+    {
+        return Ok(existing);
+    }
+
+    if !telemetry_consent::can_prompt_interactively()
+        && explicit_embeddings_runtime.is_none()
+        && explicit_summaries_runtime.is_none()
+        && explicit_summary_embeddings_mode.is_none()
+    {
+        if existing.present {
+            return Ok(existing);
+        }
+        return ensure_init_semantic_policy(local_policy_path, project_root);
+    }
+
+    let repo_selected_embedding_lanes = if existing.present {
+        init_semantic_policy_should_offer_embedding_setup(&existing)
+    } else {
+        true
+    };
+    let repo_selected_summaries = if existing.present {
+        init_semantic_policy_should_offer_summary_setup(&existing)
+    } else {
+        true
+    };
+    let mut selected_code_embeddings = None;
+    let mut selected_summary_generation = (repo_selected_summaries
+        && init_repo_summary_generation_configured(project_root))
+    .then(|| current_summary_generation_profile(project_root))
+    .flatten();
+    let mut selected_summary_embeddings = None;
+    let mut login_required = false;
+
+    let embeddings_selection = choose_embeddings_setup_during_init(
+        project_root,
+        repo_selected_embedding_lanes,
+        explicit_embeddings_runtime,
+        out,
+        input,
+    )?;
+    match embeddings_selection {
+        InitEmbeddingsSetupSelection::Unchanged => {}
+        InitEmbeddingsSetupSelection::Existing => {
+            selected_code_embeddings = current_code_embeddings_profile(project_root);
+            selected_summary_embeddings = current_summary_embeddings_profile(project_root);
+        }
+        InitEmbeddingsSetupSelection::Cloud => {
+            login_required = true;
+            let gateway_url = platform_embeddings_gateway_url_override(None);
+            for line in install_or_configure_platform_embeddings(
+                project_root,
+                gateway_url.as_deref(),
+                "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+            )? {
+                writeln!(out, "{line}")?;
+            }
+            selected_code_embeddings = current_code_embeddings_profile(project_root);
+        }
+        InitEmbeddingsSetupSelection::Local => {
+            for line in install_or_bootstrap_embeddings(project_root)? {
+                writeln!(out, "{line}")?;
+            }
+            selected_code_embeddings = current_code_embeddings_profile(project_root);
+        }
+        InitEmbeddingsSetupSelection::Skip => {}
+    }
+
+    let summary_selection = choose_summary_setup_during_init(
+        project_root,
+        repo_selected_summaries,
+        explicit_summaries_runtime,
+        out,
+        input,
+    )?;
+    match summary_selection {
+        SummarySetupSelection::Cloud => {
+            login_required = true;
+            let gateway_url = platform_summary_gateway_url_override();
+            let message =
+                configure_cloud_summary_generation(project_root, gateway_url.as_deref(), None)
+                    .map_err(|err| {
+                        anyhow::anyhow!(
+                            "Bitloops init completed, but semantic summary setup failed: {err:#}"
+                        )
+                    })?;
+            writeln!(out, "{message}")?;
+            selected_summary_generation = current_summary_generation_profile(project_root);
+        }
+        SummarySetupSelection::Local => {
+            configure_local_summary_generation(
+                project_root,
+                out,
+                input,
+                telemetry_consent::can_prompt_interactively(),
+            )
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "Bitloops init completed, but semantic summary setup failed: {err:#}"
+                )
+            })?;
+            selected_summary_generation = current_summary_generation_profile(project_root);
+        }
+        SummarySetupSelection::Skip => {}
+    }
+
+    let summary_embedding_candidate = selected_code_embeddings.clone();
+    match explicit_summary_embeddings_mode {
+        Some(crate::cli::init::SummaryEmbeddingsMode::Off) => {
+            selected_summary_embeddings = None;
+        }
+        Some(crate::cli::init::SummaryEmbeddingsMode::On) => {
+            if selected_summary_generation.is_none() {
+                bail!(
+                    "`--summary-embeddings-mode=on` requires summaries to be enabled for this init run."
+                );
+            }
+            if selected_summary_embeddings.is_none() {
+                if let Some(profile) = summary_embedding_candidate.clone() {
+                    selected_summary_embeddings = Some(profile);
+                } else {
+                    if !telemetry_consent::can_prompt_interactively() {
+                        bail!(
+                            "`--summary-embeddings-mode=on` requires an embeddings provider. Re-run interactively to choose one or pass `--embeddings-runtime local|platform`."
+                        );
+                    }
+                    let summary_embeddings_selection = choose_summary_embeddings_setup_during_init(
+                        repo_selected_summaries,
+                        selected_summary_embeddings.is_some(),
+                        summary_embedding_candidate.as_deref(),
+                        out,
+                        input,
+                    )?;
+                    match summary_embeddings_selection {
+                        InitSummaryEmbeddingsSetupSelection::Existing => {}
+                        InitSummaryEmbeddingsSetupSelection::UseSelectedEmbeddingsProvider => {
+                            if let Some(profile) = summary_embedding_candidate.clone() {
+                                selected_summary_embeddings = Some(profile);
+                            } else {
+                                bail!(
+                                    "`--summary-embeddings-mode=on` requires an embeddings provider."
+                                );
+                            }
+                        }
+                        InitSummaryEmbeddingsSetupSelection::Cloud => {
+                            login_required = true;
+                            let gateway_url = platform_embeddings_gateway_url_override(None);
+                            for line in install_or_configure_platform_embeddings(
+                                project_root,
+                                gateway_url.as_deref(),
+                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+                            )? {
+                                writeln!(out, "{line}")?;
+                            }
+                            selected_summary_embeddings =
+                                current_code_embeddings_profile(project_root);
+                        }
+                        InitSummaryEmbeddingsSetupSelection::Local => {
+                            for line in install_or_bootstrap_embeddings(project_root)? {
+                                writeln!(out, "{line}")?;
+                            }
+                            selected_summary_embeddings =
+                                current_code_embeddings_profile(project_root);
+                        }
+                        InitSummaryEmbeddingsSetupSelection::Skip => {
+                            bail!(
+                                "`--summary-embeddings-mode=on` requires selecting an embeddings provider."
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        None => {
+            if selected_summary_generation.is_some() {
+                let summary_embeddings_selection = choose_summary_embeddings_setup_during_init(
+                    repo_selected_summaries,
+                    selected_summary_embeddings.is_some(),
+                    summary_embedding_candidate.as_deref(),
+                    out,
+                    input,
+                )?;
+                match summary_embeddings_selection {
+                    InitSummaryEmbeddingsSetupSelection::Existing => {}
+                    InitSummaryEmbeddingsSetupSelection::UseSelectedEmbeddingsProvider => {
+                        selected_summary_embeddings = summary_embedding_candidate;
+                    }
+                    InitSummaryEmbeddingsSetupSelection::Cloud => {
+                        login_required = true;
+                        let gateway_url = platform_embeddings_gateway_url_override(None);
+                        for line in install_or_configure_platform_embeddings(
+                            project_root,
+                            gateway_url.as_deref(),
+                            "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+                        )? {
+                            writeln!(out, "{line}")?;
+                        }
+                        selected_summary_embeddings = current_code_embeddings_profile(project_root);
+                    }
+                    InitSummaryEmbeddingsSetupSelection::Local => {
+                        for line in install_or_bootstrap_embeddings(project_root)? {
+                            writeln!(out, "{line}")?;
+                        }
+                        selected_summary_embeddings = current_code_embeddings_profile(project_root);
+                    }
+                    InitSummaryEmbeddingsSetupSelection::Skip => {}
+                }
+            }
+        }
+    }
+
+    if login_required {
+        crate::cli::login::ensure_logged_in().await?;
+    }
+
+    persist_init_semantic_policy(
+        local_policy_path,
+        selected_code_embeddings.as_deref(),
+        selected_summary_generation.as_deref(),
+        selected_summary_embeddings.as_deref(),
+    )
+}
+
+fn init_semantic_policy_needs_provider_setup(
+    project_root: &Path,
+    policy: &RepoSemanticEmbeddingPolicy,
+) -> bool {
+    let embeddings_missing = init_semantic_policy_should_offer_embedding_setup(policy)
+        && matches!(
+            inspect_embeddings_install_state(project_root),
+            EmbeddingsInstallState::NotConfigured
+        )
+        || policy.embedding_mode == Some(SemanticCloneEmbeddingMode::Off);
+    let summaries_missing = init_semantic_policy_should_offer_summary_setup(policy)
+        && (policy.summary_mode == Some(SemanticSummaryMode::Off)
+            || !init_repo_summary_generation_configured(project_root));
+    let summary_embeddings_missing = init_semantic_policy_selects_summaries(policy)
+        && !non_empty_profile(policy.inference.summary_embeddings.as_deref());
+
+    embeddings_missing || summaries_missing || summary_embeddings_missing
+}
+
+fn init_semantic_policy_should_offer_embedding_setup(policy: &RepoSemanticEmbeddingPolicy) -> bool {
+    policy.embedding_mode == Some(SemanticCloneEmbeddingMode::Off)
+        || init_semantic_policy_selects_embedding_lanes(policy)
+}
+
+fn init_semantic_policy_should_offer_summary_setup(policy: &RepoSemanticEmbeddingPolicy) -> bool {
+    policy.summary_mode == Some(SemanticSummaryMode::Off)
+        || init_semantic_policy_selects_summaries(policy)
+}
+
+fn init_semantic_policy_selects_embedding_lanes(policy: &RepoSemanticEmbeddingPolicy) -> bool {
+    policy.embedding_mode != Some(SemanticCloneEmbeddingMode::Off)
+        && (policy.embedding_mode.is_some()
+            || non_empty_profile(policy.inference.code_embeddings.as_deref())
+            || non_empty_profile(policy.inference.summary_embeddings.as_deref()))
+}
+
+fn init_semantic_policy_selects_summaries(policy: &RepoSemanticEmbeddingPolicy) -> bool {
+    policy.summary_mode != Some(SemanticSummaryMode::Off)
+        && (policy.summary_mode.is_some()
+            || non_empty_profile(policy.inference.summary_generation.as_deref()))
+}
+
+fn init_repo_summary_generation_configured(project_root: &Path) -> bool {
+    current_summary_generation_profile(project_root).is_some()
+        && summary_generation_configured(project_root)
+}
+
+fn persist_init_semantic_policy(
+    local_policy_path: &Path,
+    code_embeddings: Option<&str>,
+    summary_generation: Option<&str>,
+    summary_embeddings: Option<&str>,
+) -> Result<RepoSemanticEmbeddingPolicy> {
+    let embeddings_enabled = code_embeddings.is_some() || summary_embeddings.is_some();
+    let summaries_enabled = summary_generation.is_some();
+    let policy = RepoSemanticEmbeddingPolicy {
+        present: true,
+        summary_mode: Some(if summaries_enabled {
+            SemanticSummaryMode::Auto
+        } else {
+            SemanticSummaryMode::Off
+        }),
+        embedding_mode: Some(if embeddings_enabled {
+            SemanticCloneEmbeddingMode::SemanticAwareOnce
+        } else {
+            SemanticCloneEmbeddingMode::Off
+        }),
+        inference: SemanticClonesInferenceBindings {
+            summary_generation: summary_generation.map(str::to_string),
+            code_embeddings: code_embeddings.map(str::to_string),
+            summary_embeddings: summary_embeddings.map(str::to_string),
+        },
+    };
+    set_repo_semantic_embedding_policy(local_policy_path, &policy)?;
+    Ok(policy)
+}
+
+fn current_code_embeddings_profile(project_root: &Path) -> Option<String> {
+    current_semantic_policy_profile(project_root, |policy| {
+        policy.inference.code_embeddings.as_deref()
+    })
+}
+
+fn current_summary_generation_profile(project_root: &Path) -> Option<String> {
+    current_semantic_policy_profile(project_root, |policy| {
+        policy.inference.summary_generation.as_deref()
+    })
+}
+
+fn current_summary_embeddings_profile(project_root: &Path) -> Option<String> {
+    current_semantic_policy_profile(project_root, |policy| {
+        policy.inference.summary_embeddings.as_deref()
+    })
+}
+
+fn current_semantic_policy_profile(
+    project_root: &Path,
+    select: impl FnOnce(&RepoSemanticEmbeddingPolicy) -> Option<&str>,
+) -> Option<String> {
+    let policy = repo_semantic_embedding_policy(project_root).ok()?;
+    select(&policy)
         .map(str::trim)
         .filter(|profile| !profile.is_empty())
         .map(str::to_string)
 }
 
-async fn bound_running_daemon_config_path() -> Result<std::path::PathBuf> {
-    if let Some(runtime) = crate::daemon::runtime_state()? {
-        return Ok(runtime
-            .config_path
-            .canonicalize()
-            .unwrap_or(runtime.config_path));
-    }
-
-    #[cfg(test)]
-    if crate::cli::telemetry_consent::test_assume_daemon_running_override() == Some(true) {
-        let config_path = crate::config::ensure_daemon_config_exists()?;
-        return Ok(config_path.canonicalize().unwrap_or(config_path));
-    }
-
-    #[cfg(test)]
-    if std::env::var("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
-    {
-        let config_path = crate::config::ensure_daemon_config_exists()?;
-        return Ok(config_path.canonicalize().unwrap_or(config_path));
-    }
-
-    let runtime = crate::daemon::runtime_state()?.context("Bitloops daemon is not running")?;
-    Ok(runtime
-        .config_path
-        .canonicalize()
-        .unwrap_or(runtime.config_path))
-}
-
-fn resolve_embeddings_bootstrap_request(
-    repo_root: &Path,
-    selection: InitEmbeddingsSetupSelection,
-    gateway_url_override: Option<&str>,
-    api_key_env: Option<&str>,
-) -> Result<PreparedEmbeddingsBootstrapRequest> {
-    let config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)
-        .or_else(|_| crate::config::resolve_daemon_config_path_for_repo(repo_root))
-        .unwrap_or_else(|_| repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH));
-    match selection {
-        InitEmbeddingsSetupSelection::Unchanged => {
-            bail!("cannot resolve embeddings bootstrap request without an embeddings decision")
-        }
-        InitEmbeddingsSetupSelection::Cloud => {
-            let plan = crate::config::prepare_daemon_platform_embeddings_install(
-                &config_path,
-                gateway_url_override,
-                api_key_env.unwrap_or("BITLOOPS_PLATFORM_GATEWAY_TOKEN"),
-            )?;
-            plan.apply()?;
-            let profile_name = plan.profile_name.clone();
-            Ok(PreparedEmbeddingsBootstrapRequest {
-                request: crate::cli::devql::graphql::RuntimeEmbeddingsBootstrapRequestInput {
-                    config_path: config_path.display().to_string(),
-                    profile_name,
-                    mode: "platform".to_string(),
-                    gateway_url_override: gateway_url_override.map(str::to_string),
-                    api_key_env: api_key_env.map(str::to_string),
-                },
-                rollback_plan: Some(plan),
-            })
-        }
-        InitEmbeddingsSetupSelection::Local
-        | InitEmbeddingsSetupSelection::Existing
-        | InitEmbeddingsSetupSelection::Skip => {
-            let profile_name = match selection {
-                InitEmbeddingsSetupSelection::Local => {
-                    let plan = prepare_daemon_local_embeddings_profile_install(&config_path)?;
-                    plan.apply()?;
-                    let profile_name = plan.profile_name.clone();
-                    return Ok(PreparedEmbeddingsBootstrapRequest {
-                        request:
-                            crate::cli::devql::graphql::RuntimeEmbeddingsBootstrapRequestInput {
-                                config_path: config_path.display().to_string(),
-                                profile_name,
-                                mode: "local".to_string(),
-                                gateway_url_override: None,
-                                api_key_env: None,
-                            },
-                        rollback_plan: Some(plan),
-                    });
-                }
-                _ => crate::cli::embeddings::embedding_capability_for_config_path(&config_path)
-                    .ok()
-                    .and_then(|capability| {
-                        crate::cli::embeddings::selected_inference_profile_name(&capability)
-                            .map(str::to_string)
-                    })
-                    .unwrap_or_else(|| "local_code".to_string()),
-            };
-
-            Ok(PreparedEmbeddingsBootstrapRequest {
-                request: crate::cli::devql::graphql::RuntimeEmbeddingsBootstrapRequestInput {
-                    config_path: config_path.display().to_string(),
-                    profile_name,
-                    mode: "local".to_string(),
-                    gateway_url_override: None,
-                    api_key_env: None,
-                },
-                rollback_plan: None,
-            })
-        }
-    }
-}
-
-fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> Result<()> {
-    writeln!(out, "Preparing local embeddings setup...")?;
-    writeln!(
-        out,
-        "This can take a moment if the managed runtime needs to be downloaded."
-    )?;
-    out.flush()?;
-    match install_or_bootstrap_embeddings(project_root) {
-        Ok(lines) => {
-            for line in lines {
-                writeln!(out, "{line}")?;
-            }
-            Ok(())
-        }
-        Err(err) => {
-            bail!("Bitloops init completed, but embeddings installation failed: {err:#}");
-        }
-    }
-}
-
-fn activate_selected_init_mailboxes(
-    repo_root: &Path,
-    code_embeddings_enabled: bool,
-    summaries_enabled: bool,
-    summary_embeddings_enabled: bool,
-) -> Result<()> {
-    activate_selected_pipeline_mailboxes(
-        repo_root,
-        "init",
-        summaries_enabled,
-        code_embeddings_enabled,
-        summary_embeddings_enabled,
-        code_embeddings_enabled || summary_embeddings_enabled,
-    )
-    .context("activating semantic clones init mailboxes")
-}
-
-fn runtime_summary_bootstrap_request_from_plan(
-    plan: &crate::cli::inference::PreparedSummarySetupPlan,
-) -> crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
-    match plan.action() {
-        PreparedSummarySetupAction::InstallRuntimeOnly { message } => {
-            crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
-                action: "install_runtime_only".to_string(),
-                message: Some(message.clone()),
-                model_name: None,
-                gateway_url_override: None,
-                api_key_env: None,
-            }
-        }
-        PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe { message } => {
-            crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
-                action: "install_runtime_only_pending_probe".to_string(),
-                message: Some(message.clone()),
-                model_name: None,
-                gateway_url_override: None,
-                api_key_env: None,
-            }
-        }
-        PreparedSummarySetupAction::ConfigureLocal { model_name } => {
-            crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
-                action: "configure_local".to_string(),
-                message: None,
-                model_name: Some(model_name.clone()),
-                gateway_url_override: None,
-                api_key_env: None,
-            }
-        }
-        PreparedSummarySetupAction::ConfigureCloud {
-            gateway_url_override,
-            api_key_env,
-        } => crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
-            action: "configure_cloud".to_string(),
-            message: None,
-            model_name: None,
-            gateway_url_override: gateway_url_override.clone(),
-            api_key_env: api_key_env.clone(),
+fn default_init_semantic_policy() -> RepoSemanticEmbeddingPolicy {
+    RepoSemanticEmbeddingPolicy {
+        present: true,
+        summary_mode: Some(SemanticSummaryMode::Auto),
+        embedding_mode: Some(SemanticCloneEmbeddingMode::SemanticAwareOnce),
+        inference: SemanticClonesInferenceBindings {
+            summary_generation: Some(DEFAULT_INIT_SUMMARY_GENERATION_PROFILE.to_string()),
+            code_embeddings: Some(DEFAULT_INIT_CODE_EMBEDDINGS_PROFILE.to_string()),
+            summary_embeddings: Some(DEFAULT_INIT_SUMMARY_EMBEDDINGS_PROFILE.to_string()),
         },
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InitSemanticRuntimeSelection {
+    run_code_embeddings: bool,
+    run_summaries: bool,
+    run_summary_embeddings: bool,
+}
+
+fn init_semantic_runtime_selection(
+    should_sync: bool,
+    policy: &RepoSemanticEmbeddingPolicy,
+) -> InitSemanticRuntimeSelection {
+    let embeddings_enabled = policy.embedding_mode != Some(SemanticCloneEmbeddingMode::Off);
+    let summaries_enabled = policy.summary_mode != Some(SemanticSummaryMode::Off);
+    let run_code_embeddings = should_sync
+        && embeddings_enabled
+        && non_empty_profile(policy.inference.code_embeddings.as_deref());
+    let run_summaries = should_sync
+        && summaries_enabled
+        && non_empty_profile(policy.inference.summary_generation.as_deref());
+    let run_summary_embeddings = should_sync
+        && run_summaries
+        && embeddings_enabled
+        && non_empty_profile(policy.inference.summary_embeddings.as_deref());
+
+    InitSemanticRuntimeSelection {
+        run_code_embeddings,
+        run_summaries,
+        run_summary_embeddings,
+    }
+}
+
+fn non_empty_profile(profile: Option<&str>) -> bool {
+    profile
+        .map(str::trim)
+        .is_some_and(|profile| !profile.is_empty())
+}
+
+fn existing_daemon_config_path() -> Result<Option<PathBuf>> {
+    if let Some(runtime) = crate::daemon::runtime_state()? {
+        return Ok(Some(canonical_or_original(runtime.config_path)));
+    }
+    if let Some(service) = crate::daemon::service_metadata()? {
+        return Ok(Some(canonical_or_original(service.config_path)));
+    }
+    if crate::config::default_daemon_config_exists()? {
+        let config_path = crate::config::default_daemon_config_path()?;
+        if config_path.is_file() {
+            return Ok(Some(canonical_or_original(config_path)));
+        }
+    }
+    Ok(None)
+}
+
+fn canonical_or_original(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
 }

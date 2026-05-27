@@ -32,6 +32,20 @@ mod state;
 #[path = "coordinator/worker.rs"]
 mod worker;
 
+#[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
+pub(crate) fn recover_lifecycle_stop_spool_jobs_for_tests(
+    sqlite: &crate::storage::SqliteConnectionPool,
+) -> anyhow::Result<u64> {
+    worker::lifecycle_spool::recover_lifecycle_stop_spool_jobs(sqlite)
+}
+
+#[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
+pub(crate) fn process_lifecycle_stop_spool_once_for_tests(
+    sqlite: &crate::storage::SqliteConnectionPool,
+) -> anyhow::Result<u64> {
+    worker::lifecycle_spool::process_lifecycle_stop_spool_once(sqlite)
+}
+
 #[cfg(test)]
 use helpers::receive_embeddings_bootstrap_outcome;
 

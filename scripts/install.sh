@@ -5,6 +5,23 @@ REPO="bitloops/bitloops"
 INSTALL_DIR="/usr/local/bin"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
+DEFAULT_CONFIG=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --default-config)
+      DEFAULT_CONFIG=1
+      ;;
+    -h|--help)
+      echo "Usage: install.sh [--default-config]"
+      exit 0
+      ;;
+    *)
+      echo "Usage: install.sh [--default-config]" >&2
+      exit 1
+      ;;
+  esac
+done
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -186,4 +203,20 @@ if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then
   echo "Note: ${INSTALL_DIR} is not in PATH."
   echo "Add this to your shell profile:"
   echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
+fi
+
+BITLOOPS_BIN="${INSTALL_DIR}/bitloops"
+if [[ "${DEFAULT_CONFIG}" == "1" ]]; then
+  DEFAULT_CONFIG_FILE="${TMP_DIR}/default-config.toml"
+  "${BITLOOPS_BIN}" curl-bash-post-install --write-default-config "${DEFAULT_CONFIG_FILE}"
+  "${BITLOOPS_BIN}" configure --file "${DEFAULT_CONFIG_FILE}"
+  echo "Configured Bitloops daemon with the default config."
+elif [[ -t 0 && -t 1 ]]; then
+  if ! "${BITLOOPS_BIN}" configure --web; then
+    echo "Bitloops installed. Run this to configure the daemon:"
+    echo "  ${BITLOOPS_BIN} configure --web"
+  fi
+else
+  echo "Bitloops installed. Run this to configure the daemon:"
+  echo "  ${BITLOOPS_BIN} configure --web"
 fi

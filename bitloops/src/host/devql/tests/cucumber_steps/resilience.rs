@@ -9,7 +9,10 @@ use crate::cli::devql::graphql::{
 use crate::cli::embeddings::{
     EmbeddingsArgs, EmbeddingsClearCacheArgs, EmbeddingsCommand, EmbeddingsPullArgs,
 };
-use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_embedding_capability_config_for_repo};
+use crate::config::{
+    BITLOOPS_CONFIG_RELATIVE_PATH, REPO_POLICY_FILE_NAME,
+    resolve_embedding_capability_config_for_repo,
+};
 use crate::daemon;
 use crate::host::capability_host::runtime_contexts::LocalCapabilityRuntimeResources;
 use crate::host::devql::cucumber_world::DevqlBddWorld;
@@ -233,6 +236,11 @@ fn write_daemon_config(world: &mut DevqlBddWorld, config: &str) {
     fs::write(&daemon_config_path, config).expect("write daemon config");
 }
 
+fn write_repo_semantic_policy(world: &mut DevqlBddWorld, policy: &str) {
+    let repo_root = ensure_scenario_repo(world);
+    fs::write(repo_root.join(REPO_POLICY_FILE_NAME), policy).expect("write repo semantic policy");
+}
+
 #[cfg(unix)]
 fn fake_runtime_command_and_args(world: &mut DevqlBddWorld) -> (String, Vec<String>) {
     use std::os::unix::fs::PermissionsExt;
@@ -354,6 +362,16 @@ fn given_daemon_config_using_fake_runtime(
     Box::pin(async move {
         let config = config_with_fake_runtime(world, doc_string(&ctx).trim());
         write_daemon_config(world, &config);
+    })
+}
+
+fn given_repo_semantic_policy(
+    world: &mut DevqlBddWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let policy = doc_string(&ctx);
+        write_repo_semantic_policy(world, policy.trim());
     })
 }
 
@@ -872,6 +890,11 @@ pub(super) fn register(collection: Collection<DevqlBddWorld>) -> Collection<Devq
             None,
             regex(r"^a daemon config using the fake embeddings runtime:$"),
             step_fn(given_daemon_config_using_fake_runtime),
+        )
+        .given(
+            None,
+            regex(r"^a repo semantic policy:$"),
+            step_fn(given_repo_semantic_policy),
         )
         .given(
             None,

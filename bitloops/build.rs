@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use time::{OffsetDateTime, macros::format_description};
 
@@ -51,6 +51,40 @@ fn git_short_commit() -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn git_rev_parse_path(flag: &str) -> Option<PathBuf> {
+    let manifest_dir = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from)?;
+    let output = Command::new("git")
+        .current_dir(manifest_dir)
+        .args(["rev-parse", "--path-format=absolute", flag])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|value| PathBuf::from(value.trim()))
+        .filter(|value| !value.as_os_str().is_empty())
+}
+
+fn emit_rerun_if_changed_when_present(path: PathBuf) {
+    if path.exists() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
+
+fn emit_git_rerun_triggers() {
+    let Some(git_dir) = git_rev_parse_path("--git-dir") else {
+        return;
+    };
+    let git_common_dir = git_rev_parse_path("--git-common-dir").unwrap_or_else(|| git_dir.clone());
+
+    emit_rerun_if_changed_when_present(git_dir.join("HEAD"));
+    emit_rerun_if_changed_when_present(git_common_dir.join("refs").join("heads"));
+    emit_rerun_if_changed_when_present(git_common_dir.join("packed-refs"));
 }
 
 fn today_utc_iso_date() -> String {
@@ -106,8 +140,7 @@ fn emit_macos_runtime_rpaths() {
 fn main() {
     println!("cargo:rerun-if-changed={DASHBOARD_CONFIG_PATH}");
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=.git/HEAD");
-    println!("cargo:rerun-if-changed=.git/refs/heads");
+    emit_git_rerun_triggers();
     println!("cargo:rerun-if-env-changed=BITLOOPS_BUILD_VERSION");
     println!("cargo:rerun-if-env-changed=BITLOOPS_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=BITLOOPS_BUILD_TARGET");

@@ -34,6 +34,42 @@ impl SqliteInteractionSpool {
         Ok(())
     }
 
+    /// Resolve the canonical `agent_type` for a turn or event row.
+    fn canonical_agent_type_for_session(
+        &self,
+        conn: &rusqlite::Connection,
+        session_id: &str,
+        inbound_agent_type: &str,
+        row_id: &str,
+        kind: &str,
+    ) -> Result<String> {
+        let session_agent_type: Option<String> = conn
+            .query_row(
+                "SELECT agent_type FROM interaction_sessions
+                 WHERE repo_id = ?1 AND session_id = ?2",
+                rusqlite::params![self.repo_id, session_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .filter(|value| !value.trim().is_empty());
+
+        if let Some(session_value) = session_agent_type.as_deref()
+            && !inbound_agent_type.is_empty()
+            && inbound_agent_type != session_value
+        {
+            log::debug!(
+                "agent_type mismatch on interaction {kind} {row_id}: inbound={inbound:?}, \
+                 session={session:?} — using session value",
+                kind = kind,
+                row_id = row_id,
+                inbound = inbound_agent_type,
+                session = session_value,
+            );
+        }
+
+        Ok(session_agent_type.unwrap_or_else(|| inbound_agent_type.to_string()))
+    }
+
     fn upsert_local_session(
         &self,
         conn: &rusqlite::Connection,
@@ -71,9 +107,12 @@ impl SqliteInteractionSpool {
                     WHEN excluded.actor_source = '' THEN interaction_sessions.actor_source
                     ELSE excluded.actor_source
                 END,
+                -- agent_type is sticky: once set on a session, later upserts cannot
+                -- overwrite it.
                 agent_type = CASE
-                    WHEN excluded.agent_type = '' THEN interaction_sessions.agent_type
-                    ELSE excluded.agent_type
+                    WHEN interaction_sessions.agent_type <> '' THEN interaction_sessions.agent_type
+                    WHEN excluded.agent_type <> ''            THEN excluded.agent_type
+                    ELSE interaction_sessions.agent_type
                 END,
                 model = CASE
                     WHEN excluded.model = '' THEN interaction_sessions.model
@@ -140,6 +179,16 @@ impl SqliteInteractionSpool {
 
     fn upsert_local_turn(&self, conn: &rusqlite::Connection, turn: &InteractionTurn) -> Result<()> {
         super::ensure_repo_id(&self.repo_id, &turn.repo_id, "interaction turn")?;
+
+        // Invariant: turn.agent_type must equal its parent session's agent_type.
+        let canonical_agent_type = self.canonical_agent_type_for_session(
+            conn,
+            &turn.session_id,
+            &turn.agent_type,
+            &turn.turn_id,
+            "turn",
+        )?;
+
         let usage = turn.token_usage.clone().unwrap_or_default();
         let has_token_usage = i64::from(turn.token_usage.is_some());
         let files_modified =
@@ -266,7 +315,7 @@ impl SqliteInteractionSpool {
                 turn.actor_source,
                 i64::from(turn.turn_number),
                 turn.prompt,
-                turn.agent_type,
+                canonical_agent_type,
                 turn.model,
                 turn.started_at,
                 turn.ended_at,
@@ -302,6 +351,16 @@ impl SqliteInteractionSpool {
         event: &InteractionEvent,
     ) -> Result<()> {
         super::ensure_repo_id(&self.repo_id, &event.repo_id, "interaction event")?;
+
+        // Invariant: event.agent_type must equal its parent session's agent_type.
+        let canonical_agent_type = self.canonical_agent_type_for_session(
+            conn,
+            &event.session_id,
+            &event.agent_type,
+            &event.event_id,
+            "event",
+        )?;
+
         let payload = serde_json::to_string(&event.payload).context("serialising event payload")?;
         conn.execute(
             "INSERT OR IGNORE INTO interaction_events (
@@ -323,7 +382,7 @@ impl SqliteInteractionSpool {
                 event.event_time,
                 event.source,
                 event.sequence_number,
-                event.agent_type,
+                canonical_agent_type,
                 event.model,
                 event.tool_use_id,
                 event.tool_kind,

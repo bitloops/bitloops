@@ -538,6 +538,28 @@ pub fn run_testlens_ingest_coverage(world: &mut QatWorld, repo_name: &str) -> Re
     Ok(())
 }
 
+pub fn run_testlens_ingest_current_coverage(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let tool = if world.repo_dir().join("Cargo.toml").exists() {
+        "cargo-test"
+    } else {
+        "jest"
+    };
+    run_testlens_command_strict(
+        world,
+        &[
+            "devql",
+            "test-harness",
+            "ingest-coverage",
+            "--lcov",
+            "coverage/lcov.info",
+            "--tool",
+            tool,
+        ],
+        "bitloops devql test-harness ingest-coverage",
+    )
+}
+
 fn run_testlens_command_strict(world: &mut QatWorld, args: &[&str], label: &str) -> Result<()> {
     let output = run_command_capture(world, label, build_bitloops_command(world, args)?)
         .with_context(|| format!("running {label}"))?;

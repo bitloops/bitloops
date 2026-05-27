@@ -1364,14 +1364,6 @@ pub(super) fn configure_graphql_semantic_query_runtime(repo_root: &Path) {
                     "sqlite_path": sqlite_path.to_string_lossy()
                 }
             },
-            "semantic_clones": {
-                "summary_mode": "off",
-                "embedding_mode": "deterministic",
-                "inference": {
-                    "code_embeddings": "semantic_query_test",
-                    "summary_embeddings": "semantic_query_test"
-                }
-            },
             "inference": {
                 "runtimes": {
                     "bitloops_local_embeddings": {
@@ -1392,6 +1384,20 @@ pub(super) fn configure_graphql_semantic_query_runtime(repo_root: &Path) {
             }
         }),
     );
+    crate::config::set_repo_semantic_embedding_policy(
+        &crate::config::settings::settings_local_path(repo_root),
+        &crate::config::RepoSemanticEmbeddingPolicy {
+            present: true,
+            summary_mode: Some(crate::config::SemanticSummaryMode::Off),
+            embedding_mode: Some(crate::config::SemanticCloneEmbeddingMode::Deterministic),
+            inference: crate::config::SemanticClonesInferenceBindings {
+                summary_generation: None,
+                code_embeddings: Some("semantic_query_test".to_string()),
+                summary_embeddings: Some("semantic_query_test".to_string()),
+            },
+        },
+    )
+    .expect("write GraphQL semantic query repo policy");
 }
 
 pub(super) fn seed_graphql_same_file_method_clone_data(repo_root: &Path) {

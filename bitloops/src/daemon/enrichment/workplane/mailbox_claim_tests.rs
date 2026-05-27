@@ -45,11 +45,6 @@ done
         format!(
             r#"[semantic_clones]
 
-[semantic_clones.inference]
-summary_generation = "summary_remote"
-code_embeddings = "code_remote"
-summary_embeddings = "summary_embed_remote"
-
 [inference.profiles.summary_remote]
 task = "text_generation"
 driver = "openai_chat_completions"
@@ -78,6 +73,20 @@ model = "summary"
         ),
     )
     .expect("write mailbox claim test config");
+    crate::config::set_repo_semantic_embedding_policy(
+        &crate::config::settings::settings_local_path(&repo_root),
+        &crate::config::RepoSemanticEmbeddingPolicy {
+            present: true,
+            summary_mode: Some(crate::config::SemanticSummaryMode::Auto),
+            embedding_mode: Some(crate::config::SemanticCloneEmbeddingMode::SemanticAwareOnce),
+            inference: crate::config::SemanticClonesInferenceBindings {
+                summary_generation: Some("summary_remote".to_string()),
+                code_embeddings: Some("code_remote".to_string()),
+                summary_embeddings: Some("summary_embed_remote".to_string()),
+            },
+        },
+    )
+    .expect("write mailbox claim repo policy");
 
     let repo_store =
         RepoSqliteRuntimeStore::open_for_roots_with_repo_id(&config_root, &repo_root, "repo-1")

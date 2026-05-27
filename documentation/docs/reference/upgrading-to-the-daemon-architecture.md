@@ -62,10 +62,10 @@ Default path categories now follow platform app directories:
 1. Move daemon settings, store paths, provider credentials, and dashboard defaults into the global daemon config.
 2. Move repo capture policy into `.bitloops.toml`.
 3. Move local repo overrides into `.bitloops.local.toml`.
-4. Run `bitloops start` interactively on each machine, or `bitloops start --create-default-config --telemetry` in non-interactive setups, to create the default daemon config and default local store files.
+4. Run `bitloops configure --web` interactively on each machine, or use the installer `--default-config` flow in non-interactive setups, to create the default daemon config and default local store files.
 5. If you use an explicit repo-scoped or test config, run `bitloops start --config /path/to/config.toml --bootstrap-local-stores` to create the matching local file-backed stores before the first start.
-6. Answer the telemetry prompt during that first `start`, or pass an explicit telemetry flag.
-7. Run `bitloops init --sync=true` or `bitloops init --sync=false` in each repo or subproject to create `.bitloops.local.toml` and install hooks. Use `bitloops init --install-default-daemon` if you want init to bootstrap the default daemon service first; when embeddings are not already configured, that path now asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now.
+6. Configure telemetry in the daemon configuration flow.
+7. Run `bitloops init --sync=true` or `bitloops init --sync=false` in each repo or subproject to create `.bitloops.local.toml` and install hooks.
 8. Use `bitloops enable` and `bitloops disable` to manage `Capture` and `DevQL Guidance` in project policy. Pass `--capture` when you specifically mean capture state, pass `--devql-guidance` when you specifically mean the repo-local DevQL guidance surface, or use the interactive picker in a TTY when you omit both flags. Use `bitloops enable --capture --install-embeddings` or `bitloops daemon enable --install-embeddings` when you also want the default local embeddings profile set up in the effective daemon config.
 9. Use `bitloops devql tasks enqueue --kind ingest` for checkpoint/history ingestion, and `bitloops devql tasks enqueue --kind sync --status` when you want to queue and follow a current-state reconciliation.
 10. Use `bitloops uninstall --full` if you need to clear the new platform-directory installation completely.

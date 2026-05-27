@@ -124,6 +124,9 @@ fn map_bundle_error(error: BundleError) -> ApiError {
             "no_compatible_version",
             "no compatible dashboard bundle version is available for this CLI version",
         ),
+        BundleError::BundleDownloadNotFound(message) => {
+            ApiError::with_code(StatusCode::BAD_GATEWAY, "bundle_download_failed", message)
+        }
         BundleError::BundleDownloadFailed(message) => {
             ApiError::with_code(StatusCode::BAD_GATEWAY, "bundle_download_failed", message)
         }
@@ -148,6 +151,7 @@ fn bundle_error_code(error: &BundleError) -> &'static str {
         BundleError::ManifestFetchFailed(_) => "manifest_fetch_failed",
         BundleError::ManifestParseFailed(_) => "internal",
         BundleError::NoCompatibleVersion => "no_compatible_version",
+        BundleError::BundleDownloadNotFound(_) => "bundle_download_failed",
         BundleError::BundleDownloadFailed(_) => "bundle_download_failed",
         BundleError::ChecksumMismatch => "checksum_mismatch",
         BundleError::BundleInstallFailed(_) => "bundle_install_failed",

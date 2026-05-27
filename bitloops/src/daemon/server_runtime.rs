@@ -45,6 +45,8 @@ pub(super) async fn run_server(
     options: RunServerOptions<'_>,
 ) -> Result<()> {
     let _config_override = DaemonConfigPathOverrideGuard::install(&daemon_config.config_path);
+    let _config_reload_watcher =
+        super::config_reload::start_daemon_config_reload_watcher(&daemon_config.config_path)?;
     log::debug!(
         "daemon boot: mode={} config={} host={:?} port={}",
         options.mode,
@@ -201,14 +203,17 @@ pub(super) async fn ensure_service_managed_repo_runtime(
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
-    command.spawn().with_context(|| {
+    let child = command.spawn().with_context(|| {
         format!(
             "spawning service-managed Bitloops daemon for {}",
             daemon_config.config_path.display()
         )
     })?;
+    let child_pid = child.id();
+    log::debug!("spawned service-managed daemon pid={child_pid}");
 
-    wait_until_ready(READY_TIMEOUT).await
+    super::lifecycle::wait_until_ready_for_spawned_daemon(child, "service-managed", READY_TIMEOUT)
+        .await
 }
 
 pub(super) fn stop_service_managed_repo_runtime() -> Result<()> {

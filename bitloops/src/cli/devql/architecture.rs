@@ -52,8 +52,8 @@ use roles_seed::{
 };
 #[cfg(test)]
 use roles_seed::{
-    SeedRuleActivationSummary, SeedSummary, architecture_seed_request_diagnostics,
-    ensure_seed_alias, persist_seeded_taxonomy,
+    SeedRecoverySummary, SeedRuleActivationSummary, SeedSummary,
+    architecture_seed_request_diagnostics, ensure_seed_alias, persist_seeded_taxonomy,
 };
 #[cfg(test)]
 use support::sql_text;
@@ -509,6 +509,7 @@ async fn run_architecture_roles_seed_command(
     let rule_activation = if args.activate_rules {
         let activation = activate_seeded_draft_rules(
             context.storage.as_ref(),
+            context.relational.as_ref(),
             &scope.repo.repo_id,
             &seed.profile_name,
             cli_provenance("seed_activate_rules"),
@@ -574,6 +575,7 @@ async fn run_architecture_roles_bootstrap_command(
         .await?;
         let rule_activation = activate_seeded_draft_rules(
             context.storage.as_ref(),
+            context.relational.as_ref(),
             &scope.repo.repo_id,
             &profile_name,
             cli_provenance("bootstrap_skip_seed_activate_rules"),
@@ -633,14 +635,6 @@ pub(super) fn format_roles_classify_output(
     let mut lines = vec![
         "architecture roles classified".to_string(),
         format!(
-            "roles: full_reconcile={} affected_paths={} refreshed_paths={} removed_paths={} skipped_unchanged_paths={}",
-            output.roles.full_reconcile,
-            output.roles.affected_paths,
-            output.roles.refreshed_paths,
-            output.roles.removed_paths,
-            output.roles.skipped_unchanged_paths,
-        ),
-        format!(
             "facts: written={} deleted={}",
             output.roles.facts_written, output.roles.facts_deleted
         ),
@@ -655,6 +649,34 @@ pub(super) fn format_roles_classify_output(
             output.roles.assignment_history_rows,
         ),
         format!(
+            "roles: full_reconcile={} affected_paths={} refreshed_paths={} removed_paths={} skipped_unchanged_paths={}",
+            output.roles.full_reconcile,
+            output.roles.affected_paths,
+            output.roles.refreshed_paths,
+            output.roles.removed_paths,
+            output.roles.skipped_unchanged_paths,
+        ),
+        format!(
+            "coverage: targets={} active={} review={} conflict={} unknown={} deterministic_ratio={:.3}",
+            output.roles.target_count,
+            output.roles.deterministic_active_targets,
+            output.roles.deterministic_needs_review_targets,
+            output.roles.deterministic_conflict_targets,
+            output.roles.deterministic_unassigned_targets,
+            output.roles.deterministic_coverage_ratio,
+        ),
+        format!(
+            "unknown policy: total={} suppressed_non_role={} rule_mining_eligible={} adjudication_escalated={}",
+            output.roles.unknown_targets_total,
+            output.roles.unknown_targets_suppressed_non_role,
+            output.roles.unknown_targets_rule_mining_eligible,
+            output.roles.unknown_targets_adjudication_escalated,
+        ),
+        format!(
+            "rule mining: clusters={} representative_targets={}",
+            output.roles.role_mining_clusters, output.roles.role_mining_representative_targets,
+        ),
+        format!(
             "architecture embeddings: selected={} enqueued={} deduped={}",
             output.architecture_embedding_selected,
             output.architecture_embedding_enqueued,
@@ -666,6 +688,14 @@ pub(super) fn format_roles_classify_output(
             output.role_adjudication_selected,
             output.role_adjudication_enqueued,
             output.role_adjudication_deduped,
+        ),
+        format!(
+            "adjudication reasons: unknown={} high_impact={} low_confidence={} conflict={} repeated_suppressed={}",
+            output.roles.unknown_adjudication_candidates,
+            output.roles.high_impact_adjudication_candidates,
+            output.roles.low_confidence_adjudication_candidates,
+            output.roles.conflict_adjudication_candidates,
+            output.roles.repeated_adjudication_suppressed,
         ),
     ];
     lines.extend(

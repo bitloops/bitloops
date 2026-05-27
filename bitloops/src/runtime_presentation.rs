@@ -110,6 +110,7 @@ pub(crate) fn sync_phase_label(phase: &str) -> &'static str {
         "removing_paths" => "Removing stale files",
         "extracting_paths" => "Extracting symbols",
         "materialising_paths" => "Writing the latest code graph",
+        "reconciling_edges" => "Reconciling edges",
         "running_gc" => "Cleaning caches",
         "complete" => "Complete",
         "failed" => "Failed",

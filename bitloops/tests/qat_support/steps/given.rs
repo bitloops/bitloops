@@ -31,6 +31,30 @@ pub(super) fn given_start_daemon(
     })
 }
 
+pub(super) fn given_installer_default_config_configure_flow(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "I run the installer default-config configure flow",
+            helpers::run_installer_default_config_configure_flow(world),
+        );
+    })
+}
+
+pub(super) fn given_configure_default_config(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "I run bitloops configure --default-config",
+            helpers::run_configure_default_config(world),
+        );
+    })
+}
+
 pub(super) fn given_init_commit(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -1088,6 +1112,19 @@ pub(super) fn given_testlens_ingest_coverage(
         run_step(
             "I run TestHarness ingest-coverage",
             helpers::run_testlens_ingest_coverage(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_testlens_ingest_current_coverage(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run TestHarness ingest-coverage for current workspace",
+            helpers::run_testlens_ingest_current_coverage(world, &repo_name),
         );
     })
 }

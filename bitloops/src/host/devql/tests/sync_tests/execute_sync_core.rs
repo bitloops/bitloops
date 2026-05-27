@@ -336,6 +336,36 @@ async fn sync_validate_emits_progress_before_final_validation_result() {
 }
 
 #[tokio::test]
+async fn full_sync_emits_reconciling_edges_progress_after_materialization() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let observer = CapturingSyncObserver::new();
+
+    let summary = crate::host::devql::execute_sync_with_observer(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+        Some(&observer),
+    )
+    .await
+    .expect("execute full sync with progress observer");
+
+    assert!(summary.success, "full sync should report success");
+
+    let phases = observer.phases();
+    assert!(
+        phases.iter().any(|phase| phase == "materialising_paths"),
+        "sync should still report materialization progress, got {phases:?}"
+    );
+    assert!(
+        phases.iter().any(|phase| phase == "reconciling_edges"),
+        "sync should report current-edge reconcile progress, got {phases:?}"
+    );
+}
+
+#[tokio::test]
 async fn auto_sync_uses_full_reason_and_git_backed_retention_for_clean_head_files() {
     let repo = seed_full_sync_repo();
     let cfg = sync_test_cfg_for_repo(repo.path());
