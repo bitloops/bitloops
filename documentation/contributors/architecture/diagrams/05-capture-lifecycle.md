@@ -26,10 +26,10 @@ sequenceDiagram
     Strategy->>Runtime: persist checkpoint metadata
     Lifecycle->>Repo: append interaction events
 
-    Note over Agent,Repo: Supported terminal turn-end hooks use the durable handoff; all other hooks stay synchronous.
+    Note over Agent,Repo: The hook process captures only boundary state that would be unsafe to compute later. Heavy lifecycle work runs in the daemon after FIFO claim.
 
-    Agent->>Hooks: stop / after-agent / agent-stop / turn-end
-    Hooks->>Runtime: enqueue tiny raw Stop lifecycle spool job
+    Agent->>Hooks: stop / session-end / compaction-style tail hook / observation hook
+    Hooks->>Runtime: enqueue raw lifecycle job plus optional boundary snapshot
     alt SQLite enqueue accepted within bounded timeout
         Runtime-->>Hooks: job accepted
         Hooks-->>Agent: return quickly
@@ -38,12 +38,12 @@ sequenceDiagram
         Hooks--xAgent: fail quickly and log/surface error
     end
 
-    Note over Hooks,Runtime: Hook-side Stop handling does not read transcripts, update interaction projections, flush canonical interaction storage, or create checkpoint steps.
+    Note over Hooks,Runtime: Hook-side spooled lifecycle handling does not read transcripts, update interaction projections, flush canonical interaction storage, or create checkpoint steps.
 
-    Daemon->>Runtime: claim lifecycle Stop jobs
-    Runtime-->>Daemon: raw Stop payload plus repo root
+    Daemon->>Runtime: claim lifecycle spool jobs in strict FIFO order
+    Runtime-->>Daemon: raw lifecycle payload, repo root, and optional boundary snapshot
     Daemon->>Adapters: replay raw payload with explicit repo-root context
-    Adapters->>Lifecycle: normalize agent-specific terminal payload
+    Adapters->>Lifecycle: normalize agent-specific lifecycle payload
     Lifecycle->>Runtime: persist live session state
     Lifecycle->>Strategy: save step or task step
     Strategy->>Git: snapshot temporary checkpoint state
@@ -63,13 +63,15 @@ sequenceDiagram
 
 - Capture is about provenance and checkpoint formation.
 - The strategy decides how session turns map to temporary or committed checkpoints.
-- Supported terminal turn-end hooks record only a tiny raw payload as a lifecycle spool job in repo runtime SQLite, then return quickly. This currently covers Claude Code `stop`, Codex `stop`, Gemini `after-agent`, Cursor `stop`, Copilot `agent-stop`, and OpenCode `turn-end`.
-- Stop hook enqueue is SQLite-only. If runtime SQLite cannot accept the tiny enqueue within the bounded timeout, the hook fails quickly and logs or surfaces the enqueue error.
-- Stop hook-side code must not read transcripts, update interaction projections, flush canonical interaction storage, or create checkpoint steps.
-- The daemon claims lifecycle Stop jobs from runtime SQLite and replays raw payloads through the existing lifecycle adapters using explicit repo-root context.
+- Lifecycle-producing agent hooks enqueue through `agent_lifecycle_spool_jobs` unless they need synchronous agent-visible behavior.
+- Lifecycle hook enqueue is SQLite-only. If runtime SQLite cannot accept the tiny enqueue within the bounded timeout, the hook fails quickly and logs or surfaces the enqueue error.
+- Spooled hook-side code must not read transcripts, update interaction projections, flush canonical interaction storage, or create checkpoint steps.
+- The daemon processes one lifecycle job at a time in strict FIFO order and replays raw payloads through the existing lifecycle adapters using explicit repo-root context.
+- Boundary snapshots are optional and depend on dispatch mode: none, pre-boundary, workspace, or workspace plus branch.
+- No-op pass-through hooks are not enqueued.
 - Agent-specific parsing stays in each agent adapter layer.
-- Only terminal turn-end hooks use this handoff; session-start, session-end, prompt, tool, compaction, subagent, and Git hooks remain synchronous.
 - Git lifecycle callbacks can queue repo-local DevQL follow-up work, but that does not make sync part of the capture flow.
+- Git hooks remain separate from agent lifecycle capture.
 
 ## Glossary
 
@@ -85,7 +87,7 @@ sequenceDiagram
 | Shared lifecycle | The common event model Bitloops uses after normalizing different agent hook formats. |
 | Native hook payload | The original event data sent by a specific agent or by Git. |
 | Repo runtime SQLite | A small local SQLite database for operational state about one repo. |
-| Lifecycle spool job | A tiny durable runtime SQLite job that lets the daemon finish Stop lifecycle work outside the hook process. |
+| Lifecycle spool job | A tiny durable runtime SQLite job that lets the daemon finish selected lifecycle work outside the hook process. |
 | Daemon lifecycle worker | Background daemon worker that claims lifecycle spool jobs and replays them through the normal lifecycle path. |
 | Checkpoint strategy | The policy that decides how session activity becomes temporary or committed checkpoints. |
 | Temporary checkpoint | A checkpoint for work that is not necessarily tied to a final Git commit yet. |

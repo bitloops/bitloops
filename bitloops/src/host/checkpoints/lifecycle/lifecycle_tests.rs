@@ -239,6 +239,272 @@ fn git_output(repo_root: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+#[test]
+fn lifecycle_boundary_snapshot_captures_pre_turn_state() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    setup_git_repo(&dir);
+    std::fs::write(dir.path().join("scratch.txt"), "pre-existing")?;
+    std::fs::create_dir_all(dir.path().join(".codex"))?;
+    std::fs::write(dir.path().join(".codex/hooks.json"), "{}")?;
+
+    let snapshot = super::git_workspace::capture_pre_boundary_snapshot(dir.path(), Some(17));
+
+    assert_eq!(snapshot.pre_untracked_files, vec!["scratch.txt"]);
+    assert_eq!(snapshot.transcript_offset, Some(17));
+    assert!(snapshot.workspace.is_none());
+    assert!(
+        super::git_workspace::workspace_changes_from_boundary_snapshot(dir.path(), &snapshot, &[])
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn lifecycle_boundary_snapshot_captures_workspace_and_branch() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    setup_git_repo(&dir);
+    git_output(dir.path(), &["checkout", "-b", "feature/async-hooks"]);
+    std::fs::write(dir.path().join("README.md"), "changed")?;
+    std::fs::write(dir.path().join("new.txt"), "new")?;
+
+    let snapshot = super::git_workspace::capture_workspace_and_branch_snapshot(dir.path());
+
+    assert_eq!(
+        snapshot.workspace.as_ref().unwrap().modified_files,
+        vec!["README.md"]
+    );
+    assert_eq!(
+        snapshot.workspace.as_ref().unwrap().new_files,
+        vec!["new.txt"]
+    );
+    assert_eq!(snapshot.branch_name.as_deref(), Some("feature/async-hooks"));
+    assert_eq!(snapshot.is_default_branch, Some(false));
+
+    let mut workspace_only = super::git_workspace::capture_workspace_boundary_snapshot(dir.path());
+    workspace_only.pre_untracked_files = vec!["new.txt".to_string()];
+    let changes = super::git_workspace::workspace_changes_from_boundary_snapshot(
+        dir.path(),
+        &workspace_only,
+        &[],
+    )
+    .expect("workspace snapshot");
+    assert_eq!(changes.0, vec!["README.md"]);
+    assert!(changes.1.is_empty());
+    Ok(())
+}
+
+#[test]
+fn lifecycle_boundary_snapshot_keeps_unknown_branch_unknown() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    let snapshot = super::git_workspace::capture_workspace_and_branch_snapshot(dir.path());
+
+    assert_eq!(snapshot.branch_name, None);
+    assert_eq!(snapshot.is_default_branch, None);
+    Ok(())
+}
+
+#[test]
+fn turn_start_uses_boundary_snapshot_pre_state() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    setup_git_repo(&dir);
+    let transcript_path = dir.path().join("session-1.jsonl");
+    std::fs::write(&transcript_path, "{}\n")?;
+    let event = LifecycleEvent {
+        event_type: Some(LifecycleEventType::TurnStart),
+        session_id: "session-1".to_string(),
+        session_ref: transcript_path.to_string_lossy().to_string(),
+        prompt: "hello".to_string(),
+        model: "test-model".to_string(),
+        ..LifecycleEvent::default()
+    };
+    let snapshot = super::spool::LifecycleBoundarySnapshot {
+        pre_untracked_files: vec!["already-there.txt".to_string()],
+        transcript_offset: Some(123),
+        ..Default::default()
+    };
+
+    with_process_state(Some(dir.path()), &[], || -> anyhow::Result<()> {
+        super::handlers_session::handle_lifecycle_turn_start_for_repo_with_boundary_snapshot(
+            dir.path(),
+            &ClaudeCodeLifecycleAdapter,
+            &event,
+            Some(&snapshot),
+        )?;
+
+        let backend = create_session_backend_or_local(dir.path());
+        let pre_prompt = backend
+            .load_pre_prompt("session-1")?
+            .expect("pre-prompt should exist");
+        assert_eq!(pre_prompt.untracked_files, vec!["already-there.txt"]);
+        assert_eq!(pre_prompt.transcript_offset, 123);
+        Ok(())
+    })?;
+
+    Ok(())
+}
+
+#[test]
+fn turn_start_uses_empty_boundary_snapshot_pre_state() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    setup_git_repo(&dir);
+    let transcript_path = dir.path().join("session-1.jsonl");
+    std::fs::write(&transcript_path, "{}\n")?;
+    std::fs::write(dir.path().join("daemon-time.txt"), "created after hook")?;
+    let event = LifecycleEvent {
+        event_type: Some(LifecycleEventType::TurnStart),
+        session_id: "session-1".to_string(),
+        session_ref: transcript_path.to_string_lossy().to_string(),
+        prompt: "hello".to_string(),
+        model: "test-model".to_string(),
+        ..LifecycleEvent::default()
+    };
+    let snapshot = super::spool::LifecycleBoundarySnapshot {
+        pre_untracked_files: Vec::new(),
+        transcript_offset: Some(0),
+        ..Default::default()
+    };
+
+    with_process_state(Some(dir.path()), &[], || -> anyhow::Result<()> {
+        super::handlers_session::handle_lifecycle_turn_start_for_repo_with_boundary_snapshot(
+            dir.path(),
+            &ClaudeCodeLifecycleAdapter,
+            &event,
+            Some(&snapshot),
+        )?;
+
+        let backend = create_session_backend_or_local(dir.path());
+        let pre_prompt = backend
+            .load_pre_prompt("session-1")?
+            .expect("pre-prompt should exist");
+        assert!(pre_prompt.untracked_files.is_empty());
+        Ok(())
+    })?;
+
+    Ok(())
+}
+
+#[test]
+fn subagent_start_uses_empty_boundary_snapshot_pre_state() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    setup_git_repo(&dir);
+    let transcript_path = dir.path().join("session-1.jsonl");
+    std::fs::write(&transcript_path, "{}\n")?;
+    std::fs::write(dir.path().join("daemon-time.txt"), "created after hook")?;
+    let snapshot = super::spool::LifecycleBoundarySnapshot {
+        pre_untracked_files: Vec::new(),
+        ..Default::default()
+    };
+    let event = LifecycleEvent {
+        event_type: Some(LifecycleEventType::SubagentStart),
+        session_id: "session-1".to_string(),
+        session_ref: transcript_path.to_string_lossy().to_string(),
+        tool_use_id: "toolu_1".to_string(),
+        model: "test-model".to_string(),
+        ..Default::default()
+    };
+
+    with_process_state(Some(dir.path()), &[], || -> anyhow::Result<()> {
+        super::handlers_tail::handle_lifecycle_subagent_start_for_repo_with_boundary_snapshot(
+            dir.path(),
+            &ClaudeCodeLifecycleAdapter,
+            &event,
+            Some(&snapshot),
+        )?;
+
+        let backend = create_session_backend_or_local(dir.path());
+        let marker = backend
+            .load_pre_task_marker("toolu_1")?
+            .expect("pre-task marker should exist");
+        assert!(marker.untracked_files.is_empty());
+        Ok(())
+    })?;
+
+    Ok(())
+}
+
+#[test]
+fn subagent_end_uses_boundary_workspace_snapshot() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    setup_git_repo(&dir);
+    let transcript_path = dir.path().join("session-1.jsonl");
+    std::fs::write(
+        &transcript_path,
+        r#"{"type":"user","message":{"content":"work"}}"#,
+    )?;
+    std::fs::write(dir.path().join("README.md"), "changed")?;
+
+    with_process_state(Some(dir.path()), &[], || -> anyhow::Result<()> {
+        let backend = create_session_backend_or_local(dir.path());
+        backend.create_pre_task_marker(
+            &crate::host::checkpoints::session::state::PreTaskState {
+                tool_use_id: "toolu_1".to_string(),
+                session_id: "session-1".to_string(),
+                timestamp: "2026-05-26T00:00:00Z".to_string(),
+                untracked_files: Vec::new(),
+            },
+        )?;
+
+        let snapshot = super::spool::LifecycleBoundarySnapshot {
+            workspace: Some(super::spool::LifecycleWorkspaceSnapshot {
+                modified_files: vec!["README.md".to_string()],
+                new_files: Vec::new(),
+                deleted_files: Vec::new(),
+            }),
+            ..Default::default()
+        };
+        let event = LifecycleEvent {
+            event_type: Some(LifecycleEventType::SubagentEnd),
+            session_id: "session-1".to_string(),
+            session_ref: transcript_path.to_string_lossy().to_string(),
+            tool_use_id: "toolu_1".to_string(),
+            subagent_id: "agent-1".to_string(),
+            model: "test-model".to_string(),
+            ..LifecycleEvent::default()
+        };
+
+        super::handlers_tail::handle_lifecycle_subagent_end_for_repo_with_boundary_snapshot(
+            dir.path(),
+            &ClaudeCodeLifecycleAdapter,
+            &event,
+            Some(&snapshot),
+        )?;
+
+        let artefacts = crate::host::runtime_store::RepoSqliteRuntimeStore::open(dir.path())?
+            .load_task_checkpoint_artefacts("session-1", "toolu_1")?;
+        assert!(artefacts.iter().any(|artefact| {
+            artefact.kind == crate::host::runtime_store::RuntimeMetadataBlobType::TaskCheckpoint
+        }));
+        Ok(())
+    })?;
+
+    Ok(())
+}
+
+#[test]
+fn todo_checkpoint_uses_boundary_branch_decision() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    setup_git_repo(&dir);
+    let snapshot = super::spool::LifecycleBoundarySnapshot {
+        workspace: Some(super::spool::LifecycleWorkspaceSnapshot {
+            modified_files: vec!["README.md".to_string()],
+            new_files: Vec::new(),
+            deleted_files: Vec::new(),
+        }),
+        branch_name: Some("feature/not-main".to_string()),
+        is_default_branch: Some(false),
+        ..Default::default()
+    };
+
+    let should_skip = super::handlers_tail::should_skip_on_default_branch_for_snapshot(
+        dir.path(),
+        Some(&snapshot),
+    );
+
+    assert_eq!(should_skip, (false, "feature/not-main".to_string()));
+    Ok(())
+}
+
 // CLI-866
 #[test]
 fn test_dispatch_lifecycle_event_nil_agent() {
@@ -678,7 +944,7 @@ fn test_handle_lifecycle_turn_end_uses_hook_workspace_snapshot_after_commit() {
         .unwrap();
 
     std::fs::write(dir.path().join("README.md"), "changed by agent\n").unwrap();
-    let workspace_snapshot = super::capture_workspace_snapshot_for_lifecycle_stop(dir.path());
+    let workspace_snapshot = super::capture_workspace_snapshot_for_turn_end(dir.path());
     assert_eq!(workspace_snapshot.modified_files, vec!["README.md"]);
 
     git_output(dir.path(), &["add", "README.md"]);

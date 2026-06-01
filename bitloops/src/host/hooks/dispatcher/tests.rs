@@ -246,86 +246,255 @@ fn agent_hooks_suppressed_env_rejects_false_values() {
 }
 
 #[test]
-fn supported_agent_terminal_turn_end_hooks_use_lifecycle_spool() {
-    assert!(should_spool_lifecycle_stop_hook(
-        AGENT_NAME_CODEX,
-        CODEX_HOOK_STOP
-    ));
-    assert!(should_spool_lifecycle_stop_hook(
-        AGENT_NAME_CLAUDE_CODE,
-        CLAUDE_HOOK_STOP
-    ));
-    assert!(should_spool_lifecycle_stop_hook(
-        AGENT_NAME_GEMINI,
-        crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_AGENT
-    ));
-    assert!(should_spool_lifecycle_stop_hook(
-        AGENT_NAME_CURSOR,
-        crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP
-    ));
-    assert!(should_spool_lifecycle_stop_hook(
-        AGENT_NAME_COPILOT,
-        crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP
-    ));
-    assert!(should_spool_lifecycle_stop_hook(
-        AGENT_NAME_OPEN_CODE,
-        crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END
-    ));
-    assert!(!should_spool_lifecycle_stop_hook(
-        AGENT_NAME_CODEX,
-        crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_USER_PROMPT_SUBMIT
-    ));
-}
+fn lifecycle_hook_dispatch_modes_cover_async_target_hooks() {
+    use LifecycleHookDispatchMode::*;
 
-#[test]
-fn non_stop_hooks_remain_synchronous() {
     let cases = [
         (
-            AGENT_NAME_CODEX,
-            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_SESSION_START,
+            AGENT_NAME_CLAUDE_CODE,
+            CLAUDE_HOOK_SESSION_START,
+            AsyncNoSnapshot,
         ),
         (
-            AGENT_NAME_CODEX,
-            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_USER_PROMPT_SUBMIT,
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_USER_PROMPT_SUBMIT,
+            AsyncPreBoundarySnapshot,
         ),
         (
-            AGENT_NAME_CODEX,
-            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_PRE_TOOL_USE,
-        ),
-        (
-            AGENT_NAME_CODEX,
-            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_POST_TOOL_USE,
-        ),
-        (
-            AGENT_NAME_CURSOR,
-            crate::adapters::agents::cursor::lifecycle::HOOK_NAME_AFTER_SHELL_EXECUTION,
-        ),
-        (
-            AGENT_NAME_CURSOR,
-            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SESSION_END,
-        ),
-        (
-            AGENT_NAME_OPEN_CODE,
-            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_COMPACTION,
-        ),
-        (
-            AGENT_NAME_GEMINI,
-            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_SESSION_END,
-        ),
-        (
-            AGENT_NAME_COPILOT,
-            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_SESSION_END,
+            AGENT_NAME_CLAUDE_CODE,
+            CLAUDE_HOOK_STOP,
+            AsyncWorkspaceSnapshot,
         ),
         (
             AGENT_NAME_CLAUDE_CODE,
             crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_SESSION_END,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_PRE_TASK,
+            AsyncPreBoundarySnapshot,
+        ),
+        (
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_POST_TASK,
+            AsyncWorkspaceSnapshot,
+        ),
+        (
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_POST_TODO,
+            AsyncWorkspaceAndBranchSnapshot,
+        ),
+        (
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_PRE_TOOL_USE,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_CLAUDE_CODE,
+            crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_POST_TOOL_USE,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_SESSION_START,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_USER_PROMPT_SUBMIT,
+            AsyncPreBoundarySnapshot,
+        ),
+        (
+            AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_PRE_TOOL_USE,
+            AsyncPreBoundarySnapshot,
+        ),
+        (
+            AGENT_NAME_CODEX,
+            crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_POST_TOOL_USE,
+            AsyncWorkspaceSnapshot,
+        ),
+        (AGENT_NAME_CODEX, CODEX_HOOK_STOP, AsyncWorkspaceSnapshot),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_SESSION_START,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_BEFORE_AGENT,
+            AsyncPreBoundarySnapshot,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_AGENT,
+            AsyncWorkspaceSnapshot,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_SESSION_END,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_PRE_COMPRESS,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SESSION_START,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_BEFORE_SUBMIT_PROMPT,
+            AsyncPreBoundarySnapshot,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::adapters::agents::cursor::lifecycle::HOOK_NAME_BEFORE_SHELL_EXECUTION,
+            AsyncPreBoundarySnapshot,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::adapters::agents::cursor::lifecycle::HOOK_NAME_AFTER_SHELL_EXECUTION,
+            AsyncWorkspaceSnapshot,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_STOP,
+            AsyncWorkspaceSnapshot,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SESSION_END,
+            AsyncWorkspaceSnapshot,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_PRE_COMPACT,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SUBAGENT_START,
+            AsyncPreBoundarySnapshot,
+        ),
+        (
+            AGENT_NAME_CURSOR,
+            crate::host::checkpoints::lifecycle::adapters::CURSOR_HOOK_SUBAGENT_STOP,
+            AsyncWorkspaceSnapshot,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_SESSION_START,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_USER_PROMPT_SUBMITTED,
+            AsyncPreBoundarySnapshot,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_AGENT_STOP,
+            AsyncWorkspaceSnapshot,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_SESSION_END,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_SUBAGENT_STOP,
+            AsyncWorkspaceSnapshot,
+        ),
+        (
+            AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_SESSION_START,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_START,
+            AsyncPreBoundarySnapshot,
+        ),
+        (
+            AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_TURN_END,
+            AsyncWorkspaceSnapshot,
+        ),
+        (
+            AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_COMPACTION,
+            AsyncNoSnapshot,
+        ),
+        (
+            AGENT_NAME_OPEN_CODE,
+            crate::host::checkpoints::lifecycle::adapters::OPENCODE_HOOK_SESSION_END,
+            AsyncNoSnapshot,
+        ),
+    ];
+
+    for (agent, hook, expected) in cases {
+        assert_eq!(
+            lifecycle_hook_dispatch_mode(agent, hook),
+            expected,
+            "unexpected lifecycle dispatch mode for agent={agent} hook={hook}"
+        );
+    }
+}
+
+#[test]
+fn pass_through_hooks_remain_sync_noop() {
+    use LifecycleHookDispatchMode::Sync;
+
+    let cases = [
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_PRE_TOOL_USE,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_POST_TOOL_USE,
+        ),
+        (
+            AGENT_NAME_COPILOT,
+            crate::host::checkpoints::lifecycle::adapters::COPILOT_HOOK_ERROR_OCCURRED,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_BEFORE_TOOL,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_TOOL,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_BEFORE_MODEL,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_AFTER_MODEL,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_BEFORE_TOOL_SELECTION,
+        ),
+        (
+            AGENT_NAME_GEMINI,
+            crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_NOTIFICATION,
         ),
     ];
 
     for (agent, hook) in cases {
-        assert!(
-            !should_spool_lifecycle_stop_hook(agent, hook),
-            "unexpected spooling for agent={agent} hook={hook}"
+        assert_eq!(
+            lifecycle_hook_dispatch_mode(agent, hook),
+            Sync,
+            "unexpected async dispatch for pass-through agent={agent} hook={hook}"
         );
     }
 }
@@ -341,20 +510,21 @@ fn codex_stop_hook_enqueue_creates_spool_without_inline_turn() -> Result<()> {
     );
     crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
 
-    enqueue_lifecycle_stop_from_hook(
+    enqueue_lifecycle_hook_from_hook(
         repo.path(),
         AGENT_NAME_CODEX,
         CODEX_HOOK_STOP,
         r#"{"session_id":"session-1","transcript_path":"/tmp/session.jsonl"}"#,
+        LifecycleHookDispatchMode::AsyncWorkspaceSnapshot,
     )?;
 
     let conn = rusqlite::Connection::open(
         crate::config::resolve_bound_repo_runtime_db_path_for_repo(repo.path())?,
     )?;
-    let stop_jobs: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM agent_lifecycle_stop_spool_jobs",
+    let (lifecycle_jobs, snapshots): (i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COUNT(workspace_snapshot) FROM agent_lifecycle_spool_jobs",
         [],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     let turns_table_exists: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'interaction_turns'",
@@ -369,7 +539,196 @@ fn codex_stop_hook_enqueue_creates_spool_without_inline_turn() -> Result<()> {
         })?
     };
 
-    assert_eq!(stop_jobs, 1);
+    assert_eq!(lifecycle_jobs, 1);
+    assert_eq!(snapshots, 1);
     assert_eq!(turns, 0, "hook enqueue must not run turn-end inline");
+    Ok(())
+}
+
+#[test]
+fn pilot_non_turn_end_hook_enqueue_omits_workspace_snapshot() -> Result<()> {
+    let repo = tempfile::tempdir()?;
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops@example.com",
+    );
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+
+    enqueue_lifecycle_hook_from_hook(
+        repo.path(),
+        AGENT_NAME_GEMINI,
+        crate::host::checkpoints::lifecycle::adapters::GEMINI_HOOK_PRE_COMPRESS,
+        r#"{"session_id":"session-1","transcript_path":"/tmp/session.jsonl"}"#,
+        LifecycleHookDispatchMode::AsyncNoSnapshot,
+    )?;
+
+    let conn = rusqlite::Connection::open(
+        crate::config::resolve_bound_repo_runtime_db_path_for_repo(repo.path())?,
+    )?;
+    let (lifecycle_jobs, snapshots): (i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COUNT(workspace_snapshot) FROM agent_lifecycle_spool_jobs",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+
+    assert_eq!(lifecycle_jobs, 1);
+    assert_eq!(snapshots, 0);
+    Ok(())
+}
+
+#[test]
+fn observation_hook_enqueue_omits_workspace_snapshot() -> Result<()> {
+    let repo = tempfile::tempdir()?;
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops@example.com",
+    );
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+
+    enqueue_lifecycle_hook_from_hook(
+        repo.path(),
+        AGENT_NAME_CLAUDE_CODE,
+        crate::host::checkpoints::lifecycle::adapters::CLAUDE_HOOK_PRE_TOOL_USE,
+        r#"{"session_id":"session-1","transcript_path":"/tmp/session.jsonl","tool_use_id":"toolu_1","tool_name":"Bash","tool_input":{"command":"cargo check"}}"#,
+        LifecycleHookDispatchMode::AsyncNoSnapshot,
+    )?;
+
+    let conn = rusqlite::Connection::open(
+        crate::config::resolve_bound_repo_runtime_db_path_for_repo(repo.path())?,
+    )?;
+    let (lifecycle_jobs, snapshots): (i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COUNT(workspace_snapshot) FROM agent_lifecycle_spool_jobs",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+
+    assert_eq!(lifecycle_jobs, 1);
+    assert_eq!(snapshots, 0);
+    Ok(())
+}
+
+#[test]
+fn pre_boundary_hook_enqueue_persists_boundary_snapshot_without_workspace() -> Result<()> {
+    let repo = tempfile::tempdir()?;
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops@example.com",
+    );
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    std::fs::write(repo.path().join("scratch.txt"), "before")?;
+
+    enqueue_lifecycle_hook_from_hook(
+        repo.path(),
+        AGENT_NAME_CODEX,
+        crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_USER_PROMPT_SUBMIT,
+        r#"{"session_id":"session-1","transcript_path":"/tmp/session.jsonl","prompt":"hello"}"#,
+        LifecycleHookDispatchMode::AsyncPreBoundarySnapshot,
+    )?;
+
+    let conn = rusqlite::Connection::open(
+        crate::config::resolve_bound_repo_runtime_db_path_for_repo(repo.path())?,
+    )?;
+    let (workspace_snapshot, boundary_snapshot): (Option<String>, String) = conn.query_row(
+        "SELECT workspace_snapshot, boundary_snapshot FROM agent_lifecycle_spool_jobs",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let snapshot: crate::host::checkpoints::lifecycle::spool::LifecycleBoundarySnapshot =
+        serde_json::from_str(&boundary_snapshot)?;
+
+    assert!(workspace_snapshot.is_none());
+    assert_eq!(snapshot.pre_untracked_files, vec!["scratch.txt"]);
+    assert!(snapshot.workspace.is_none());
+    Ok(())
+}
+
+#[test]
+fn pre_boundary_hook_enqueue_persists_transcript_offset_when_resolved() -> Result<()> {
+    let repo = tempfile::tempdir()?;
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops@example.com",
+    );
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    let transcript_path = repo.path().join("codex-transcript.jsonl");
+    std::fs::write(&transcript_path, "first line\nsecond line\n")?;
+
+    enqueue_lifecycle_hook_from_hook(
+        repo.path(),
+        AGENT_NAME_CODEX,
+        crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_USER_PROMPT_SUBMIT,
+        &serde_json::json!({
+            "session_id": "session-1",
+            "transcript_path": transcript_path,
+            "prompt": "hello"
+        })
+        .to_string(),
+        LifecycleHookDispatchMode::AsyncPreBoundarySnapshot,
+    )?;
+
+    let conn = rusqlite::Connection::open(
+        crate::config::resolve_bound_repo_runtime_db_path_for_repo(repo.path())?,
+    )?;
+    let boundary_snapshot: String = conn.query_row(
+        "SELECT boundary_snapshot FROM agent_lifecycle_spool_jobs",
+        [],
+        |row| row.get(0),
+    )?;
+    let snapshot: crate::host::checkpoints::lifecycle::spool::LifecycleBoundarySnapshot =
+        serde_json::from_str(&boundary_snapshot)?;
+
+    assert_eq!(snapshot.transcript_offset, Some(2));
+    Ok(())
+}
+
+#[test]
+fn workspace_hook_enqueue_persists_boundary_workspace_snapshot() -> Result<()> {
+    let repo = tempfile::tempdir()?;
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops@example.com",
+    );
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    std::fs::write(repo.path().join("README.md"), "new")?;
+
+    enqueue_lifecycle_hook_from_hook(
+        repo.path(),
+        AGENT_NAME_CURSOR,
+        crate::adapters::agents::cursor::lifecycle::HOOK_NAME_AFTER_SHELL_EXECUTION,
+        r#"{"conversation_id":"session-1","transcript_path":"/tmp/session.jsonl"}"#,
+        LifecycleHookDispatchMode::AsyncWorkspaceSnapshot,
+    )?;
+
+    let conn = rusqlite::Connection::open(
+        crate::config::resolve_bound_repo_runtime_db_path_for_repo(repo.path())?,
+    )?;
+    let (workspace_snapshot, boundary_snapshot): (String, String) = conn.query_row(
+        "SELECT workspace_snapshot, boundary_snapshot FROM agent_lifecycle_spool_jobs",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let legacy_workspace: crate::host::checkpoints::lifecycle::spool::LifecycleWorkspaceSnapshot =
+        serde_json::from_str(&workspace_snapshot)?;
+    let boundary: crate::host::checkpoints::lifecycle::spool::LifecycleBoundarySnapshot =
+        serde_json::from_str(&boundary_snapshot)?;
+
+    assert_eq!(legacy_workspace.new_files, vec!["README.md"]);
+    assert_eq!(
+        boundary
+            .workspace
+            .as_ref()
+            .map(|snapshot| snapshot.new_files.clone()),
+        Some(vec!["README.md".to_string()])
+    );
     Ok(())
 }

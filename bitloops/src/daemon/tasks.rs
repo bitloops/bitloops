@@ -8,30 +8,47 @@ mod state;
 pub use self::coordinator::{DevqlTaskCoordinator, DevqlTaskEnqueueResult};
 
 #[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
-pub fn drain_lifecycle_stop_spool_for_repo_for_tests(
+pub fn drain_lifecycle_spool_for_repo_for_tests(
     repo_root: &std::path::Path,
 ) -> anyhow::Result<u64> {
     let config_root = crate::config::resolve_bound_daemon_config_root_for_repo(repo_root)?;
     let sqlite = crate::host::runtime_store::open_runtime_sqlite_for_config_root(&config_root)?;
-    coordinator::recover_lifecycle_stop_spool_jobs_for_tests(&sqlite)?;
+    coordinator::recover_lifecycle_spool_jobs_for_tests(&sqlite)?;
 
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)?.repo_id;
     let mut processed_total = 0;
-    for _ in 0..16 {
-        let processed = coordinator::process_lifecycle_stop_spool_once_for_tests(&sqlite)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let processed = coordinator::process_lifecycle_spool_once_for_tests(&sqlite)?;
         processed_total += processed;
-        if !crate::host::checkpoints::lifecycle::spool::lifecycle_stop_spool_has_repo_work(
+        if !crate::host::checkpoints::lifecycle::spool::lifecycle_spool_has_repo_work(
             &sqlite, &repo_id,
         )? {
             return Ok(processed_total);
         }
         if processed == 0 {
+            let has_running_work =
+                crate::host::checkpoints::lifecycle::spool::lifecycle_spool_has_running_repo_work(
+                    &sqlite, &repo_id,
+                )?;
+            if !has_running_work || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        } else if std::time::Instant::now() >= deadline {
             break;
         }
     }
 
     anyhow::bail!(
-        "lifecycle stop spool still has pending work for repo {} after draining",
+        "lifecycle spool still has pending work for repo {} after draining",
         repo_root.display()
     )
+}
+
+#[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
+pub fn drain_lifecycle_stop_spool_for_repo_for_tests(
+    repo_root: &std::path::Path,
+) -> anyhow::Result<u64> {
+    drain_lifecycle_spool_for_repo_for_tests(repo_root)
 }

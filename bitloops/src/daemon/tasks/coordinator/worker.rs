@@ -10,8 +10,5 @@ mod reconcile;
 mod spool;
 
 #[cfg(test)]
-pub(crate) use lifecycle_spool::process_lifecycle_stop_spool_once_for_tests;
-
-#[cfg(test)]
 #[path = "worker/tests.rs"]
 mod tests;
