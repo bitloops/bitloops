@@ -9,6 +9,8 @@ use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 
 const TEST_STATE_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_STATE_DIR_OVERRIDE";
+const DASHBOARD_CDN_BASE_URL_ENV: &str = "BITLOOPS_DASHBOARD_CDN_BASE_URL";
+const DASHBOARD_MANIFEST_URL_ENV: &str = "BITLOOPS_DASHBOARD_MANIFEST_URL";
 
 pub fn new_isolated_bitloops_command(bin_path: &Path, repo: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new(bin_path);
@@ -18,7 +20,9 @@ pub fn new_isolated_bitloops_command(bin_path: &Path, repo: &Path, args: &[&str]
         .env_remove("BITLOOPS_DEVQL_CH_URL")
         .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
         .env_remove("BITLOOPS_DEVQL_CH_USER")
-        .env_remove("BITLOOPS_DEVQL_CH_PASSWORD");
+        .env_remove("BITLOOPS_DEVQL_CH_PASSWORD")
+        .env_remove(DASHBOARD_CDN_BASE_URL_ENV)
+        .env_remove(DASHBOARD_MANIFEST_URL_ENV);
     apply_repo_app_env(&mut cmd, repo);
 
     cmd

@@ -826,6 +826,9 @@ mod ingestion_baseline;
 // ingestion: commit-first historical ingest range and ledger helpers
 #[path = "devql/ingestion/history.rs"]
 mod ingestion_history;
+// ingestion: hunk-only commit delta parsing and persistence
+#[path = "devql/ingestion/hunks.rs"]
+mod ingestion_hunks;
 // ingestion: shared record types for artefact persistence
 #[path = "devql/ingestion/artefact_persistence_types.rs"]
 mod ingestion_artefact_persistence_types;
@@ -833,15 +836,19 @@ mod ingestion_artefact_persistence_types;
 #[path = "devql/ingestion/artefact_persistence_sql.rs"]
 mod ingestion_artefact_persistence_sql;
 // ingestion: file state row, file artefact upsert, revision management
+#[allow(dead_code)]
 #[path = "devql/ingestion/artefact_persistence_file.rs"]
 mod ingestion_artefact_persistence_file;
 // ingestion: symbol record building, content hashing, artefact DB upserts
+#[allow(dead_code)]
 #[path = "devql/ingestion/artefact_persistence_symbols.rs"]
 mod ingestion_artefact_persistence_symbols;
 // ingestion: edge records, current state queries/mutations, row deserialization
+#[allow(dead_code)]
 #[path = "devql/ingestion/artefact_persistence_edges.rs"]
 mod ingestion_artefact_persistence_edges;
 // ingestion: top-level orchestration (refresh/upsert/delete current state)
+#[allow(dead_code)]
 #[path = "devql/ingestion/artefact_persistence.rs"]
 mod ingestion_artefact_persistence;
 // Stages 1–2 semantic feature + embedding persistence: `capabilities::semantic_clones::{stage_semantic_features,stage_embeddings}`
@@ -892,6 +899,7 @@ use self::ingestion_artefact_persistence_types::*;
 use self::ingestion_baseline::*;
 use self::ingestion_checkpoint::*;
 use self::ingestion_history::*;
+use self::ingestion_hunks::*;
 use self::ingestion_language::*;
 pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
 use self::ingestion_schema::*;

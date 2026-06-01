@@ -429,6 +429,30 @@ CREATE TABLE IF NOT EXISTS commit_ingest_ledger (
 CREATE INDEX IF NOT EXISTS commit_ingest_ledger_repo_idx
 ON commit_ingest_ledger (repo_id);
 
+CREATE TABLE IF NOT EXISTS commit_artefacts (
+    repo_id TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    artefact_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    parent_artefact_id TEXT,
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    start_byte INTEGER NOT NULL,
+    end_byte INTEGER NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (repo_id, commit_sha, artefact_id)
+);
+
+CREATE INDEX IF NOT EXISTS commit_artefacts_commit_idx
+ON commit_artefacts (repo_id, commit_sha);
+
+CREATE INDEX IF NOT EXISTS commit_artefacts_artefact_idx
+ON commit_artefacts (repo_id, artefact_id);
+
+CREATE INDEX IF NOT EXISTS commit_artefacts_path_blob_line_idx
+ON commit_artefacts (repo_id, path, blob_sha, start_line, end_line);
+
 CREATE TABLE IF NOT EXISTS content_cache (
     content_id TEXT NOT NULL,
     language TEXT NOT NULL,
@@ -500,6 +524,7 @@ pub(crate) fn postgres_shared_schema_sql() -> &'static str {
                 "artefacts_historical",
                 "artefact_edges",
                 "commit_ingest_ledger",
+                "commit_artefacts",
             ],
         )
     })

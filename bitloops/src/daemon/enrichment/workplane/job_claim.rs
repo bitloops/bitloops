@@ -33,62 +33,74 @@ pub(crate) fn claim_next_workplane_job(
     control_state: &EnrichmentControlState,
     pool: EnrichmentWorkerPool,
 ) -> Result<Option<WorkplaneJobRecord>> {
+    let now = unix_timestamp_now();
+    let mut readiness_cache = BTreeMap::new();
+    let jobs = workplane_store.with_connection(|conn| {
+        load_workplane_claim_candidates(conn, runtime_store, pool, now, &mut readiness_cache)
+    })?;
+
+    for job in jobs {
+        if job_is_paused_for_mailbox(control_state, &job.mailbox_name) {
+            continue;
+        }
+        if job.mailbox_name == SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+            && workplane_store
+                .with_connection(|conn| repo_has_active_embedding_work(conn, &job.repo_id))?
+        {
+            continue;
+        }
+        if mailbox_claim_readiness(runtime_store, &mut readiness_cache, &job)?.blocked {
+            continue;
+        }
+        if let Some(claimed) = claim_pending_workplane_job(workplane_store, job, now)? {
+            return Ok(Some(claimed));
+        }
+    }
+
+    Ok(None)
+}
+
+fn claim_pending_workplane_job(
+    workplane_store: &DaemonSqliteRuntimeStore,
+    mut job: WorkplaneJobRecord,
+    now: u64,
+) -> Result<Option<WorkplaneJobRecord>> {
     workplane_store.with_write_connection(|conn| {
         conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
             .context("starting capability workplane job claim transaction")?;
         let result = (|| {
-            let now = unix_timestamp_now();
-            let mut readiness_cache = BTreeMap::new();
-            let jobs = load_workplane_claim_candidates(
-                conn,
-                runtime_store,
-                pool,
-                now,
-                &mut readiness_cache,
-            )?;
-            for mut job in jobs {
-                if job_is_paused_for_mailbox(control_state, &job.mailbox_name) {
-                    continue;
-                }
-                if job.mailbox_name == SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
-                    && repo_has_active_embedding_work(conn, &job.repo_id)?
-                {
-                    continue;
-                }
-                if mailbox_claim_readiness(runtime_store, &mut readiness_cache, &job)?.blocked {
-                    continue;
-                }
-                let updated = conn
-                    .execute(
-                        "UPDATE capability_workplane_jobs
+            if job.mailbox_name == SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+                && repo_has_active_embedding_work(conn, &job.repo_id)?
+            {
+                return Ok(None);
+            }
+            let updated = conn
+                .execute(
+                    "UPDATE capability_workplane_jobs
                      SET status = ?1,
                          attempts = ?2,
                          started_at_unix = COALESCE(started_at_unix, ?3),
                          updated_at_unix = ?4
                      WHERE job_id = ?5
                        AND status = ?6",
-                        params![
-                            WorkplaneJobStatus::Running.as_str(),
-                            job.attempts + 1,
-                            sql_i64(now)?,
-                            sql_i64(now)?,
-                            &job.job_id,
-                            WorkplaneJobStatus::Pending.as_str(),
-                        ],
-                    )
-                    .with_context(|| {
-                        format!("claiming capability workplane job `{}`", job.job_id)
-                    })?;
-                if updated == 0 {
-                    continue;
-                }
-                job.status = WorkplaneJobStatus::Running;
-                job.attempts += 1;
-                job.started_at_unix = Some(job.started_at_unix.unwrap_or(now));
-                job.updated_at_unix = now;
-                return Ok(Some(job));
+                    params![
+                        WorkplaneJobStatus::Running.as_str(),
+                        job.attempts + 1,
+                        sql_i64(now)?,
+                        sql_i64(now)?,
+                        &job.job_id,
+                        WorkplaneJobStatus::Pending.as_str(),
+                    ],
+                )
+                .with_context(|| format!("claiming capability workplane job `{}`", job.job_id))?;
+            if updated == 0 {
+                return Ok(None);
             }
-            Ok(None)
+            job.status = WorkplaneJobStatus::Running;
+            job.attempts += 1;
+            job.started_at_unix = Some(job.started_at_unix.unwrap_or(now));
+            job.updated_at_unix = now;
+            Ok(Some(job))
         })();
 
         match result {

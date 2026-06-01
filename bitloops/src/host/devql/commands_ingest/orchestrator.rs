@@ -1,7 +1,11 @@
+use super::commit_artefacts::{
+    CommitArtefactAppendContext, append_changed_after_side_commit_artefacts,
+};
+use super::current_mirror::mirror_completed_current_artefacts_for_head;
 use super::progress::{emit_checkpoint_ingested, emit_progress};
 use super::shared::{
     active_branch_name, promote_temporary_current_rows_for_head_commit,
-    resolve_pack_versions_for_ingest, tracked_paths_at_revision,
+    resolve_pack_versions_for_ingest,
 };
 use super::*;
 pub async fn run_ingest(cfg: &DevqlConfig) -> Result<()> {
@@ -125,6 +129,8 @@ async fn execute_ingest_inner(
         Err(err) if is_missing_head_error(&err) => String::new(),
         Err(err) => return Err(err).context("resolving HEAD for commit history ingest"),
     };
+    counters.artefacts_upserted +=
+        mirror_completed_current_artefacts_for_head(cfg, &relational, &head_sha).await?;
     let active_branch = checked_out_branch_name(&cfg.repo_root);
     let _active_branch_for_enqueue = active_branch
         .clone()
@@ -185,7 +191,23 @@ async fn execute_ingest_inner(
 
         let existing_ledger =
             load_commit_ingest_ledger_entry(&relational, &cfg.repo.repo_id, &commit_sha).await?;
-        if existing_ledger.as_ref().is_some_and(commit_is_fully_ingested) {
+        let history_needs_artefact_metadata_repair = if existing_ledger
+            .as_ref()
+            .is_some_and(commit_is_fully_ingested)
+        {
+            commit_history_needs_artefact_metadata_repair(
+                &cfg.repo_root,
+                &relational,
+                &cfg.repo.repo_id,
+                &commit_sha,
+            )
+            .await?
+        } else {
+            false
+        };
+        if existing_ledger.as_ref().is_some_and(commit_is_fully_ingested)
+            && !history_needs_artefact_metadata_repair
+        {
             if uses_local_ingest_watermarks(&relational)
                 && let Some(branch_name) = active_branch.as_deref()
             {
@@ -210,6 +232,10 @@ async fn execute_ingest_inner(
             );
             continue;
         }
+        let ledger_history_completed = existing_ledger
+            .as_ref()
+            .map(|entry| entry.history_status == "completed")
+            .unwrap_or(false);
 
         let commit_info =
             checkpoint_commit_info_from_sha(&cfg.repo_root, &commit_sha).unwrap_or(
@@ -225,130 +251,44 @@ async fn execute_ingest_inner(
             .as_ref()
             .map(|entry| entry.history_status == "completed")
             .unwrap_or(false);
+        if history_needs_artefact_metadata_repair {
+            history_completed = false;
+        }
 
         let commit_result: Result<()> = async {
             if !history_completed {
                 upsert_commit_metadata_row(cfg, &relational, &commit_info).await?;
-                let tracked_paths = tracked_paths_at_revision(&cfg.repo_root, &commit_sha)
-                    .with_context(|| format!("listing tracked files for commit {commit_sha}"))?;
-                let classifier = ProjectAwareClassifier::discover_for_revision(
-                    &cfg.repo_root,
-                    &commit_sha,
-                    tracked_paths,
-                    &parser_version,
-                    &extractor_version,
-                )
-                .with_context(|| {
-                    format!("building project-aware classifier for commit {commit_sha}")
-                })?;
-                let mut changed_files = crate::host::checkpoints::strategy::manual_commit::files_changed_in_commit(
-                    &cfg.repo_root,
-                    &commit_sha,
-                )
-                .with_context(|| format!("listing changed files for commit {commit_sha}"))?
-                .into_iter()
-                .collect::<Vec<_>>();
-                changed_files.sort();
-
-                for path in changed_files {
-                    let normalized_path = normalize_repo_path(&path);
-                    if normalized_path.is_empty() {
-                        continue;
-                    }
-                    let excluded_by_policy =
-                        exclusion_matcher.excludes_repo_relative_path(&normalized_path);
-                    let classification = classifier
-                        .classify_repo_relative_path(&normalized_path, excluded_by_policy)
+                let raw_diff = git_show_hunk_diff(&cfg.repo_root, &commit_sha)?;
+                let mut parsed_hunks =
+                    parse_commit_hunks_from_git_show(&cfg.repo.repo_id, &commit_sha, &raw_diff)
                         .with_context(|| {
-                            format!(
-                                "classifying historical ingest path `{normalized_path}` at commit {commit_sha}"
-                            )
+                            format!("parsing hunk diff for commit {commit_sha}")
                         })?;
-                    if classification.analysis_mode == AnalysisMode::Excluded {
-                        continue;
-                    }
-
-                    let blob_sha = git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, &normalized_path)
-                        .or_else(|| git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, &path));
-                    let Some(blob_sha) = blob_sha else {
-                        continue;
-                    };
-                    let blob_content =
-                        git_blob_decoded_content(&cfg.repo_root, &blob_sha).ok_or_else(|| {
-                            anyhow!(
-                                "failed to decode blob content for historical ingest path `{}` at commit {} (blob {})",
-                                normalized_path,
-                                commit_sha,
-                                blob_sha
-                            )
-                        })?;
-
-                    upsert_file_state_row(
-                        &cfg.repo.repo_id,
-                        &relational,
-                        &commit_sha,
-                        &normalized_path,
-                        &blob_sha,
-                    )
-                    .await?;
-                    if !classification.should_extract() {
-                        continue;
-                    }
-                    if classification.analysis_mode == AnalysisMode::Text {
-                        let Some(content) = blob_content.text.as_deref() else {
-                            continue;
-                        };
-                        if !plain_text_content_is_allowed(content) {
-                            continue;
-                        }
-                    }
-                    let file_artefact = upsert_file_artefact_row(
-                        &cfg.repo.repo_id,
-                        &relational,
-                        &normalized_path,
-                        &blob_sha,
-                        &classification.language,
-                        &classification.extraction_fingerprint,
-                        &blob_content,
-                    )
-                    .await?;
-                    if classification.analysis_mode == AnalysisMode::Text {
-                        counters.artefacts_upserted += 1;
-                        continue;
-                    }
-                    if blob_content.decode_degraded {
-                        counters.artefacts_upserted += 1;
-                        continue;
-                    }
-                    let source_content = blob_content.text.as_deref().unwrap_or_default();
-                    upsert_language_artefacts(
-                        cfg,
-                        &relational,
-                        &FileRevision {
-                            commit_sha: &commit_sha,
-                            revision: TemporalRevisionRef {
-                                kind: TemporalRevisionKind::Commit,
-                                id: &commit_sha,
-                                temp_checkpoint_id: None,
-                            },
-                            commit_unix: commit_info.commit_unix,
-                            path: &normalized_path,
-                            blob_sha: &blob_sha,
-                        },
-                        &file_artefact,
-                        source_content,
-                    )
-                    .await?;
-                    counters.artefacts_upserted += 1;
-                }
-
-                mark_commit_history_completed(
-                    &relational,
-                    &cfg.repo.repo_id,
+                filter_commit_hunks_by_exclusions(&mut parsed_hunks, &exclusion_matcher);
+                let append_ctx = CommitArtefactAppendContext {
+                    cfg,
+                    relational: &relational,
+                    exclusion_matcher: &exclusion_matcher,
+                    parser_version: &parser_version,
+                    extractor_version: &extractor_version,
+                };
+                counters.artefacts_upserted += append_changed_after_side_commit_artefacts(
+                    &append_ctx,
                     &commit_sha,
-                    checkpoint_id.as_deref(),
+                    &commit_info,
+                    &parsed_hunks,
                 )
                 .await?;
+
+                if !ledger_history_completed {
+                    mark_commit_history_completed(
+                        &relational,
+                        &cfg.repo.repo_id,
+                        &commit_sha,
+                        checkpoint_id.as_deref(),
+                    )
+                    .await?;
+                }
                 history_completed = true;
             }
 
@@ -469,6 +409,7 @@ async fn execute_ingest_inner(
         );
     }
 
+    let _ = mirror_completed_current_artefacts_for_head(cfg, &relational, &head_sha).await?;
     counters.temporary_rows_promoted =
         promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
     counters.success = !encountered_commit_failures;

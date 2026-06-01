@@ -5,7 +5,7 @@ use crate::host::devql::{DevqlConfig, RepoIdentity};
 
 use super::super::super::types::{
     DevqlTaskKind, DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec,
-    DevqlTaskStatus, PostCommitSnapshotSpec, SyncTaskMode, SyncTaskSpec,
+    DevqlTaskStatus, IngestTaskSpec, PostCommitSnapshotSpec, SyncTaskMode, SyncTaskSpec,
 };
 use super::super::state::PersistedDevqlTaskQueueState;
 use super::{
@@ -92,6 +92,45 @@ fn sync_task_with_spec(
         error: None,
         result: None,
     }
+}
+
+fn ingest_task(task_id: &str, status: DevqlTaskStatus) -> DevqlTaskRecord {
+    DevqlTaskRecord {
+        task_id: task_id.to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_name: "repo".to_string(),
+        repo_provider: "local".to_string(),
+        repo_organisation: "local".to_string(),
+        repo_identity: "repo".to_string(),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: Some("init-session-1".to_string()),
+        kind: DevqlTaskKind::Ingest,
+        source: DevqlTaskSource::Init,
+        spec: DevqlTaskSpec::Ingest(IngestTaskSpec::default()),
+        status,
+        submitted_at_unix: 2,
+        started_at_unix: (status == DevqlTaskStatus::Running).then_some(3),
+        updated_at_unix: 2,
+        completed_at_unix: None,
+        queue_position: None,
+        tasks_ahead: None,
+        progress: DevqlTaskProgress::Ingest(crate::host::devql::IngestionProgressUpdate {
+            phase: crate::host::devql::IngestionProgressPhase::Initializing,
+            commits_total: 0,
+            commits_processed: 0,
+            current_checkpoint_id: None,
+            current_commit_sha: None,
+            counters: Default::default(),
+        }),
+        error: None,
+        result: None,
+    }
+}
+
+fn with_repo(mut task: DevqlTaskRecord, repo_id: &str) -> DevqlTaskRecord {
+    task.repo_id = repo_id.to_string();
+    task
 }
 
 #[test]
@@ -295,6 +334,110 @@ fn queued_post_checkout_full_runs_before_queued_watcher_paths() {
         vec![1],
         "post-checkout full sync should own checkout materialization before watcher paths"
     );
+}
+
+#[test]
+fn queued_sync_blocks_queued_ingest_for_same_repo() {
+    let state = PersistedDevqlTaskQueueState {
+        tasks: vec![
+            sync_task(
+                "sync-task-1",
+                DevqlTaskSource::Init,
+                SyncTaskMode::Full,
+                DevqlTaskStatus::Queued,
+            ),
+            ingest_task("ingest-task-1", DevqlTaskStatus::Queued),
+        ],
+        ..Default::default()
+    };
+
+    let runnable = next_runnable_task_indexes(&state);
+
+    assert_eq!(
+        runnable,
+        vec![0],
+        "queued ingest must wait for queued sync materialisation for the same repo"
+    );
+}
+
+#[test]
+fn running_sync_blocks_queued_ingest_for_same_repo() {
+    let state = PersistedDevqlTaskQueueState {
+        tasks: vec![
+            sync_task(
+                "sync-task-1",
+                DevqlTaskSource::Init,
+                SyncTaskMode::Full,
+                DevqlTaskStatus::Running,
+            ),
+            ingest_task("ingest-task-1", DevqlTaskStatus::Queued),
+        ],
+        ..Default::default()
+    };
+
+    let runnable = next_runnable_task_indexes(&state);
+
+    assert!(
+        runnable.is_empty(),
+        "queued ingest must not start while sync is running for the same repo"
+    );
+}
+
+#[test]
+fn sync_for_one_repo_does_not_block_ingest_for_another_repo() {
+    let state = PersistedDevqlTaskQueueState {
+        tasks: vec![
+            sync_task(
+                "sync-task-1",
+                DevqlTaskSource::Init,
+                SyncTaskMode::Full,
+                DevqlTaskStatus::Queued,
+            ),
+            with_repo(
+                ingest_task("ingest-task-1", DevqlTaskStatus::Queued),
+                "repo-2",
+            ),
+        ],
+        ..Default::default()
+    };
+
+    let runnable = next_runnable_task_indexes(&state);
+
+    assert_eq!(
+        runnable,
+        vec![0, 1],
+        "repo-level sync ordering must not serialize independent repos"
+    );
+}
+
+#[test]
+fn terminal_sync_tasks_do_not_block_later_ingest() {
+    for status in [
+        DevqlTaskStatus::Completed,
+        DevqlTaskStatus::Failed,
+        DevqlTaskStatus::Cancelled,
+    ] {
+        let state = PersistedDevqlTaskQueueState {
+            tasks: vec![
+                sync_task(
+                    "sync-task-1",
+                    DevqlTaskSource::Init,
+                    SyncTaskMode::Full,
+                    status,
+                ),
+                ingest_task("ingest-task-1", DevqlTaskStatus::Queued),
+            ],
+            ..Default::default()
+        };
+
+        let runnable = next_runnable_task_indexes(&state);
+
+        assert_eq!(
+            runnable,
+            vec![1],
+            "{status:?} sync task should not block later ingest"
+        );
+    }
 }
 
 #[test]

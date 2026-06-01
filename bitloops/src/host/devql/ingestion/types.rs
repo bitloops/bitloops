@@ -67,6 +67,7 @@ pub(super) struct CheckpointCommitInfo {
     pub(super) subject: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(super) struct FileArtefactRow {
     pub(super) artefact_id: String,

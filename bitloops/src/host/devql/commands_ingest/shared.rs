@@ -4,6 +4,7 @@ pub(super) fn active_branch_name(repo_root: &Path) -> String {
     checked_out_branch_name(repo_root).unwrap_or_else(|| "main".to_string())
 }
 
+#[allow(dead_code)]
 pub(super) fn resolve_pack_versions_for_ingest() -> Result<(String, String)> {
     let host = core_extension_host()?;
     let mut packs = host
@@ -21,6 +22,7 @@ pub(super) fn resolve_pack_versions_for_ingest() -> Result<(String, String)> {
     ))
 }
 
+#[allow(dead_code)]
 pub(super) fn tracked_paths_at_revision(repo_root: &Path, revision: &str) -> Result<Vec<String>> {
     let output = run_git(
         repo_root,

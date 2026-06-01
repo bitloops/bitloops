@@ -19,6 +19,13 @@ macOS, Linux, WSL:
 curl -fsSL https://bitloops.com/install.sh | bash -s -- --default-config
 ```
 
+or using 2 commands
+
+```
+curl -fsSL https://bitloops.com/install.sh | bash
+bitloops configure --default-config
+```
+
 Windows PowerShell:
 
 ```powershell
@@ -32,105 +39,27 @@ curl.exe -fsSL https://bitloops.com/install.cmd -o install.cmd
 install.cmd --default-config
 ```
 
-## 2. Or Configure Manually
 
-If you want to review settings in the browser, install without the default-config flag, then run:
-
-```bash
-bitloops configure --web
-```
-
-`bitloops configure --web` creates the default daemon config and local stores if needed, starts or reuses the daemon, and opens the dashboard configuration page.
-
-If you install with Cargo, run the same manual configure step after install:
-
-```bash
-cargo install bitloops
-bitloops configure --web
-```
-
-For fully custom scripted setup, provide a complete daemon TOML file:
-
-```bash
-bitloops configure --file /path/to/config.toml
-```
-
-## 3. Initialise A Project
+## 2. Initialise A Project
 
 ```bash
 bitloops init
 ```
 
-Run this from inside a git repository or subproject. It creates or updates `.bitloops.local.toml`, adds it to `.git/info/exclude`, installs or reconciles hooks for the selected agents, and binds the repo to an existing daemon config when one is available.
-
-Use `--sync=true` when you want the initial current-state sync immediately:
-
-```bash
-bitloops init --sync=true
-```
-
-`bitloops init` can also queue an initial DevQL current-state sync after hook setup. Use `--sync=true` when you want that sync immediately, or `--sync=false` when you want to skip it. If you omit `--sync` in an interactive terminal, Bitloops asks after hook installation whether you want to sync the codebase now.
-
-In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.
-
-That initial sync only reconciles current workspace state. Use `--ingest=true` during init, or run `bitloops devql tasks enqueue --kind ingest` separately, when you want checkpoint, commit, and event history materialised.
-
-If you want to pin the supported agent set during bootstrap, repeat `--agent <name>` for each supported agent. For example:
-
-```bash
-bitloops init --sync=false --agent claude-code --agent codex
-```
-
-Daemon-only settings such as telemetry, inference, capability packs, and stores stay in `bitloops configure`.
-
-## 4. Start The Daemon Explicitly When You Need To
-
-```bash
-bitloops start --create-default-config
-```
-
-Use this lower-level path when you want to bootstrap or start the daemon without opening the configuration flow.
-
-On a fresh machine, use `--create-default-config` once. This writes the default global daemon config at the platform config location and creates the default local SQLite, DuckDB, and blob-store paths.
-
-Interactive `bitloops start` also prompts to create the default config when it is missing. During that first bootstrap, Bitloops asks for telemetry consent unless you pass `--telemetry`, `--telemetry=false`, or `--no-telemetry`.
-
-If you are using a repo-scoped or test-specific daemon config instead of the default global config, create the local file-backed stores for that config with:
-
-```bash
-bitloops start --config ./config.toml --bootstrap-local-stores
-```
-
-## 5. Add Optional Shared Project Policy
-
-If you want shared capture policy in git, create `.bitloops.toml` in the project root:
-
-```toml title=".bitloops.toml"
-[capture]
-enabled = true
-strategy = "manual-commit"
-
-[watch]
-watch_debounce_ms = 750
-watch_poll_fallback_ms = 2500
-```
-
-Keep `.bitloops.local.toml` for local-only overrides.
-
-## 6. Start Or Open Bitloops
-
-Open the dashboard:
-
-```bash
-bitloops dashboard
-```
-
-Or manage the daemon yourself:
+## 3. Start The Daemon Explicitly When You Need To
 
 ```bash
 bitloops start -d
-bitloops start --until-stopped
 ```
+
+## 4. Edit Repo Policy
+
+If you want to change repo specific policy that you selected at init, edit `bitloops.local.toml` 
+
+## 5. Start Or Open Bitloops
+
+Open the dashboard at: `localhost:5667`
+
 
 ## 6. Query And Ingest
 

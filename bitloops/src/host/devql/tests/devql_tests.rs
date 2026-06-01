@@ -632,6 +632,8 @@ fn test_unresolved_call_edge(from_symbol_fqn: &str, symbol_ref: &str, line: i32)
 mod baseline;
 #[path = "devql_tests/commit_history.rs"]
 mod commit_history;
+#[path = "devql_tests/commit_hunks.rs"]
+mod commit_hunks;
 #[path = "devql_tests/config_and_status.rs"]
 mod config_and_status;
 #[path = "devql_tests/core_and_ingestion.rs"]

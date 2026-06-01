@@ -3149,6 +3149,56 @@ fn summary_refresh_pool_claims_ready_context_guidance_after_blocked_generic_jobs
 }
 
 #[test]
+fn generic_workplane_claim_does_not_wait_for_write_lock_when_only_blocked_jobs_exist() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    configure_architecture_role_adjudication_for_repo(&target);
+    insert_architecture_role_adjudication_workplane_job(
+        &coordinator,
+        &target,
+        &repo_id,
+        "blocked-role-adjudication",
+        1,
+        10,
+    );
+
+    let workplane_store = coordinator.workplane_store.clone();
+    let runtime_store = coordinator.runtime_store.clone();
+    let held_lock = crate::storage::sqlite::hold_sqlite_write_lock_until_release(
+        workplane_store.db_path().to_path_buf(),
+    )
+    .expect("hold workplane write lock");
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = claim_next_workplane_job(
+            &workplane_store,
+            &runtime_store,
+            &default_state(),
+            super::worker_count::EnrichmentWorkerPool::SummaryRefresh,
+        );
+        done_tx.send(result).expect("send claim result");
+    });
+
+    let completed_while_locked = done_rx.recv_timeout(StdDuration::from_millis(250));
+    held_lock.release().expect("release workplane write lock");
+
+    let result = match completed_while_locked {
+        Ok(result) => result,
+        Err(_) => {
+            let _ = done_rx.recv_timeout(StdDuration::from_secs(5));
+            worker.join().expect("join claim worker");
+            panic!("blocked generic workplane readiness should not wait for the write lock");
+        }
+    };
+    worker.join().expect("join claim worker");
+
+    assert!(
+        result.expect("claim should succeed").is_none(),
+        "blocked generic jobs should remain unclaimed"
+    );
+}
+
+#[test]
 fn summary_refresh_pool_claims_context_guidance_target_compaction_jobs() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);

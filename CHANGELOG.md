@@ -6,9 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
-- **Agent lifecycle hooks now default to daemon replay (`CLI-1909`)**: Lifecycle-producing agent hooks now enqueue through the daemon-backed lifecycle spool unless they need synchronous agent-visible behavior. Prompt, task, turn, and todo boundaries capture hook-time boundary snapshots before enqueue so daemon replay does not observe later worktree state.
-- **Agent lifecycle hook spooling now uses a generic FIFO queue (`CLI-1698`)**: Terminal TurnEnd hooks plus selected SessionEnd and Compaction hooks now enqueue through one strict FIFO daemon-backed lifecycle spool. Terminal TurnEnd hooks capture workspace snapshots in the hook process, while selected SessionEnd/Compaction hooks enqueue raw payloads without snapshot capture.
-- **Claude Code tool observation hooks now use the lifecycle spool (`CLI-1909`)**: Claude Code `pre-tool-use` and `post-tool-use` hooks now enqueue tiny raw lifecycle jobs for daemon replay instead of doing interaction observation work in the hook process.
+### Changed
 
 ## [0.0.31] - 2026-05-26
 
@@ -21,7 +19,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - **Dashboard bundle install now falls back once when the newest compatible bundle archive 404s** (`CLI-1918`): `fetchBundle` now tries the next compatible `bundle_versions.json` entry when the selected archive returns HTTP 404, while preserving hard failures for checksum mismatches and limiting fallback to one older version.
-
 - **Architecture role classification is more stable around noisy unknowns and imperfect rules**: ordinary non-role files, import artefacts, file-like duplicate artefacts, lock/config/cache/documentation paths, and low-signal source targets are suppressed instead of repeatedly queued for adjudication, while high-impact `main` targets are still escalated when they lack confident deterministic classification. Invalid active detection rules are skipped with diagnostics instead of aborting classification for the remaining valid rules.
 - **Architecture role adjudication and seed prompts now produce stricter reviewable rule suggestions**: adjudication requests use stable target keys plus fact/rule hashes to avoid generation-only churn, adjudication responses validate draftable rule suggestions against active roles and supported fact predicates, and seed prompts now ask local agents to inspect code read-only before returning roles or deterministic rule candidates.
 - **Failed daemon startup no longer leaves the spawned daemon process running**: detached and service-managed daemon starts now stop the process they just spawned when readiness times out, preventing orphaned `bitloops` processes from holding local DuckDB event-store locks after startup failure.
