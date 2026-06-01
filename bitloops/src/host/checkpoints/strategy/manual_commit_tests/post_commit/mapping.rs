@@ -40,7 +40,7 @@ fn event_duckdb_path(repo_root: &Path) -> PathBuf {
 }
 
 #[test]
-pub(crate) fn post_commit_defers_derivation_when_lifecycle_stop_spool_work_is_pending() {
+pub(crate) fn post_commit_defers_derivation_when_lifecycle_spool_work_is_pending() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     init_devql_schema(dir.path());
@@ -56,23 +56,24 @@ pub(crate) fn post_commit_defers_derivation_when_lifecycle_stop_spool_work_is_pe
         .expect("resolve daemon config root");
     let sqlite = crate::host::runtime_store::open_runtime_sqlite_for_config_root(&config_root)
         .expect("open runtime sqlite");
-    crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_stop_job_sqlite(
+    crate::host::checkpoints::lifecycle::spool::enqueue_lifecycle_job_sqlite(
         &sqlite,
-        crate::host::checkpoints::lifecycle::spool::LifecycleStopJobInsert {
+        crate::host::checkpoints::lifecycle::spool::LifecycleJobInsert {
             repo_id: repo.repo_id.clone(),
             repo_root: dir.path().to_path_buf(),
             config_root: config_root.clone(),
             agent_name: crate::adapters::agents::AGENT_NAME_CODEX.to_string(),
             hook_name: crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP.to_string(),
             raw_stdin: "{}".to_string(),
-            workspace_snapshot:
-                crate::host::checkpoints::lifecycle::spool::LifecycleStopWorkspaceSnapshot::default(
-                ),
+            workspace_snapshot: Some(
+                crate::host::checkpoints::lifecycle::spool::LifecycleWorkspaceSnapshot::default(),
+            ),
+            boundary_snapshot: None,
             cwd: dir.path().to_path_buf(),
             received_at_unix: 1_778_800_000,
         },
     )
-    .expect("enqueue lifecycle stop job");
+    .expect("enqueue lifecycle job");
 
     let head = commit_files(
         dir.path(),
@@ -84,7 +85,7 @@ pub(crate) fn post_commit_defers_derivation_when_lifecycle_stop_spool_work_is_pe
 
     assert!(
         query_commit_checkpoint_id(dir.path(), &head).is_none(),
-        "post_commit should defer derivation until lifecycle stop work is drained"
+        "post_commit should defer derivation until lifecycle spool work is drained"
     );
     let jobs = crate::host::devql::list_recent_producer_spool_jobs(&config_root, &repo.repo_id, 10)
         .expect("list producer spool jobs");
@@ -97,7 +98,53 @@ pub(crate) fn post_commit_defers_derivation_when_lifecycle_stop_spool_work_is_pe
                 is_rebase_in_progress: false,
             } if commit_sha == &head && committed_files == &vec!["src/app.ts".to_string()]
         )),
-        "post_commit should enqueue a daemon derivation job behind lifecycle stop work: {jobs:?}"
+        "post_commit should enqueue a daemon derivation job behind lifecycle spool work: {jobs:?}"
+    );
+}
+
+#[test]
+pub(crate) fn post_commit_defers_derivation_when_interaction_spool_work_is_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    seed_interaction_turn(
+        dir.path(),
+        "pending-interaction-session",
+        "pending-interaction-turn",
+        &["src/app.ts"],
+    );
+    assert!(
+        interaction_queue_count(dir.path()) > 0,
+        "seeded interaction turn should leave canonical mutations queued"
+    );
+
+    let head = commit_files(
+        dir.path(),
+        &[("src/app.ts", "export const value = 1;\n")],
+        "agent commit",
+    );
+
+    ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
+
+    assert!(
+        query_commit_checkpoint_id(dir.path(), &head).is_none(),
+        "post_commit should defer derivation until interaction spool work is drained"
+    );
+    let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+    let config_root = crate::config::resolve_bound_daemon_config_root_for_repo(dir.path())
+        .expect("resolve daemon config root");
+    let jobs = crate::host::devql::list_recent_producer_spool_jobs(&config_root, &repo.repo_id, 10)
+        .expect("list producer spool jobs");
+    assert!(
+        jobs.iter().any(|job| matches!(
+            &job.payload,
+            crate::host::devql::ProducerSpoolJobPayload::PostCommitDerivation {
+                commit_sha,
+                committed_files,
+                is_rebase_in_progress: false,
+            } if commit_sha == &head && committed_files == &vec!["src/app.ts".to_string()]
+        )),
+        "post_commit should enqueue a daemon derivation job behind interaction spool work: {jobs:?}"
     );
 }
 

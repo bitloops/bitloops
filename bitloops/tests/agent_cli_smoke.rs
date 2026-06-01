@@ -427,10 +427,10 @@ fn temporary_checkpoint_count(repo_root: &Path, home: &Path, session_id: &str) -
     })
 }
 
-fn drain_lifecycle_stop_spool_with_home(repo_root: &Path, home: &Path) {
+fn drain_lifecycle_spool_with_home(repo_root: &Path, home: &Path) {
     with_home_env(home, || {
-        bitloops::daemon::drain_lifecycle_stop_spool_for_repo_for_tests(repo_root)
-            .expect("drain lifecycle stop spool for Copilot smoke repo");
+        bitloops::daemon::drain_lifecycle_spool_for_repo_for_tests(repo_root)
+            .expect("drain lifecycle spool for Copilot smoke repo");
     });
 }
 
@@ -535,7 +535,7 @@ fn copilot_cli_smoke_maps_basic_workflow_commit() {
         Some(&stop_input),
     );
     assert_home_success(&out, "hooks copilot agent-stop");
-    drain_lifecycle_stop_spool_with_home(dir.path(), home.path());
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
 
     assert_eq!(
         temporary_checkpoint_count(dir.path(), home.path(), sid),
@@ -550,6 +550,7 @@ fn copilot_cli_smoke_maps_basic_workflow_commit() {
         Some(r#"{"sessionId":"copilot-smoke-1"}"#),
     );
     assert_home_success(&out, "hooks copilot session-end");
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
 
     run_git_expect_success_with_home(
         dir.path(),

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+- **Agent lifecycle hooks now default to daemon replay (`CLI-1909`)**: Lifecycle-producing agent hooks now enqueue through the daemon-backed lifecycle spool unless they need synchronous agent-visible behavior. Prompt, task, turn, and todo boundaries capture hook-time boundary snapshots before enqueue so daemon replay does not observe later worktree state.
+- **Agent lifecycle hook spooling now uses a generic FIFO queue (`CLI-1698`)**: Terminal TurnEnd hooks plus selected SessionEnd and Compaction hooks now enqueue through one strict FIFO daemon-backed lifecycle spool. Terminal TurnEnd hooks capture workspace snapshots in the hook process, while selected SessionEnd/Compaction hooks enqueue raw payloads without snapshot capture.
+- **Claude Code tool observation hooks now use the lifecycle spool (`CLI-1909`)**: Claude Code `pre-tool-use` and `post-tool-use` hooks now enqueue tiny raw lifecycle jobs for daemon replay instead of doing interaction observation work in the hook process.
+
 ## [0.0.31] - 2026-05-26
 
 ### Added

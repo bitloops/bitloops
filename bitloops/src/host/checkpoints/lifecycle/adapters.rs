@@ -12,11 +12,9 @@ use crate::adapters::agents::gemini::agent::GeminiCliAgent;
 use crate::adapters::agents::open_code::agent::OpenCodeAgent;
 use crate::adapters::agents::{TokenCalculator, TranscriptAnalyzer};
 
-use super::spool::LifecycleStopWorkspaceSnapshot;
-use super::{
-    LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, dispatch_lifecycle_event_for_repo,
-    handle_lifecycle_turn_end_for_repo_with_workspace_snapshot, read_and_parse_hook_input,
-};
+use super::dispatch::dispatch_lifecycle_event_for_repo_with_boundary_snapshot;
+use super::spool::{LifecycleBoundarySnapshot, LifecycleWorkspaceSnapshot};
+use super::{LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, read_and_parse_hook_input};
 
 pub const CLAUDE_HOOK_SESSION_START: &str = "session-start";
 pub const CLAUDE_HOOK_SESSION_END: &str = "session-end";
@@ -533,7 +531,27 @@ pub(crate) fn route_hook_command_to_lifecycle_for_repo_with_workspace_snapshot(
     agent_name: &str,
     hook_name: &str,
     stdin: &str,
-    workspace_snapshot: Option<LifecycleStopWorkspaceSnapshot>,
+    workspace_snapshot: Option<LifecycleWorkspaceSnapshot>,
+) -> Result<HookCommandOutcome> {
+    let boundary_snapshot = workspace_snapshot.map(|workspace| LifecycleBoundarySnapshot {
+        workspace: Some(workspace),
+        ..LifecycleBoundarySnapshot::default()
+    });
+    route_hook_command_to_lifecycle_for_repo_with_boundary_snapshot(
+        repo_root,
+        agent_name,
+        hook_name,
+        stdin,
+        boundary_snapshot,
+    )
+}
+
+pub(crate) fn route_hook_command_to_lifecycle_for_repo_with_boundary_snapshot(
+    repo_root: &Path,
+    agent_name: &str,
+    hook_name: &str,
+    stdin: &str,
+    boundary_snapshot: Option<LifecycleBoundarySnapshot>,
 ) -> Result<HookCommandOutcome> {
     let resolved = AgentAdapterRegistry::builtin().resolve_with_trace(agent_name, None)?;
     let descriptor = resolved.registration.descriptor();
@@ -566,6 +584,10 @@ pub(crate) fn route_hook_command_to_lifecycle_for_repo_with_workspace_snapshot(
         crate::adapters::agents::codex::lifecycle::parse_hook_event_for_repo(
             hook_name, &mut input, repo_root,
         )
+    } else if adapter.agent_name() == crate::adapters::agents::AGENT_NAME_CURSOR {
+        crate::adapters::agents::cursor::lifecycle::parse_hook_event_for_repo(
+            hook_name, &mut input, repo_root,
+        )
     } else {
         adapter.parse_hook_event(hook_name, &mut input)
     }
@@ -576,19 +598,13 @@ pub(crate) fn route_hook_command_to_lifecycle_for_repo_with_workspace_snapshot(
     })?;
     let outcome = HookCommandOutcome::default();
     if let Some(event) = event {
-        let dispatch_result = if event.event_type.as_ref() == Some(&LifecycleEventType::TurnEnd)
-            && workspace_snapshot.is_some()
-        {
-            handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
-                repo_root,
-                adapter.as_ref(),
-                &event,
-                workspace_snapshot,
-            )
-        } else {
-            dispatch_lifecycle_event_for_repo(repo_root, Some(adapter.as_ref()), Some(&event))
-        };
-        dispatch_result.map_err(|err| {
+        dispatch_lifecycle_event_for_repo_with_boundary_snapshot(
+            repo_root,
+            Some(adapter.as_ref()),
+            Some(&event),
+            boundary_snapshot.as_ref(),
+        )
+        .map_err(|err| {
                 anyhow!(
                     "failed to dispatch lifecycle event for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
                 )
