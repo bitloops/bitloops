@@ -107,7 +107,7 @@ pub(crate) fn post_commit_defers_derivation_when_interaction_spool_work_is_pendi
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     init_devql_schema(dir.path());
-    seed_interaction_turn(
+    seed_interaction_turn_with_pending_spool(
         dir.path(),
         "pending-interaction-session",
         "pending-interaction-turn",
@@ -179,9 +179,10 @@ pub(crate) fn post_commit_derives_checkpoint_from_local_spool_when_event_duckdb_
         "pc-duckdb-locked-turn",
         &["locked.txt"],
     );
-    assert!(
-        interaction_queue_count(dir.path()) > 0,
-        "seeded interaction spool should have queued canonical mutations"
+    assert_eq!(
+        interaction_queue_count(dir.path()),
+        0,
+        "seeded canonical interaction data should not leave queued mutations before the event store is blocked"
     );
 
     fs::write(dir.path().join("locked.txt"), "locked").unwrap();

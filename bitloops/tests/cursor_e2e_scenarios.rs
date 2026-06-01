@@ -191,6 +191,7 @@ fn cursor_before_submit_prompt(
         Some(&input),
     );
     assert_success(&out, "hooks cursor before-submit-prompt");
+    test_command_support::drain_lifecycle_spool(repo);
 }
 
 fn cursor_stop(repo: &Path, conversation_id: &str, transcript_path: &str) {

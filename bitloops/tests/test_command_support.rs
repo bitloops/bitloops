@@ -11,6 +11,7 @@ use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 const TEST_STATE_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_STATE_DIR_OVERRIDE";
 const DASHBOARD_CDN_BASE_URL_ENV: &str = "BITLOOPS_DASHBOARD_CDN_BASE_URL";
 const DASHBOARD_MANIFEST_URL_ENV: &str = "BITLOOPS_DASHBOARD_MANIFEST_URL";
+const DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV: &str = "BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH";
 
 pub fn new_isolated_bitloops_command(bin_path: &Path, repo: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new(bin_path);
@@ -136,7 +137,8 @@ pub fn apply_repo_app_paths(cmd: &mut Command, paths: &RepoAppPaths) {
         .env("XDG_STATE_HOME", &paths.xdg_state)
         .env(TEST_STATE_DIR_OVERRIDE_ENV, &paths.test_state)
         .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
-        .env(DISABLE_VERSION_CHECK_ENV, "1");
+        .env(DISABLE_VERSION_CHECK_ENV, "1")
+        .env(DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV, "1");
 }
 
 pub fn repo_app_paths(repo: &Path) -> RepoAppPaths {

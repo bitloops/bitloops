@@ -347,13 +347,13 @@ impl Strategy for ManualCommitStrategy {
                 false
             }
         };
-        let interaction_spool_pending_work = open_interaction_spool(&self.repo_root)
+        let interaction_spool_pending_mutations = open_interaction_spool(&self.repo_root)
             .ok()
             .as_ref()
-            .is_some_and(|spool| spool_has_pending_work(spool));
+            .is_some_and(|spool| spool_has_pending_mutations(spool));
 
         if refresh_deferred_to_daemon
-            || interaction_spool_pending_work
+            || interaction_spool_pending_mutations
             || should_defer_post_commit_derivation_for_lifecycle_spool(&self.repo_root)
         {
             match crate::host::devql::enqueue_spooled_post_commit_derivation(
@@ -740,11 +740,15 @@ fn resolve_interaction_repository_for_post_commit(
 }
 
 fn spool_has_pending_work(spool: &dyn InteractionSpool) -> bool {
-    spool.has_pending_mutations().unwrap_or(false)
+    spool_has_pending_mutations(spool)
         || spool
             .list_uncheckpointed_turns()
             .map(|turns| !turns.is_empty())
             .unwrap_or(false)
+}
+
+fn spool_has_pending_mutations(spool: &dyn InteractionSpool) -> bool {
+    spool.has_pending_mutations().unwrap_or(false)
 }
 
 fn flush_interaction_spool_or_fail(
@@ -755,11 +759,11 @@ fn flush_interaction_spool_or_fail(
     let Some(spool) = spool else {
         return Ok(());
     };
-    let pending_work = spool_has_pending_work(spool);
+    let pending_mutations = spool_has_pending_mutations(spool);
     if let Err(err) = spool.flush(repository) {
         let context =
-            format_post_commit_derivation_context(head, None, None, &[], Some(pending_work));
-        if pending_work {
+            format_post_commit_derivation_context(head, None, None, &[], Some(pending_mutations));
+        if pending_mutations {
             eprintln!(
                 "[bitloops] Warning: failed to flush interaction spool before post_commit derivation ({context}): {err:#}"
             );

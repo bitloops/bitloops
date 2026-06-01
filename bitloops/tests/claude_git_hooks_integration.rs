@@ -249,6 +249,7 @@ fn user_prompt_submit(repo: &Path, session_id: &str, transcript_path: &str, prom
         Some(&input),
     );
     assert_success(&out, "hooks claude-code user-prompt-submit");
+    test_command_support::drain_lifecycle_spool(repo);
 }
 
 fn stop(repo: &Path, session_id: &str, transcript_path: &str) {

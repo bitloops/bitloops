@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+const DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV: &str = "BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH";
+
 fn bitloops_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_bitloops"))
 }
@@ -55,6 +57,7 @@ fn apply_home_env(cmd: &mut Command, home: &Path) {
         .env("XDG_STATE_HOME", paths.xdg_state)
         .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
         .env(DISABLE_VERSION_CHECK_ENV, "1")
+        .env(DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV, "1")
         .env_remove("BITLOOPS_DEVQL_PG_DSN")
         .env_remove("BITLOOPS_DEVQL_CH_URL")
         .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
@@ -356,10 +359,10 @@ fn temporary_checkpoint_count(repo_root: &Path, home: &Path, session_id: &str) -
     })
 }
 
-fn drain_lifecycle_stop_spool_with_home(repo_root: &Path, home: &Path) {
+fn drain_lifecycle_spool_with_home(repo_root: &Path, home: &Path) {
     with_home_env(home, || {
-        bitloops::daemon::drain_lifecycle_stop_spool_for_repo_for_tests(repo_root)
-            .expect("drain lifecycle stop spool for Copilot integration repo");
+        bitloops::daemon::drain_lifecycle_spool_for_repo_for_tests(repo_root)
+            .expect("drain lifecycle spool for Copilot integration repo");
     });
 }
 
@@ -400,6 +403,7 @@ fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
         ),
         "hooks copilot session-start",
     );
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
     assert_success(
         &run_cmd_with_home(
             dir.path(),
@@ -411,6 +415,7 @@ fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
         ),
         "hooks copilot user-prompt-submitted",
     );
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
 
     fs::write(dir.path().join("fallback.txt"), "fallback\n").unwrap();
     write_transcript(
@@ -429,7 +434,7 @@ fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
         ),
         "hooks copilot agent-stop",
     );
-    drain_lifecycle_stop_spool_with_home(dir.path(), home.path());
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
     assert_eq!(temporary_checkpoint_count(dir.path(), home.path(), sid), 1);
 
     assert_success(
@@ -441,6 +446,7 @@ fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
         ),
         "hooks copilot session-end",
     );
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
 
     run_git_expect_success(
         dir.path(),
@@ -497,6 +503,7 @@ fn copilot_session_start_initial_prompt_bootstraps_first_prompt() {
         ),
         "hooks copilot session-start",
     );
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
 
     let backend = with_home_env(home.path(), || create_session_backend_or_local(dir.path()));
     let state = backend
@@ -543,6 +550,7 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
         ),
         "hooks copilot session-start",
     );
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
 
     assert_success(
         &run_cmd_with_home(
@@ -555,6 +563,7 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
         ),
         "hooks copilot user-prompt-submitted first",
     );
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
     fs::write(dir.path().join("first.txt"), "first\n").unwrap();
     write_transcript_turn(
         &transcript_path,
@@ -575,7 +584,7 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
         ),
         "hooks copilot agent-stop first",
     );
-    drain_lifecycle_stop_spool_with_home(dir.path(), home.path());
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
 
     assert_success(
         &run_cmd_with_home(
@@ -588,6 +597,7 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
         ),
         "hooks copilot user-prompt-submitted second",
     );
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
     fs::write(dir.path().join("second.txt"), "second\n").unwrap();
     write_transcript_turn(
         &transcript_path,
@@ -609,7 +619,7 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
         ),
         "hooks copilot agent-stop second",
     );
-    drain_lifecycle_stop_spool_with_home(dir.path(), home.path());
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
 
     assert_success(
         &run_cmd_with_home(
@@ -620,6 +630,7 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
         ),
         "hooks copilot session-end",
     );
+    drain_lifecycle_spool_with_home(dir.path(), home.path());
 
     run_git_expect_success(
         dir.path(),

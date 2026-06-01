@@ -204,6 +204,7 @@ pub fn claude_user_prompt_submit(
         Some(&input),
     );
     assert_success(&out, "hooks claude-code user-prompt-submit");
+    crate::test_command_support::drain_lifecycle_spool(repo);
 }
 
 pub fn claude_stop(repo: &Path, session_id: &str, transcript_path: &str) {
@@ -284,6 +285,7 @@ pub fn cursor_before_submit_prompt(
         Some(&input),
     );
     assert_success(&out, "hooks cursor before-submit-prompt");
+    crate::test_command_support::drain_lifecycle_spool(repo);
 }
 
 pub fn cursor_stop(repo: &Path, conversation_id: &str, transcript_path: &str) {
