@@ -1,6 +1,9 @@
+#[cfg(unix)]
 use super::termination::{ChildTerminationOutcome, ChildTerminationRecord};
+#[cfg(unix)]
 use super::*;
 
+#[cfg(unix)]
 pub(in crate::daemon) fn reap_terminated_child_process(
     pid: u32,
     timeout: Duration,
@@ -34,14 +37,6 @@ pub(in crate::daemon) fn reap_terminated_child_process(
             }
         }
     }
-}
-
-#[cfg(not(unix))]
-pub(in crate::daemon) fn reap_terminated_child_process(
-    _pid: u32,
-    _timeout: Duration,
-) -> Result<bool> {
-    Ok(false)
 }
 
 #[cfg(unix)]
@@ -93,9 +88,4 @@ fn decode_child_termination_status(status: i32) -> ChildTerminationOutcome {
         return ChildTerminationOutcome::Continued;
     }
     ChildTerminationOutcome::Unknown { raw_status: status }
-}
-
-#[cfg(not(unix))]
-pub(in crate::daemon) fn reap_terminated_child_processes() -> Result<Vec<ChildTerminationRecord>> {
-    Ok(Vec::new())
 }

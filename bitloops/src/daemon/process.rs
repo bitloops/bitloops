@@ -20,8 +20,9 @@ pub(super) use self::liveness::parse_internal_daemon_process_pids;
 pub(super) use self::liveness::{
     process_is_running, running_internal_daemon_process_pids_for_config,
 };
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) use self::reaping::reap_terminated_child_process;
+#[cfg(unix)]
 pub(super) use self::reaping::reap_terminated_child_processes;
 pub(super) use self::shutdown::{
     cleanup_spawned_daemon_after_startup_failure, terminate_process,
