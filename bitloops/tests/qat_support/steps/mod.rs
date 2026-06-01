@@ -1453,13 +1453,13 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
-            regex(r"^expected SHAs have file_state rows in (\S+)$"),
-            step_fn(then_expected_shas_have_file_state_rows),
+            regex(r"^expected SHAs have commit artefact rows in (\S+)$"),
+            step_fn(then_expected_shas_have_commit_artefact_rows),
         )
         .then(
             None,
-            regex(r"^expected paths have file_state rows for expected SHAs in (\S+)$"),
-            step_fn(then_expected_paths_have_file_state_rows_for_expected_shas),
+            regex(r"^expected paths have commit artefact rows for expected SHAs in (\S+)$"),
+            step_fn(then_expected_paths_have_commit_artefact_rows_for_expected_shas),
         )
         .then(
             None,

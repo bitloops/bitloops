@@ -13,14 +13,14 @@ pub(crate) fn run_devql_post_commit_refresh(
     repo_root: &Path,
     commit_sha: &str,
     committed_files: &std::collections::HashSet<String>,
-) -> Result<()> {
+) -> Result<bool> {
     if should_skip_post_commit_devql_refresh() {
-        return Ok(());
+        return Ok(false);
     }
     if !crate::config::settings::devql_sync_enabled(repo_root)
         .context("loading DevQL sync producer policy for post-commit refresh")?
     {
-        return Ok(());
+        return Ok(false);
     }
 
     let mut changed_files = committed_files.iter().cloned().collect::<Vec<_>>();
@@ -34,7 +34,7 @@ pub(crate) fn run_devql_post_commit_refresh(
             &changed_files,
         )
         .context("queueing post-commit DevQL refresh in repo-local spool")?;
-        Ok(())
+        Ok(true)
     }
 
     #[cfg(test)]
@@ -45,7 +45,8 @@ pub(crate) fn run_devql_post_commit_refresh(
             let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
                 .context("building DevQL config for post-commit refresh")?;
             execute_devql_post_commit_refresh(&cfg, commit_sha, &changed_files).await
-        })
+        })?;
+        Ok(false)
     }
 }
 

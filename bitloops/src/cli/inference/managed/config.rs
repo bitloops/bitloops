@@ -7,7 +7,11 @@ use std::path::{Path, PathBuf};
 use toml_edit::{Array, DocumentMut, Item, Value as TomlValue};
 
 use crate::cli::embeddings::managed::archive::write_file_atomically;
-use crate::host::inference::BITLOOPS_INFERENCE_RUNTIME_ID;
+use crate::config::unified_config::resolve_inference_from_unified;
+use crate::config::{InferenceConfig, InferenceProfileConfig, InferenceTask, load_daemon_settings};
+use crate::host::inference::{
+    BITLOOPS_INFERENCE_RUNTIME_ID, CLAUDE_CODE_PRINT_DRIVER, CODEX_EXEC_DRIVER,
+};
 use crate::utils::platform_dirs::{bitloops_data_dir, ensure_dir};
 
 const MANAGED_INFERENCE_INSTALL_PARENT_DIR: &str = "tools";
@@ -193,6 +197,92 @@ pub(crate) fn raw_managed_runtime_command(config_path: &Path) -> Result<Option<S
         .map(ToOwned::to_owned))
 }
 
+pub(crate) fn managed_inference_runtime_required_for_repo(
+    _repo_root: &Path,
+    config_path: &Path,
+) -> Result<bool> {
+    if !config_path.is_file() {
+        return Ok(false);
+    }
+    if !managed_bitloops_inference_runtime_is_configured(config_path)? {
+        return Ok(false);
+    }
+    if !managed_runtime_command_is_eligible(config_path)? {
+        return Ok(false);
+    }
+
+    let loaded = load_daemon_settings(Some(config_path)).with_context(|| {
+        format!(
+            "loading Bitloops daemon config for managed inference runtime {}",
+            config_path.display()
+        )
+    })?;
+    let inference = resolve_inference_from_unified(&loaded.settings, &loaded.root, |key| {
+        std::env::var(key).ok()
+    });
+    Ok(inference_requires_managed_bitloops_inference(&inference))
+}
+
+fn managed_bitloops_inference_runtime_is_configured(config_path: &Path) -> Result<bool> {
+    let contents = match fs::read_to_string(config_path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "reading Bitloops daemon config for managed inference runtime {}",
+                    config_path.display()
+                )
+            });
+        }
+    };
+    let doc = contents.parse::<DocumentMut>().with_context(|| {
+        format!(
+            "parsing Bitloops daemon config for managed inference runtime {}",
+            config_path.display()
+        )
+    })?;
+
+    Ok(doc
+        .as_table()
+        .get("inference")
+        .and_then(Item::as_table)
+        .and_then(|table| table.get("runtimes"))
+        .and_then(Item::as_table)
+        .and_then(|table| table.get(BITLOOPS_INFERENCE_RUNTIME_ID))
+        .and_then(Item::as_table)
+        .is_some())
+}
+
+fn inference_requires_managed_bitloops_inference(inference: &InferenceConfig) -> bool {
+    inference
+        .profiles
+        .values()
+        .any(profile_requires_managed_bitloops_inference)
+}
+
+fn profile_requires_managed_bitloops_inference(profile: &InferenceProfileConfig) -> bool {
+    match profile.task {
+        InferenceTask::TextGeneration => profile_uses_bitloops_inference_runtime(profile),
+        InferenceTask::StructuredGeneration => {
+            profile_uses_bitloops_inference_runtime(profile)
+                || matches!(
+                    profile.driver.trim(),
+                    CODEX_EXEC_DRIVER | CLAUDE_CODE_PRINT_DRIVER
+                )
+        }
+        InferenceTask::Embeddings => false,
+    }
+}
+
+fn profile_uses_bitloops_inference_runtime(profile: &InferenceProfileConfig) -> bool {
+    profile
+        .runtime
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|runtime| runtime == BITLOOPS_INFERENCE_RUNTIME_ID)
+}
+
 pub(crate) fn rewrite_managed_runtime_command_if_eligible(
     config_path: &Path,
     binary_path: &Path,
@@ -271,4 +361,166 @@ pub(crate) fn reset_managed_inference_install_dir() -> Result<()> {
     }
     ensure_dir(&install_dir)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::managed_inference_runtime_required_for_repo;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn write_daemon_config(temp: &TempDir, contents: &str) -> std::path::PathBuf {
+        let path = temp.path().join("daemon.toml");
+        fs::write(&path, contents).expect("write daemon config");
+        path
+    }
+
+    #[test]
+    fn text_generation_profile_using_bitloops_inference_requires_managed_runtime() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = write_daemon_config(
+            &temp,
+            r#"
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+args = []
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+temperature = "0.1"
+max_output_tokens = 800
+"#,
+        );
+
+        assert!(
+            managed_inference_runtime_required_for_repo(temp.path(), &config_path)
+                .expect("managed runtime requirement")
+        );
+    }
+
+    #[test]
+    fn cli_agent_structured_generation_profile_requires_managed_runtime_launcher() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = write_daemon_config(
+            &temp,
+            r#"
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+args = []
+
+[inference.runtimes.codex]
+command = "codex"
+args = []
+
+[inference.profiles.architecture_role_adjudication_codex]
+task = "structured_generation"
+driver = "codex_exec"
+runtime = "codex"
+model = "gpt-5.4-mini"
+temperature = "0.1"
+max_output_tokens = 1024
+"#,
+        );
+
+        assert!(
+            managed_inference_runtime_required_for_repo(temp.path(), &config_path)
+                .expect("managed runtime requirement")
+        );
+    }
+
+    #[test]
+    fn non_cli_structured_generation_without_managed_runtime_does_not_require_it() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = write_daemon_config(
+            &temp,
+            r#"
+[inference.runtimes.remote]
+command = "remote-runtime"
+args = []
+
+[inference.profiles.remote_structured]
+task = "structured_generation"
+driver = "openai_chat_completions"
+runtime = "remote"
+model = "gpt-5.4-mini"
+temperature = "0.1"
+max_output_tokens = 1024
+"#,
+        );
+
+        assert!(
+            !managed_inference_runtime_required_for_repo(temp.path(), &config_path)
+                .expect("managed runtime requirement")
+        );
+    }
+
+    #[test]
+    fn structured_generation_using_bitloops_inference_runtime_requires_managed_runtime() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = write_daemon_config(
+            &temp,
+            r#"
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+args = []
+
+[inference.profiles.local_structured]
+task = "structured_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+temperature = "0.1"
+max_output_tokens = 1024
+"#,
+        );
+
+        assert!(
+            managed_inference_runtime_required_for_repo(temp.path(), &config_path)
+                .expect("managed runtime requirement")
+        );
+    }
+
+    #[test]
+    fn custom_managed_runtime_command_is_user_managed() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = write_daemon_config(
+            &temp,
+            r#"
+[inference.runtimes.bitloops_inference]
+command = "/opt/custom/bitloops-inference"
+args = []
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+temperature = "0.1"
+max_output_tokens = 800
+"#,
+        );
+
+        assert!(
+            !managed_inference_runtime_required_for_repo(temp.path(), &config_path)
+                .expect("managed runtime requirement")
+        );
+    }
+
+    #[test]
+    fn missing_daemon_config_does_not_require_managed_runtime() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("missing.toml");
+
+        assert!(
+            !managed_inference_runtime_required_for_repo(temp.path(), &config_path)
+                .expect("managed runtime requirement")
+        );
+        assert!(
+            !config_path.exists(),
+            "requirement check should not create daemon config"
+        );
+    }
 }

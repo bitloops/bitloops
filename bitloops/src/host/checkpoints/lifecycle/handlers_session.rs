@@ -1,9 +1,12 @@
+use std::path::Path;
+
 use anyhow::{Result, anyhow};
 
 use super::adapter::LifecycleAgentAdapter;
 use super::canonical::build_phase3_canonical_request;
 use super::git_workspace::collect_untracked_files_for_lifecycle;
 use super::interaction::{flush_interaction_spool_best_effort, resolve_interaction_spool};
+use super::spool::LifecycleBoundarySnapshot;
 use super::time_and_ids::{
     generate_interaction_event_id, generate_lifecycle_turn_id, now_rfc3339,
     truncate_prompt_for_storage,
@@ -53,14 +56,22 @@ pub fn handle_lifecycle_session_start(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
+    let repo_root = crate::utils::paths::repo_root()?;
+    handle_lifecycle_session_start_for_repo(&repo_root, agent, event)
+}
+
+pub fn handle_lifecycle_session_start_for_repo(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
     let canonical_request = build_phase3_canonical_request(agent.agent_name(), event)?;
     let session_id = apply_session_id_policy(
         &canonical_request.session.session_id,
         SessionIdPolicy::Strict,
     )
     .map_err(|_| anyhow!("no session_id in SessionStart event"))?;
-    let repo_root = crate::utils::paths::repo_root()?;
-    let backend = create_session_backend_or_local(&repo_root);
+    let backend = create_session_backend_or_local(repo_root);
 
     let mut state = backend.load_session(&session_id)?.unwrap_or_else(|| {
         crate::host::checkpoints::session::state::SessionState {
@@ -84,7 +95,7 @@ pub fn handle_lifecycle_session_start(
     }
     state.last_interaction_time = Some(now.clone());
     state.worktree_path = repo_root.to_string_lossy().into_owned();
-    state.worktree_id = crate::utils::paths::get_worktree_id(&repo_root)?;
+    state.worktree_id = crate::utils::paths::get_worktree_id(repo_root)?;
     if state.agent_type.trim().is_empty() {
         state.agent_type = canonical_request.agent.agent_key.clone();
     }
@@ -97,7 +108,7 @@ pub fn handle_lifecycle_session_start(
 
     backend.save_session(&state)?;
 
-    if let Some(spool) = resolve_interaction_spool(&repo_root) {
+    if let Some(spool) = resolve_interaction_spool(repo_root) {
         let model = resolve_interaction_model(&event.model, &state.transcript_path);
         let (actor_id, actor_name, actor_email, actor_source) = interaction_actor_identity();
         let session = InteractionSession {
@@ -147,7 +158,7 @@ pub fn handle_lifecycle_session_start(
             eprintln!("[bitloops] Warning: failed to spool session_start event: {err}");
         }
     }
-    flush_interaction_spool_best_effort(&repo_root);
+    flush_interaction_spool_best_effort(repo_root);
 
     Ok(())
 }
@@ -156,14 +167,40 @@ pub fn handle_lifecycle_turn_start(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
+    let repo_root = crate::utils::paths::repo_root()?;
+    handle_lifecycle_turn_start_for_repo(&repo_root, agent, event)
+}
+
+pub fn handle_lifecycle_turn_start_for_repo(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
+    handle_lifecycle_turn_start_for_repo_inner(repo_root, agent, event, None)
+}
+
+pub(crate) fn handle_lifecycle_turn_start_for_repo_with_boundary_snapshot(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+    boundary_snapshot: Option<&LifecycleBoundarySnapshot>,
+) -> Result<()> {
+    handle_lifecycle_turn_start_for_repo_inner(repo_root, agent, event, boundary_snapshot)
+}
+
+fn handle_lifecycle_turn_start_for_repo_inner(
+    repo_root: &Path,
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+    boundary_snapshot: Option<&LifecycleBoundarySnapshot>,
+) -> Result<()> {
     let canonical_request = build_phase3_canonical_request(agent.agent_name(), event)?;
     let session_id = apply_session_id_policy(
         &canonical_request.session.session_id,
         SessionIdPolicy::Strict,
     )
     .map_err(|_| anyhow!("no session_id in TurnStart event"))?;
-    let repo_root = crate::utils::paths::repo_root()?;
-    let backend = create_session_backend_or_local(&repo_root);
+    let backend = create_session_backend_or_local(repo_root);
 
     if event.source == PRE_PROMPT_SOURCE_CURSOR_SHELL
         && backend.load_pre_prompt(&session_id)?.is_some()
@@ -171,12 +208,17 @@ pub fn handle_lifecycle_turn_start(
         return Ok(());
     }
 
-    let _ = ensure_hook_setup(&repo_root, agent.agent_name());
+    let _ = ensure_hook_setup(repo_root, agent.agent_name());
 
     let transcript_offset = agent
         .as_transcript_analyzer()
         .and_then(|analyzer| analyzer.get_transcript_position(&event.session_ref).ok())
         .unwrap_or(0);
+    let snapshot_untracked = boundary_snapshot.map(|snapshot| snapshot.pre_untracked_files.clone());
+    let snapshot_offset = boundary_snapshot
+        .and_then(|snapshot| snapshot.transcript_offset)
+        .and_then(|offset| usize::try_from(offset).ok());
+    let transcript_offset = snapshot_offset.unwrap_or(transcript_offset);
 
     let pre_prompt = crate::host::checkpoints::session::state::PrePromptState {
         session_id: session_id.clone(),
@@ -190,13 +232,14 @@ pub fn handle_lifecycle_turn_start(
             .session_ref
             .clone()
             .unwrap_or_else(|| event.session_ref.clone()),
-        untracked_files: collect_untracked_files_for_lifecycle(&repo_root),
+        untracked_files: snapshot_untracked
+            .unwrap_or_else(|| collect_untracked_files_for_lifecycle(repo_root)),
         transcript_offset: transcript_offset as i64,
         ..crate::host::checkpoints::session::state::PrePromptState::default()
     };
     backend.save_pre_prompt(&pre_prompt)?;
 
-    let strategy = super::resolve_configured_strategy(&repo_root)?;
+    let strategy = super::resolve_configured_strategy(repo_root)?;
     if let Err(err) = strategy.initialize_session(
         &session_id,
         agent.agent_name(),
@@ -252,7 +295,7 @@ pub fn handle_lifecycle_turn_start(
     let prompt_text =
         truncate_prompt_for_storage(canonical_request.prompt.as_deref().unwrap_or(&event.prompt));
     let turn_number = state.pending.step_count + 1;
-    if let Some(spool) = resolve_interaction_spool(&repo_root) {
+    if let Some(spool) = resolve_interaction_spool(repo_root) {
         let model = resolve_interaction_model(&event.model, &state.transcript_path);
         let (actor_id, actor_name, actor_email, actor_source) = interaction_actor_identity();
         let session = InteractionSession {
@@ -320,7 +363,7 @@ pub fn handle_lifecycle_turn_start(
             eprintln!("[bitloops] Warning: failed to spool turn_start event: {err}");
         }
     }
-    flush_interaction_spool_best_effort(&repo_root);
+    flush_interaction_spool_best_effort(repo_root);
 
     Ok(())
 }

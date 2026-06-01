@@ -24,6 +24,10 @@ use crate::capability_packs::semantic_clones::{
     persist_active_embedding_setup,
 };
 
+#[path = "commands_ingest/commit_artefacts.rs"]
+mod commit_artefacts;
+#[path = "commands_ingest/current_mirror.rs"]
+mod current_mirror;
 #[path = "commands_ingest/orchestrator.rs"]
 mod orchestrator;
 #[path = "commands_ingest/progress.rs"]

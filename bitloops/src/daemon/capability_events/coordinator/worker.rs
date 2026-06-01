@@ -135,8 +135,13 @@ impl CapabilityEventCoordinator {
         let coordinator = Arc::clone(self);
         tokio::spawn(async move {
             let completion = coordinator.execute_run(run).await;
+            let refresh_enrichment_capacity = matches!(completion, RunCompletion::Completed { .. });
             if let Err(err) = coordinator.apply_completion(completion) {
                 log::warn!("failed to persist current-state consumer completion: {err:#}");
+            } else if refresh_enrichment_capacity {
+                refresh_enrichment_capacity_after_current_state_consumer_completion(
+                    &EnrichmentCoordinator::shared(),
+                );
             }
             coordinator.notify.notify_waiters();
         });
@@ -197,9 +202,6 @@ impl CapabilityEventCoordinator {
         match outcome {
             Ok(Ok(result)) => match validate_consumer_result(&plan.request, &result) {
                 Ok(()) => {
-                    refresh_enrichment_capacity_after_current_state_consumer_completion(
-                        &EnrichmentCoordinator::shared(),
-                    );
                     log::info!(
                         "current-state consumer completed: repo_id={} capability_id={} consumer_id={} reconcile_mode={} from_generation_seq={} to_generation_seq={} metrics={}",
                         plan.record.repo_id,

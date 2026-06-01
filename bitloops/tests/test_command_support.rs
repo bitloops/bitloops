@@ -9,6 +9,9 @@ use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 
 const TEST_STATE_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_STATE_DIR_OVERRIDE";
+const DASHBOARD_CDN_BASE_URL_ENV: &str = "BITLOOPS_DASHBOARD_CDN_BASE_URL";
+const DASHBOARD_MANIFEST_URL_ENV: &str = "BITLOOPS_DASHBOARD_MANIFEST_URL";
+const DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV: &str = "BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH";
 
 pub fn new_isolated_bitloops_command(bin_path: &Path, repo: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new(bin_path);
@@ -18,7 +21,9 @@ pub fn new_isolated_bitloops_command(bin_path: &Path, repo: &Path, args: &[&str]
         .env_remove("BITLOOPS_DEVQL_CH_URL")
         .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
         .env_remove("BITLOOPS_DEVQL_CH_USER")
-        .env_remove("BITLOOPS_DEVQL_CH_PASSWORD");
+        .env_remove("BITLOOPS_DEVQL_CH_PASSWORD")
+        .env_remove(DASHBOARD_CDN_BASE_URL_ENV)
+        .env_remove(DASHBOARD_MANIFEST_URL_ENV);
     apply_repo_app_env(&mut cmd, repo);
 
     cmd
@@ -132,7 +137,8 @@ pub fn apply_repo_app_paths(cmd: &mut Command, paths: &RepoAppPaths) {
         .env("XDG_STATE_HOME", &paths.xdg_state)
         .env(TEST_STATE_DIR_OVERRIDE_ENV, &paths.test_state)
         .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
-        .env(DISABLE_VERSION_CHECK_ENV, "1");
+        .env(DISABLE_VERSION_CHECK_ENV, "1")
+        .env(DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV, "1");
 }
 
 pub fn repo_app_paths(repo: &Path) -> RepoAppPaths {
@@ -163,11 +169,17 @@ pub fn with_repo_app_env<T>(repo: &Path, f: impl FnOnce() -> T) -> T {
 
 #[cfg(feature = "slow-tests")]
 #[allow(dead_code)]
-pub fn drain_lifecycle_stop_spool(repo: &Path) {
+pub fn drain_lifecycle_spool(repo: &Path) {
     with_repo_app_env(repo, || {
-        bitloops::daemon::drain_lifecycle_stop_spool_for_repo_for_tests(repo)
-            .expect("drain lifecycle stop spool for integration test repo");
+        bitloops::daemon::drain_lifecycle_spool_for_repo_for_tests(repo)
+            .expect("drain lifecycle spool for integration test repo");
     });
+}
+
+#[cfg(feature = "slow-tests")]
+#[allow(dead_code)]
+pub fn drain_lifecycle_stop_spool(repo: &Path) {
+    drain_lifecycle_spool(repo);
 }
 
 pub fn enter_repo_app_env(repo: &Path) -> RepoAppEnvGuard {

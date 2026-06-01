@@ -13,6 +13,7 @@ enum PostgresSyncSchemaPolicy {
 
 pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     if crate::host::devql::types::sqlite_path_uses_remote_shared_relational_authority(sqlite_path) {
+        drop_commit_hunk_tables_if_present(sqlite_path).await?;
         warn_on_legacy_shared_sqlite_tables(sqlite_path)?;
         return init_sqlite_current_projection_schema(sqlite_path).await;
     }
@@ -22,6 +23,7 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     sqlite
         .initialise_devql_schema()
         .context("creating SQLite relational DevQL tables")?;
+    drop_commit_hunk_tables_if_present(sqlite_path).await?;
     let repository_columns = sqlite
         .with_connection(|conn| sqlite_table_columns(conn, "repositories"))
         .context("inspecting SQLite repositories table shape")?;
@@ -113,6 +115,7 @@ const LEGACY_SHARED_SQLITE_TABLES: &[&str] = &[
     "sync_state",
     "commits",
     "commit_ingest_ledger",
+    "commit_artefacts",
     "file_state",
     "artefact_snapshots",
     "artefacts",
@@ -125,6 +128,19 @@ const LEGACY_SHARED_SQLITE_TABLES: &[&str] = &[
     "symbol_embeddings",
     "symbol_clone_edges",
 ];
+
+async fn drop_commit_hunk_tables_if_present(sqlite_path: &Path) -> Result<()> {
+    if !sqlite_path.is_file() {
+        return Ok(());
+    }
+    sqlite_exec_path_allow_create(sqlite_path, commit_hunk_tables_cleanup_sql())
+        .await
+        .context("dropping obsolete SQLite commit hunk tables")
+}
+
+fn commit_hunk_tables_cleanup_sql() -> &'static str {
+    "DROP TABLE IF EXISTS commit_hunks;\nDROP TABLE IF EXISTS commit_file_deltas;"
+}
 
 fn warn_on_legacy_shared_sqlite_tables(sqlite_path: &Path) -> Result<()> {
     if !sqlite_path.is_file() {
@@ -154,6 +170,7 @@ pub(crate) async fn init_sqlite_current_projection_schema(sqlite_path: &Path) ->
     sqlite_exec_path_allow_create(sqlite_path, sqlite_current_projection_schema_sql())
         .await
         .context("creating SQLite current/projection relational tables")?;
+    drop_commit_hunk_tables_if_present(sqlite_path).await?;
     sqlite_exec_path_allow_create(
         sqlite_path,
         crate::host::devql::sync::schema::sync_schema_sql(),
@@ -624,6 +641,10 @@ async fn init_postgres_schema_with_policy(
     postgres_exec(pg_client, checkpoint_schema_sql)
         .await
         .context("creating Postgres checkpoint migration tables")?;
+
+    postgres_exec(pg_client, commit_hunk_tables_cleanup_sql())
+        .await
+        .context("dropping obsolete Postgres commit hunk tables")?;
 
     let test_links_upgrade_sql = test_links_upgrade_sql();
     postgres_exec(pg_client, test_links_upgrade_sql)

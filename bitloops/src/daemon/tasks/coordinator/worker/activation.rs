@@ -48,9 +48,8 @@ impl DevqlTaskCoordinator {
         }
         match crate::host::runtime_store::open_runtime_sqlite_for_config_root(config_root) {
             Ok(sqlite) => {
-                if let Err(err) = super::lifecycle_spool::recover_lifecycle_stop_spool_jobs(&sqlite)
-                {
-                    log::warn!("failed to recover lifecycle stop spool jobs: {err:#}");
+                if let Err(err) = super::lifecycle_spool::recover_lifecycle_spool_jobs(&sqlite) {
+                    log::warn!("failed to recover lifecycle spool jobs: {err:#}");
                 }
             }
             Err(err) => {
@@ -127,10 +126,10 @@ impl DevqlTaskCoordinator {
         match crate::host::runtime_store::open_runtime_sqlite_for_config_root(
             producer_spool_config_root,
         )
-        .and_then(|sqlite| super::lifecycle_spool::process_lifecycle_stop_spool_once(&sqlite))
+        .and_then(|sqlite| super::lifecycle_spool::process_lifecycle_spool_once(&sqlite))
         {
             Ok(processed) => made_progress |= processed > 0,
-            Err(err) => log::warn!("daemon lifecycle stop spool worker error: {err:#}"),
+            Err(err) => log::warn!("daemon lifecycle spool worker error: {err:#}"),
         }
 
         if !reconcile_blocked {
@@ -152,14 +151,14 @@ impl DevqlTaskCoordinator {
         let lifecycle_blocked_repo_ids =
             match crate::host::runtime_store::open_runtime_sqlite_for_config_root(config_root)
                 .and_then(|sqlite| {
-                    crate::host::checkpoints::lifecycle::spool::lifecycle_stop_spool_repo_ids_with_work(
+                    crate::host::checkpoints::lifecycle::spool::lifecycle_spool_repo_ids_with_work(
                         &sqlite,
                     )
                 }) {
                 Ok(repo_ids) => repo_ids,
                 Err(err) => {
                     log::warn!(
-                        "daemon lifecycle stop spool repo work query failed before producer claim: {err:#}"
+                        "daemon lifecycle spool repo work query failed before producer claim: {err:#}"
                     );
                     std::collections::HashSet::new()
                 }

@@ -135,6 +135,10 @@ pub(super) async fn select_recent_branch_commit_backfill_window(
         if existing_ledger
             .as_ref()
             .is_some_and(commit_is_fully_ingested)
+            && !commit_history_needs_artefact_metadata_repair(
+                repo_root, relational, repo_id, commit_sha,
+            )
+            .await?
         {
             continue;
         }
@@ -187,6 +191,126 @@ pub(super) fn commit_is_fully_ingested(entry: &CommitIngestLedgerEntry) -> bool 
             entry.checkpoint_status.as_str(),
             COMMIT_CHECKPOINT_STATUS_COMPLETED | COMMIT_CHECKPOINT_STATUS_NOT_APPLICABLE
         )
+}
+
+pub(super) async fn commit_history_needs_artefact_metadata_repair(
+    repo_root: &Path,
+    relational: &RelationalStorage,
+    repo_id: &str,
+    commit_sha: &str,
+) -> Result<bool> {
+    let artefact_count_sql = format!(
+        "SELECT COUNT(*) AS artefact_count \
+         FROM commit_artefacts ca \
+         JOIN artefacts a \
+           ON a.repo_id = ca.repo_id \
+          AND a.artefact_id = ca.artefact_id \
+         WHERE ca.repo_id = '{}' \
+           AND ca.commit_sha = '{}'",
+        esc_pg(repo_id),
+        esc_pg(commit_sha),
+    );
+    let artefact_rows = relational
+        .query_rows_for_role(RelationalStorageRole::SharedRelational, &artefact_count_sql)
+        .await?;
+    let artefact_count = artefact_rows
+        .first()
+        .and_then(|row| row.get("artefact_count"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    if artefact_count > 0 {
+        return Ok(false);
+    }
+
+    commit_has_extractable_after_side_hunk_delta(repo_root, repo_id, commit_sha).await
+}
+
+async fn commit_has_extractable_after_side_hunk_delta(
+    repo_root: &Path,
+    repo_id: &str,
+    commit_sha: &str,
+) -> Result<bool> {
+    let raw_diff = git_show_hunk_diff(repo_root, commit_sha)?;
+    let parsed = parse_commit_hunks_from_git_show(repo_id, commit_sha, &raw_diff)?;
+    let after_side_delta_ids = parsed
+        .hunks
+        .iter()
+        .filter(|hunk| !hunk.added_lines.is_empty())
+        .map(|hunk| hunk.delta_id.as_str())
+        .collect::<HashSet<_>>();
+    if after_side_delta_ids.is_empty() {
+        return Ok(false);
+    }
+
+    let tracked_paths = tracked_paths_at_revision_for_history_repair(repo_root, commit_sha)?;
+    let (parser_version, extractor_version) = resolve_pack_versions_for_history_repair()?;
+    let classifier = ProjectAwareClassifier::discover_for_revision(
+        repo_root,
+        commit_sha,
+        tracked_paths,
+        &parser_version,
+        &extractor_version,
+    )
+    .with_context(|| {
+        format!(
+            "building project-aware classifier for commit artefact repair at commit {commit_sha}"
+        )
+    })?;
+
+    for delta in &parsed.file_deltas {
+        if delta.is_binary || !after_side_delta_ids.contains(delta.delta_id.as_str()) {
+            continue;
+        }
+        let Some(path) = delta.path_after.as_deref() else {
+            continue;
+        };
+        if delta.new_blob_sha.is_none() {
+            continue;
+        }
+        let classification = classifier
+            .classify_repo_relative_path(path, false)
+            .with_context(|| {
+                format!("classifying commit artefact repair path `{path}` at commit {commit_sha}")
+            })?;
+        if classification.analysis_mode != AnalysisMode::Excluded && classification.should_extract()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn tracked_paths_at_revision_for_history_repair(
+    repo_root: &Path,
+    revision: &str,
+) -> Result<Vec<String>> {
+    let output = run_git(
+        repo_root,
+        &["ls-tree", "-r", "--full-tree", "--name-only", revision],
+    )
+    .with_context(|| format!("listing tracked files at revision `{revision}`"))?;
+    Ok(output
+        .lines()
+        .map(normalize_repo_path)
+        .filter(|path| !path.is_empty())
+        .collect())
+}
+
+fn resolve_pack_versions_for_history_repair() -> Result<(String, String)> {
+    let host = core_extension_host()?;
+    let mut packs = host
+        .language_packs()
+        .registered_pack_ids()
+        .into_iter()
+        .filter_map(|pack_id| host.language_packs().resolve_pack(pack_id))
+        .map(|descriptor| format!("{}@{}", descriptor.id, descriptor.version))
+        .collect::<Vec<_>>();
+    packs.sort();
+    let joined = packs.join("+");
+    Ok((
+        format!("devql-sync-parser@{joined}"),
+        format!("devql-sync-extractor@{joined}"),
+    ))
 }
 
 pub(super) async fn mark_commit_history_completed(

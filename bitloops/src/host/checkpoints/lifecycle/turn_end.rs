@@ -6,9 +6,10 @@ use super::canonical::build_phase3_canonical_request;
 use super::git_workspace::{
     detect_file_changes_for_turn_end, filter_and_normalize_paths_for_turn_end,
     filter_to_uncommitted_files_for_turn_end, merge_unique_for_turn_end,
+    workspace_changes_from_boundary_snapshot,
 };
 use super::interaction::{flush_interaction_spool_best_effort, resolve_interaction_spool};
-use super::spool::LifecycleStopWorkspaceSnapshot;
+use super::spool::{LifecycleBoundarySnapshot, LifecycleWorkspaceSnapshot};
 use super::time_and_ids::{generate_interaction_event_id, generate_lifecycle_turn_id, now_rfc3339};
 use super::transcript::resolve_transcript_offset;
 use super::types::{LifecycleEvent, PrePromptState, SessionIdPolicy, apply_session_id_policy};
@@ -56,7 +57,7 @@ pub(crate) fn handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
     repo_root: &Path,
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
-    workspace_snapshot: Option<LifecycleStopWorkspaceSnapshot>,
+    workspace_snapshot: Option<LifecycleWorkspaceSnapshot>,
 ) -> Result<()> {
     let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::FallbackUnknown)?;
     let backend = create_session_backend_or_local(repo_root);
@@ -141,14 +142,22 @@ pub(crate) fn handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
         .as_ref()
         .map(|p| p.untracked_files.clone())
         .unwrap_or_default();
-    let (git_modified, rel_new, rel_deleted, used_workspace_snapshot) =
-        if let Some(snapshot) = workspace_snapshot {
-            workspace_changes_from_snapshot_for_turn_end(repo_root, snapshot, &pre_untracked)
-        } else {
-            let (git_modified, rel_new, rel_deleted) =
-                detect_file_changes_for_turn_end(repo_root, Some(&pre_untracked));
-            (git_modified, rel_new, rel_deleted, false)
+    let (git_modified, rel_new, rel_deleted, used_workspace_snapshot) = if let Some(snapshot) =
+        workspace_snapshot
+    {
+        let boundary_snapshot = LifecycleBoundarySnapshot {
+            workspace: Some(snapshot),
+            ..LifecycleBoundarySnapshot::default()
         };
+        let (modified, new_files, deleted) =
+            workspace_changes_from_boundary_snapshot(repo_root, &boundary_snapshot, &pre_untracked)
+                .unwrap_or_default();
+        (modified, new_files, deleted, true)
+    } else {
+        let (git_modified, rel_new, rel_deleted) =
+            detect_file_changes_for_turn_end(repo_root, Some(&pre_untracked));
+        (git_modified, rel_new, rel_deleted, false)
+    };
     // Transcript parsing is primary, git modified files are fallback for
     // unrecognized tools/transcript parsing misses.
     let mut rel_modified = merge_unique_for_turn_end(transcript_modified_files, git_modified);
@@ -411,24 +420,6 @@ pub(crate) fn handle_lifecycle_turn_end_for_repo_with_workspace_snapshot(
     let _ = backend.delete_pre_prompt(&session_id);
 
     Ok(())
-}
-
-fn workspace_changes_from_snapshot_for_turn_end(
-    repo_root: &Path,
-    snapshot: LifecycleStopWorkspaceSnapshot,
-    pre_untracked: &[String],
-) -> (Vec<String>, Vec<String>, Vec<String>, bool) {
-    let pre_untracked = pre_untracked
-        .iter()
-        .map(String::as_str)
-        .collect::<std::collections::HashSet<_>>();
-    let modified = filter_and_normalize_paths_for_turn_end(&snapshot.modified_files, repo_root);
-    let new_files = filter_and_normalize_paths_for_turn_end(&snapshot.new_files, repo_root)
-        .into_iter()
-        .filter(|path| !pre_untracked.contains(path.as_str()))
-        .collect::<Vec<_>>();
-    let deleted = filter_and_normalize_paths_for_turn_end(&snapshot.deleted_files, repo_root);
-    (modified, new_files, deleted, true)
 }
 
 const GIT_ENV_KEYS_FOR_REPO_COMMANDS: [&str; 12] = [

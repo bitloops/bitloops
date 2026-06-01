@@ -1,3 +1,6 @@
+use std::io::Read;
+use std::path::Path;
+
 use anyhow::Result;
 
 use crate::adapters::agents::Agent;
@@ -24,13 +27,22 @@ pub const HOOK_NAME_SUBAGENT_START: &str = "subagent-start";
 pub const HOOK_NAME_SUBAGENT_STOP: &str = "subagent-stop";
 
 pub fn resolve_transcript_ref(conversation_id: &str, raw_path: Option<&str>) -> String {
+    let repo_root = crate::utils::paths::repo_root().ok();
+    resolve_transcript_ref_with_repo(conversation_id, raw_path, repo_root.as_deref())
+}
+
+fn resolve_transcript_ref_with_repo(
+    conversation_id: &str,
+    raw_path: Option<&str>,
+    repo_root: Option<&Path>,
+) -> String {
     if let Some(path) = raw_path
         && !path.trim().is_empty()
     {
         return path.to_string();
     }
 
-    let Ok(repo_root) = crate::utils::paths::repo_root() else {
+    let Some(repo_root) = repo_root else {
         return String::new();
     };
 
@@ -41,9 +53,23 @@ pub fn resolve_transcript_ref(conversation_id: &str, raw_path: Option<&str>) -> 
     agent.resolve_session_file(&session_dir, conversation_id)
 }
 
-pub fn parse_hook_event(
+pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<LifecycleEvent>> {
+    let repo_root = crate::utils::paths::repo_root().ok();
+    parse_hook_event_with_repo(hook_name, stdin, repo_root.as_deref())
+}
+
+pub fn parse_hook_event_for_repo(
     hook_name: &str,
-    stdin: &mut dyn std::io::Read,
+    stdin: &mut dyn Read,
+    repo_root: &Path,
+) -> Result<Option<LifecycleEvent>> {
+    parse_hook_event_with_repo(hook_name, stdin, Some(repo_root))
+}
+
+fn parse_hook_event_with_repo(
+    hook_name: &str,
+    stdin: &mut dyn Read,
+    repo_root: Option<&Path>,
 ) -> Result<Option<LifecycleEvent>> {
     match hook_name {
         HOOK_NAME_SESSION_START => {
@@ -52,8 +78,12 @@ pub fn parse_hook_event(
                 apply_session_id_policy(&raw.conversation_id, SessionIdPolicy::Strict)?;
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::SessionStart),
-                session_id,
-                session_ref: raw.transcript_path.unwrap_or_default(),
+                session_id: session_id.clone(),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    raw.transcript_path.as_deref(),
+                    repo_root,
+                ),
                 model: raw.model,
                 ..LifecycleEvent::default()
             }))
@@ -65,7 +95,11 @@ pub fn parse_hook_event(
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::TurnStart),
                 session_id: session_id.clone(),
-                session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    raw.transcript_path.as_deref(),
+                    repo_root,
+                ),
                 prompt: raw.prompt,
                 model: raw.model,
                 ..LifecycleEvent::default()
@@ -79,7 +113,11 @@ pub fn parse_hook_event(
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::TurnStart),
                 session_id: session_id.clone(),
-                session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    raw.transcript_path.as_deref(),
+                    repo_root,
+                ),
                 source: PRE_PROMPT_SOURCE_CURSOR_SHELL.to_string(),
                 prompt: if command.is_empty() {
                     "Run shell command".to_string()
@@ -97,7 +135,11 @@ pub fn parse_hook_event(
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::TurnEnd),
                 session_id: session_id.clone(),
-                session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    raw.transcript_path.as_deref(),
+                    repo_root,
+                ),
                 source: PRE_PROMPT_SOURCE_CURSOR_SHELL.to_string(),
                 model: raw.model,
                 ..LifecycleEvent::default()
@@ -110,7 +152,11 @@ pub fn parse_hook_event(
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::TurnEnd),
                 session_id: session_id.clone(),
-                session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    raw.transcript_path.as_deref(),
+                    repo_root,
+                ),
                 model: raw.model,
                 ..LifecycleEvent::default()
             }))
@@ -122,7 +168,11 @@ pub fn parse_hook_event(
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::SessionEnd),
                 session_id: session_id.clone(),
-                session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    raw.transcript_path.as_deref(),
+                    repo_root,
+                ),
                 model: raw.model,
                 finalize_open_turn: true,
                 ..LifecycleEvent::default()
@@ -130,13 +180,16 @@ pub fn parse_hook_event(
         }
         HOOK_NAME_PRE_COMPACT => {
             let raw: CursorSessionInfoRaw = read_and_parse_hook_input(stdin)?;
+            let session_id =
+                apply_session_id_policy(&raw.conversation_id, SessionIdPolicy::PreserveEmpty)?;
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::Compaction),
-                session_id: apply_session_id_policy(
-                    &raw.conversation_id,
-                    SessionIdPolicy::PreserveEmpty,
-                )?,
-                session_ref: raw.transcript_path.unwrap_or_default(),
+                session_id: session_id.clone(),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    raw.transcript_path.as_deref(),
+                    repo_root,
+                ),
                 model: raw.model,
                 ..LifecycleEvent::default()
             }))
@@ -146,13 +199,16 @@ pub fn parse_hook_event(
             if raw.task.trim().is_empty() {
                 return Ok(None);
             }
+            let session_id =
+                apply_session_id_policy(&raw.conversation_id, SessionIdPolicy::PreserveEmpty)?;
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::SubagentStart),
-                session_id: apply_session_id_policy(
-                    &raw.conversation_id,
-                    SessionIdPolicy::PreserveEmpty,
-                )?,
-                session_ref: raw.transcript_path.unwrap_or_default(),
+                session_id: session_id.clone(),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    raw.transcript_path.as_deref(),
+                    repo_root,
+                ),
                 tool_use_id: raw.subagent_id.clone(),
                 subagent_id: raw.subagent_id,
                 model: raw.model,
@@ -164,13 +220,16 @@ pub fn parse_hook_event(
             if raw.task.trim().is_empty() {
                 return Ok(None);
             }
+            let session_id =
+                apply_session_id_policy(&raw.conversation_id, SessionIdPolicy::PreserveEmpty)?;
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::SubagentEnd),
-                session_id: apply_session_id_policy(
-                    &raw.conversation_id,
-                    SessionIdPolicy::PreserveEmpty,
-                )?,
-                session_ref: raw.transcript_path.unwrap_or_default(),
+                session_id: session_id.clone(),
+                session_ref: resolve_transcript_ref_with_repo(
+                    &session_id,
+                    raw.transcript_path.as_deref(),
+                    repo_root,
+                ),
                 tool_use_id: raw.subagent_id.clone(),
                 subagent_id: raw.subagent_id,
                 model: raw.model,

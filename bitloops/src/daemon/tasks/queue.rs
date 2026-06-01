@@ -209,6 +209,18 @@ pub(super) fn next_runnable_task_indexes_blocking_repo_ids(
         })
         .map(|task| task.repo_id.as_str())
         .collect::<HashSet<_>>();
+    let sync_blocked_ingest_repo_ids = state
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.kind == DevqlTaskKind::Sync
+                && matches!(
+                    task.status,
+                    DevqlTaskStatus::Queued | DevqlTaskStatus::Running
+                )
+        })
+        .map(|task| task.repo_id.as_str())
+        .collect::<HashSet<_>>();
     let running_lanes = state
         .tasks
         .iter()
@@ -234,6 +246,11 @@ pub(super) fn next_runnable_task_indexes_blocking_repo_ids(
         if repo_policy_change_blocked_repo_ids.contains(task.repo_id.as_str())
             && !(task.kind == DevqlTaskKind::Sync
                 && task.source == DevqlTaskSource::RepoPolicyChange)
+        {
+            continue;
+        }
+        if task.kind == DevqlTaskKind::Ingest
+            && sync_blocked_ingest_repo_ids.contains(task.repo_id.as_str())
         {
             continue;
         }

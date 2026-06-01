@@ -3661,6 +3661,12 @@ struct AgentPreCommitInteractionSnapshot {
     uncheckpointed_turn_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AgentPreCommitObservation {
+    interactions: AgentPreCommitInteractionSnapshot,
+    checkpoint_mapping_count: usize,
+}
+
 fn collect_agent_pre_commit_interactions(
     sessions: &[InteractionSession],
     turns: &[InteractionTurn],
@@ -3713,6 +3719,23 @@ fn load_agent_pre_commit_interactions(
     ))
 }
 
+fn load_agent_pre_commit_observation(
+    world: &QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+) -> Result<AgentPreCommitObservation> {
+    let interactions = load_agent_pre_commit_interactions(world, repo_name, agent_name)?;
+    let checkpoint_mapping_count =
+        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
+            .context("reading Bitloops checkpoint mappings before commit")?
+            .len();
+
+    Ok(AgentPreCommitObservation {
+        interactions,
+        checkpoint_mapping_count,
+    })
+}
+
 pub fn assert_agent_interaction_exists_before_commit_for_repo(
     world: &QatWorld,
     repo_name: &str,
@@ -3720,7 +3743,26 @@ pub fn assert_agent_interaction_exists_before_commit_for_repo(
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let normalised_agent_name = normalise_smoke_agent_name(agent_name);
-    let snapshot = load_agent_pre_commit_interactions(world, repo_name, normalised_agent_name)?;
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("persisted {normalised_agent_name} interaction before commit"),
+        || load_agent_pre_commit_observation(world, repo_name, normalised_agent_name),
+        |observation| {
+            !observation.interactions.session_ids.is_empty()
+                && !observation.interactions.uncheckpointed_turn_ids.is_empty()
+                && observation.checkpoint_mapping_count == 0
+        },
+        |observation| {
+            format!(
+                "sessions={:?}, uncheckpointed_turns={:?}, checkpoint_mappings={}",
+                observation.interactions.session_ids,
+                observation.interactions.uncheckpointed_turn_ids,
+                observation.checkpoint_mapping_count
+            )
+        },
+    )?;
+    let snapshot = observation.interactions;
 
     ensure!(
         !snapshot.session_ids.is_empty(),
@@ -3748,13 +3790,10 @@ pub fn assert_agent_interaction_exists_before_commit_for_repo(
         snapshot.uncheckpointed_turn_ids
     );
 
-    let mappings =
-        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-            .context("reading Bitloops checkpoint mappings before commit")?;
     ensure!(
-        mappings.is_empty(),
+        observation.checkpoint_mapping_count == 0,
         "expected no checkpoint mappings before commit, found {} with interaction sessions {:?} and turns {:?}",
-        mappings.len(),
+        observation.checkpoint_mapping_count,
         snapshot.session_ids,
         snapshot.uncheckpointed_turn_ids
     );
@@ -5423,20 +5462,20 @@ fn current_file_state_effective_content_id(world: &QatWorld, path: &str) -> Resu
     .with_context(|| format!("loading current_file_state effective_content_id for `{path}`"))
 }
 
-fn file_state_count_for_commit(world: &QatWorld, commit_sha: &str) -> Result<usize> {
+fn commit_artefact_count_for_commit(world: &QatWorld, commit_sha: &str) -> Result<usize> {
     let conn = open_relational_connection(world)?;
     let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2",
+            "SELECT COUNT(*) FROM commit_artefacts WHERE repo_id = ?1 AND commit_sha = ?2",
             rusqlite::params![repo_id, commit_sha],
             |row| row.get(0),
         )
-        .with_context(|| format!("counting file_state rows for commit `{commit_sha}`"))?;
-    usize::try_from(count).context("converting file_state count to usize")
+        .with_context(|| format!("counting commit_artefacts rows for commit `{commit_sha}`"))?;
+    usize::try_from(count).context("converting commit_artefacts count to usize")
 }
 
-fn file_state_count_for_commit_path(
+fn commit_artefact_count_for_commit_path(
     world: &QatWorld,
     commit_sha: &str,
     path: &str,
@@ -5445,14 +5484,18 @@ fn file_state_count_for_commit_path(
     let repo_id = resolve_repo_id_for_world(world, &conn)?;
     let count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2 AND path = ?3",
+            "SELECT COUNT(*) \
+             FROM commit_artefacts \
+             WHERE repo_id = ?1 \
+               AND commit_sha = ?2 \
+               AND path = ?3",
             rusqlite::params![repo_id, commit_sha, path],
             |row| row.get(0),
         )
         .with_context(|| {
-            format!("counting file_state rows for commit `{commit_sha}` path `{path}`")
+            format!("counting commit_artefacts rows for commit `{commit_sha}` path `{path}`")
         })?;
-    usize::try_from(count).context("converting file_state path count to usize")
+    usize::try_from(count).context("converting commit_artefacts path count to usize")
 }
 
 fn commit_has_changed_files(world: &QatWorld, commit_sha: &str) -> Result<bool> {
@@ -6272,27 +6315,32 @@ pub fn assert_expected_shas_completed_in_ledger(world: &QatWorld, repo_name: &st
     Ok(())
 }
 
-pub fn assert_expected_shas_have_file_state_rows(world: &QatWorld, repo_name: &str) -> Result<()> {
+pub fn assert_expected_shas_have_commit_artefact_rows(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     ensure!(
         !world.expected_commit_shas.is_empty(),
-        "no expected commit SHAs captured for file_state assertion"
+        "no expected commit SHAs captured for commit artefact assertion"
     );
     let mut missing = Vec::new();
     for sha in &world.expected_commit_shas {
-        if file_state_count_for_commit(world, sha)? == 0 && commit_has_changed_files(world, sha)? {
+        if commit_artefact_count_for_commit(world, sha)? == 0
+            && commit_has_changed_files(world, sha)?
+        {
             missing.push(sha.clone());
         }
     }
     ensure!(
         missing.is_empty(),
-        "expected file_state rows for commit SHAs, but none found for: {}",
+        "expected commit artefact rows for commit SHAs, but none found for: {}",
         missing.join(", ")
     );
     Ok(())
 }
 
-pub fn assert_expected_paths_have_file_state_rows_for_expected_shas(
+pub fn assert_expected_paths_have_commit_artefact_rows_for_expected_shas(
     world: &QatWorld,
     repo_name: &str,
 ) -> Result<()> {
@@ -6300,13 +6348,13 @@ pub fn assert_expected_paths_have_file_state_rows_for_expected_shas(
     let pairs = expected_commit_path_pairs(&world.expected_commit_shas, &world.expected_paths)?;
     let mut missing = Vec::new();
     for (sha, path) in pairs {
-        if file_state_count_for_commit_path(world, &sha, &path)? == 0 {
+        if commit_artefact_count_for_commit_path(world, &sha, &path)? == 0 {
             missing.push(format!("{path}@{sha}"));
         }
     }
     ensure!(
         missing.is_empty(),
-        "expected file_state rows for expected path/SHA pairs, but none found for: {}",
+        "expected commit artefact rows for expected path/SHA pairs, but none found for: {}",
         missing.join(", ")
     );
     Ok(())

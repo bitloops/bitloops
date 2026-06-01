@@ -22,6 +22,17 @@ fn isolated_bitloops_command_routes_test_state_outside_repo() {
 }
 
 #[test]
+fn isolated_bitloops_command_scrubs_dashboard_bundle_source_overrides() {
+    let repo = tempfile::tempdir().expect("temp dir");
+    let bin = repo.path().join("bitloops-bin");
+
+    let cmd = test_command_support::new_isolated_bitloops_command(&bin, repo.path(), &["status"]);
+
+    assert_env_removed(&cmd, "BITLOOPS_DASHBOARD_CDN_BASE_URL");
+    assert_env_removed(&cmd, "BITLOOPS_DASHBOARD_MANIFEST_URL");
+}
+
+#[test]
 fn enter_repo_app_env_routes_test_state_outside_repo() {
     let repo = tempfile::tempdir().expect("temp dir");
     let previous = std::env::var_os("BITLOOPS_TEST_STATE_DIR_OVERRIDE");
@@ -39,6 +50,13 @@ fn enter_repo_app_env_routes_test_state_outside_repo() {
         std::env::var_os("BITLOOPS_TEST_STATE_DIR_OVERRIDE"),
         previous
     );
+}
+
+fn assert_env_removed(cmd: &Command, name: &str) {
+    let removed = cmd
+        .get_envs()
+        .any(|(key, value)| key == OsStr::new(name) && value.is_none());
+    assert!(removed, "{name} should be explicitly removed");
 }
 
 #[test]

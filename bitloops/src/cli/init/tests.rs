@@ -5,7 +5,7 @@ use crate::test_support::process_state::with_process_state;
 use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_dir_overrides};
 
 use clap::Parser;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
@@ -165,6 +165,33 @@ fn write_current_daemon_runtime_state(config_path: &Path) {
     std::fs::write(&runtime_path, bytes).expect("write runtime state");
 }
 
+fn managed_inference_install_outcome(
+    binary_path: PathBuf,
+    freshly_installed: bool,
+) -> crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+    crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+        version: "v1.2.3".to_string(),
+        binary_path,
+        freshly_installed,
+    }
+}
+
+fn with_successful_managed_inference_install<T>(binary_path: PathBuf, f: impl FnOnce() -> T) -> T {
+    crate::cli::inference::with_managed_inference_install_hook(
+        move |_repo_root| Ok(managed_inference_install_outcome(binary_path.clone(), true)),
+        f,
+    )
+}
+
+fn set_default_daemon_bitloops_inference_command(config_path: &Path, command: &str) {
+    let contents = std::fs::read_to_string(config_path).expect("read daemon config");
+    let mut doc = contents
+        .parse::<toml_edit::DocumentMut>()
+        .expect("parse daemon config");
+    doc["inference"]["runtimes"]["bitloops_inference"]["command"] = toml_edit::value(command);
+    std::fs::write(config_path, doc.to_string()).expect("write daemon config");
+}
+
 #[test]
 fn init_args_accept_repo_local_flags() {
     let parsed = Cli::try_parse_from([
@@ -195,6 +222,26 @@ fn init_args_accept_repo_local_flags() {
     assert_eq!(args.exclude, vec!["target/**"]);
     assert_eq!(args.exclude_from, vec![".gitignore"]);
     assert!(args.force);
+}
+
+#[test]
+fn init_args_bare_backfill_defaults_to_twenty_five_commits() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--agent",
+        "codex",
+        "--sync=false",
+        "--ingest=true",
+        "--backfill",
+    ])
+    .expect("bare init backfill flag should parse");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+
+    assert_eq!(DEFAULT_INIT_INGEST_BACKFILL, 25);
+    assert_eq!(args.backfill, Some(25));
 }
 
 #[test]
@@ -536,6 +583,324 @@ fn init_reconciles_repo_watcher_when_daemon_is_running() {
 }
 
 #[test]
+fn init_runtime_start_installs_managed_inference_when_daemon_config_requires_it() {
+    let repo = TempDir::new().expect("repo");
+    let app_dirs = TempDir::new().expect("app dirs");
+    setup_git_repo(&repo);
+
+    with_process_state(None, &[], || {
+        with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+            crate::config::ensure_daemon_config_exists().expect("write default daemon config");
+            let install_called = Arc::new(Mutex::new(false));
+            let install_called_for_hook = Arc::clone(&install_called);
+            let start_called = Arc::new(Mutex::new(false));
+            let start_called_for_hook = Arc::clone(&start_called);
+            let binary_path = repo.path().join(".bitloops/test-bin/bitloops-inference");
+
+            crate::cli::inference::with_managed_inference_install_hook(
+                move |_repo_root| {
+                    *install_called_for_hook.lock().expect("install called lock") = true;
+                    Ok(managed_inference_install_outcome(binary_path.clone(), true))
+                },
+                || {
+                    crate::cli::devql::graphql::with_graphql_executor_hook(
+                        move |_, query, variables| {
+                            if query.contains("mutation StartInit") {
+                                *start_called_for_hook.lock().expect("start called lock") = true;
+                                return Ok(serde_json::json!({
+                                    "startInit": {
+                                        "initSessionId": "init-managed-inference-test"
+                                    }
+                                }));
+                            }
+                            if query.contains("query RuntimeSnapshot") {
+                                let repo_id = variables["repoId"].as_str().expect("repo id");
+                                return Ok(completed_runtime_snapshot_json(
+                                    repo_id,
+                                    "init-managed-inference-test",
+                                ));
+                            }
+                            panic!("unexpected GraphQL query: {query}");
+                        },
+                        || {
+                            let mut out = Vec::new();
+                            let args = InitArgs {
+                                sync: Some(true),
+                                ingest: Some(true),
+                                ..init_args()
+                            };
+                            run_with_writer_for_project_root(args, repo.path(), &mut out, None)
+                                .expect("init should complete");
+
+                            let rendered = String::from_utf8(out).expect("utf8 output");
+                            assert!(
+                                rendered.contains(
+                                    "Installed managed standalone `bitloops-inference` runtime"
+                                ),
+                                "init should print install lines only when installing:\n{rendered}"
+                            );
+                        },
+                    );
+                },
+            );
+
+            assert!(
+                *install_called.lock().expect("install called lock"),
+                "managed inference install hook should be invoked before runtime init"
+            );
+            assert!(
+                *start_called.lock().expect("start called lock"),
+                "runtime init should still start after a successful install"
+            );
+        })
+    });
+}
+
+#[test]
+fn init_runtime_start_fails_before_start_init_when_managed_inference_install_fails() {
+    let repo = TempDir::new().expect("repo");
+    let app_dirs = TempDir::new().expect("app dirs");
+    setup_git_repo(&repo);
+
+    with_process_state(None, &[], || {
+        with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+            crate::config::ensure_daemon_config_exists().expect("write default daemon config");
+            let start_called = Arc::new(Mutex::new(false));
+            let start_called_for_hook = Arc::clone(&start_called);
+
+            let result = crate::cli::inference::with_managed_inference_install_hook(
+                move |_repo_root| Err(anyhow::anyhow!("download exploded")),
+                || {
+                    crate::cli::devql::graphql::with_graphql_executor_hook(
+                        move |_, query, _| {
+                            if query.contains("mutation StartInit") {
+                                *start_called_for_hook.lock().expect("start called lock") = true;
+                            }
+                            panic!("StartInit should not be called after install failure");
+                        },
+                        || {
+                            let mut out = Vec::new();
+                            let args = InitArgs {
+                                sync: Some(true),
+                                ingest: Some(true),
+                                ..init_args()
+                            };
+                            run_with_writer_for_project_root(args, repo.path(), &mut out, None)
+                        },
+                    )
+                },
+            );
+
+            let err = result.expect_err("init should fail when managed inference install fails");
+            let rendered = format!("{err:#}");
+            assert!(
+                rendered.contains(
+                    "Bitloops init could not install the managed inference runtime required by daemon config"
+                ),
+                "unexpected error: {rendered}"
+            );
+            assert!(
+                rendered.contains("download exploded"),
+                "root cause should be preserved: {rendered}"
+            );
+            assert!(
+                !*start_called.lock().expect("start called lock"),
+                "StartInit must not be called when inference install fails"
+            );
+        })
+    });
+}
+
+#[test]
+fn init_config_only_run_does_not_install_managed_inference() {
+    let repo = TempDir::new().expect("repo");
+    let app_dirs = TempDir::new().expect("app dirs");
+    setup_git_repo(&repo);
+
+    with_process_state(None, &[], || {
+        with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+            crate::config::ensure_daemon_config_exists().expect("write default daemon config");
+            let install_called = Arc::new(Mutex::new(false));
+            let install_called_for_hook = Arc::clone(&install_called);
+            let binary_path = repo.path().join(".bitloops/test-bin/bitloops-inference");
+
+            crate::cli::inference::with_managed_inference_install_hook(
+                move |_repo_root| {
+                    *install_called_for_hook.lock().expect("install called lock") = true;
+                    Ok(managed_inference_install_outcome(binary_path.clone(), true))
+                },
+                || {
+                    let mut out = Vec::new();
+                    let args = InitArgs {
+                        sync: Some(false),
+                        ingest: Some(false),
+                        ..init_args()
+                    };
+                    run_with_writer_for_project_root(args, repo.path(), &mut out, None)
+                        .expect("init should complete");
+                },
+            );
+
+            assert!(
+                !*install_called.lock().expect("install called lock"),
+                "config-only init should not install managed inference"
+            );
+        })
+    });
+}
+
+#[test]
+fn init_runtime_start_does_not_install_for_custom_managed_inference_command() {
+    let repo = TempDir::new().expect("repo");
+    let app_dirs = TempDir::new().expect("app dirs");
+    setup_git_repo(&repo);
+
+    with_process_state(None, &[], || {
+        with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+            let config_path =
+                crate::config::ensure_daemon_config_exists().expect("write default daemon config");
+            set_default_daemon_bitloops_inference_command(
+                &config_path,
+                "/opt/custom/bitloops-inference",
+            );
+            let install_called = Arc::new(Mutex::new(false));
+            let install_called_for_hook = Arc::clone(&install_called);
+            let start_called = Arc::new(Mutex::new(false));
+            let start_called_for_hook = Arc::clone(&start_called);
+            let binary_path = repo.path().join(".bitloops/test-bin/bitloops-inference");
+
+            crate::cli::inference::with_managed_inference_install_hook(
+                move |_repo_root| {
+                    *install_called_for_hook.lock().expect("install called lock") = true;
+                    Ok(managed_inference_install_outcome(binary_path.clone(), true))
+                },
+                || {
+                    crate::cli::devql::graphql::with_graphql_executor_hook(
+                        move |_, query, variables| {
+                            if query.contains("mutation StartInit") {
+                                *start_called_for_hook.lock().expect("start called lock") = true;
+                                return Ok(serde_json::json!({
+                                    "startInit": {
+                                        "initSessionId": "init-custom-inference-test"
+                                    }
+                                }));
+                            }
+                            if query.contains("query RuntimeSnapshot") {
+                                let repo_id = variables["repoId"].as_str().expect("repo id");
+                                return Ok(completed_runtime_snapshot_json(
+                                    repo_id,
+                                    "init-custom-inference-test",
+                                ));
+                            }
+                            panic!("unexpected GraphQL query: {query}");
+                        },
+                        || {
+                            let mut out = Vec::new();
+                            let args = InitArgs {
+                                sync: Some(true),
+                                ingest: Some(true),
+                                ..init_args()
+                            };
+                            run_with_writer_for_project_root(args, repo.path(), &mut out, None)
+                                .expect("init should complete");
+                        },
+                    );
+                },
+            );
+
+            assert!(
+                !*install_called.lock().expect("install called lock"),
+                "custom runtime commands should remain user-managed"
+            );
+            assert!(
+                *start_called.lock().expect("start called lock"),
+                "runtime init should still start for custom user-managed commands"
+            );
+        })
+    });
+}
+
+#[test]
+fn init_runtime_start_does_not_print_install_line_for_complete_managed_runtime() {
+    let repo = TempDir::new().expect("repo");
+    let app_dirs = TempDir::new().expect("app dirs");
+    setup_git_repo(&repo);
+
+    with_process_state(None, &[], || {
+        with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+            let config_path =
+                crate::config::ensure_daemon_config_exists().expect("write default daemon config");
+            let binary_path =
+                crate::cli::inference::managed_inference_binary_path().expect("binary path");
+            set_default_daemon_bitloops_inference_command(
+                &config_path,
+                binary_path.to_string_lossy().as_ref(),
+            );
+            let install_called = Arc::new(Mutex::new(false));
+            let install_called_for_hook = Arc::clone(&install_called);
+
+            crate::cli::inference::with_managed_inference_install_hook(
+                move |_repo_root| {
+                    *install_called_for_hook.lock().expect("install called lock") = true;
+                    Ok(managed_inference_install_outcome(
+                        binary_path.clone(),
+                        false,
+                    ))
+                },
+                || {
+                    crate::cli::devql::graphql::with_graphql_executor_hook(
+                        move |_, query, variables| {
+                            if query.contains("mutation StartInit") {
+                                return Ok(serde_json::json!({
+                                    "startInit": {
+                                        "initSessionId": "init-complete-inference-test"
+                                    }
+                                }));
+                            }
+                            if query.contains("query RuntimeSnapshot") {
+                                let repo_id = variables["repoId"].as_str().expect("repo id");
+                                return Ok(completed_runtime_snapshot_json(
+                                    repo_id,
+                                    "init-complete-inference-test",
+                                ));
+                            }
+                            panic!("unexpected GraphQL query: {query}");
+                        },
+                        || {
+                            let mut out = Vec::new();
+                            let args = InitArgs {
+                                sync: Some(true),
+                                ingest: Some(true),
+                                ..init_args()
+                            };
+                            run_with_writer_for_project_root(args, repo.path(), &mut out, None)
+                                .expect("init should complete");
+
+                            let rendered = String::from_utf8(out).expect("utf8 output");
+                            assert!(
+                                !rendered.contains(
+                                    "Installed managed standalone `bitloops-inference` runtime"
+                                ),
+                                "already-complete runtime should not print install line:\n{rendered}"
+                            );
+                            assert!(
+                                !rendered.contains("Updated inference runtime command"),
+                                "already-complete runtime should not print rewrite line:\n{rendered}"
+                            );
+                        },
+                    );
+                },
+            );
+
+            assert!(
+                *install_called.lock().expect("install called lock"),
+                "init should still verify a required managed runtime"
+            );
+        })
+    });
+}
+
+#[test]
 fn init_runtime_start_includes_semantic_lanes_and_repo_policy() {
     let repo = TempDir::new().expect("repo");
     let app_dirs = TempDir::new().expect("app dirs");
@@ -546,38 +911,41 @@ fn init_runtime_start_includes_semantic_lanes_and_repo_policy() {
             crate::config::ensure_daemon_config_exists().expect("write default daemon config");
             let captured_input = Arc::new(Mutex::new(None::<serde_json::Value>));
             let captured_input_for_hook = Arc::clone(&captured_input);
+            let binary_path = repo.path().join(".bitloops/test-bin/bitloops-inference");
 
-            crate::cli::devql::graphql::with_graphql_executor_hook(
-                move |_, query, variables| {
-                    if query.contains("mutation StartInit") {
-                        *captured_input_for_hook.lock().expect("captured input lock") =
-                            Some(variables["input"].clone());
-                        return Ok(serde_json::json!({
-                            "startInit": {
-                                "initSessionId": "init-semantic-test"
-                            }
-                        }));
-                    }
-                    if query.contains("query RuntimeSnapshot") {
-                        let repo_id = variables["repoId"].as_str().expect("repo id");
-                        return Ok(completed_runtime_snapshot_json(
-                            repo_id,
-                            "init-semantic-test",
-                        ));
-                    }
-                    panic!("unexpected GraphQL query: {query}");
-                },
-                || {
-                    let mut out = Vec::new();
-                    let args = InitArgs {
-                        sync: Some(true),
-                        ingest: Some(true),
-                        ..init_args()
-                    };
-                    run_with_writer_for_project_root(args, repo.path(), &mut out, None)
-                        .expect("init should complete");
-                },
-            );
+            with_successful_managed_inference_install(binary_path, || {
+                crate::cli::devql::graphql::with_graphql_executor_hook(
+                    move |_, query, variables| {
+                        if query.contains("mutation StartInit") {
+                            *captured_input_for_hook.lock().expect("captured input lock") =
+                                Some(variables["input"].clone());
+                            return Ok(serde_json::json!({
+                                "startInit": {
+                                    "initSessionId": "init-semantic-test"
+                                }
+                            }));
+                        }
+                        if query.contains("query RuntimeSnapshot") {
+                            let repo_id = variables["repoId"].as_str().expect("repo id");
+                            return Ok(completed_runtime_snapshot_json(
+                                repo_id,
+                                "init-semantic-test",
+                            ));
+                        }
+                        panic!("unexpected GraphQL query: {query}");
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        let args = InitArgs {
+                            sync: Some(true),
+                            ingest: Some(true),
+                            ..init_args()
+                        };
+                        run_with_writer_for_project_root(args, repo.path(), &mut out, None)
+                            .expect("init should complete");
+                    },
+                );
+            });
 
             let input = captured_input
                 .lock()
@@ -633,38 +1001,41 @@ fn init_runtime_start_can_select_summary_embeddings_without_code_embeddings() {
 
             let captured_input = Arc::new(Mutex::new(None::<serde_json::Value>));
             let captured_input_for_hook = Arc::clone(&captured_input);
+            let binary_path = repo.path().join(".bitloops/test-bin/bitloops-inference");
 
-            crate::cli::devql::graphql::with_graphql_executor_hook(
-                move |_, query, variables| {
-                    if query.contains("mutation StartInit") {
-                        *captured_input_for_hook.lock().expect("captured input lock") =
-                            Some(variables["input"].clone());
-                        return Ok(serde_json::json!({
-                            "startInit": {
-                                "initSessionId": "init-summary-embeddings-test"
-                            }
-                        }));
-                    }
-                    if query.contains("query RuntimeSnapshot") {
-                        let repo_id = variables["repoId"].as_str().expect("repo id");
-                        return Ok(completed_runtime_snapshot_json(
-                            repo_id,
-                            "init-summary-embeddings-test",
-                        ));
-                    }
-                    panic!("unexpected GraphQL query: {query}");
-                },
-                || {
-                    let mut out = Vec::new();
-                    let args = InitArgs {
-                        sync: Some(true),
-                        ingest: Some(false),
-                        ..init_args()
-                    };
-                    run_with_writer_for_project_root(args, repo.path(), &mut out, None)
-                        .expect("init should complete");
-                },
-            );
+            with_successful_managed_inference_install(binary_path, || {
+                crate::cli::devql::graphql::with_graphql_executor_hook(
+                    move |_, query, variables| {
+                        if query.contains("mutation StartInit") {
+                            *captured_input_for_hook.lock().expect("captured input lock") =
+                                Some(variables["input"].clone());
+                            return Ok(serde_json::json!({
+                                "startInit": {
+                                    "initSessionId": "init-summary-embeddings-test"
+                                }
+                            }));
+                        }
+                        if query.contains("query RuntimeSnapshot") {
+                            let repo_id = variables["repoId"].as_str().expect("repo id");
+                            return Ok(completed_runtime_snapshot_json(
+                                repo_id,
+                                "init-summary-embeddings-test",
+                            ));
+                        }
+                        panic!("unexpected GraphQL query: {query}");
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        let args = InitArgs {
+                            sync: Some(true),
+                            ingest: Some(false),
+                            ..init_args()
+                        };
+                        run_with_writer_for_project_root(args, repo.path(), &mut out, None)
+                            .expect("init should complete");
+                    },
+                );
+            });
 
             let input = captured_input
                 .lock()

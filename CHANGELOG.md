@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Changed
+
 ## [0.0.31] - 2026-05-26
 
 ### Added
@@ -17,7 +19,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - **Dashboard bundle install now falls back once when the newest compatible bundle archive 404s** (`CLI-1918`): `fetchBundle` now tries the next compatible `bundle_versions.json` entry when the selected archive returns HTTP 404, while preserving hard failures for checksum mismatches and limiting fallback to one older version.
-
 - **Architecture role classification is more stable around noisy unknowns and imperfect rules**: ordinary non-role files, import artefacts, file-like duplicate artefacts, lock/config/cache/documentation paths, and low-signal source targets are suppressed instead of repeatedly queued for adjudication, while high-impact `main` targets are still escalated when they lack confident deterministic classification. Invalid active detection rules are skipped with diagnostics instead of aborting classification for the remaining valid rules.
 - **Architecture role adjudication and seed prompts now produce stricter reviewable rule suggestions**: adjudication requests use stable target keys plus fact/rule hashes to avoid generation-only churn, adjudication responses validate draftable rule suggestions against active roles and supported fact predicates, and seed prompts now ask local agents to inspect code read-only before returning roles or deterministic rule candidates.
 - **Failed daemon startup no longer leaves the spawned daemon process running**: detached and service-managed daemon starts now stop the process they just spawned when readiness times out, preventing orphaned `bitloops` processes from holding local DuckDB event-store locks after startup failure.

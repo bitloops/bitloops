@@ -102,6 +102,10 @@ impl SqliteConnectionPool {
             .context("migrating SQLite DevQL current-state branch scope")?;
         self.execute_batch(crate::host::devql::devql_schema_sql_sqlite())
             .context("initialising SQLite DevQL schema")?;
+        self.execute_batch(
+            "DROP TABLE IF EXISTS commit_hunks;\nDROP TABLE IF EXISTS commit_file_deltas;",
+        )
+        .context("dropping obsolete SQLite commit hunk tables")?;
         self.migrate_historical_artefacts_cutover()
             .context("migrating SQLite historical artefacts cutover")?;
         self.migrate_workspace_revisions_uniqueness()

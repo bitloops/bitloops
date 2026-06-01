@@ -123,3 +123,61 @@ pub(super) async fn upsert_language_artefacts(
 
     Ok(())
 }
+
+pub(super) async fn upsert_language_artefact_metadata(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    rev: &FileRevision<'_>,
+    file_artefact: &FileArtefactRow,
+    source_content: &str,
+) -> Result<usize> {
+    let Some((_context, pack_id)) = language_pack_context_for_language(
+        cfg,
+        Some(rev.commit_sha),
+        &file_artefact.language,
+        Some(rev.path),
+    )
+    .with_context(|| {
+        format!(
+            "resolving language pack owner for `{}`",
+            file_artefact.language
+        )
+    })?
+    else {
+        return Ok(0);
+    };
+
+    let registry = language_adapter_registry()?;
+    let items = registry.extract_artefacts(pack_id, source_content, rev.path)?;
+    let symbol_records = build_symbol_records(
+        cfg,
+        rev.path,
+        rev.blob_sha,
+        file_artefact,
+        &items,
+        source_content,
+    );
+    if symbol_records.is_empty() {
+        return Ok(0);
+    }
+
+    let sql_batch = symbol_records
+        .iter()
+        .map(|record| {
+            build_upsert_historical_artefact_sql(
+                cfg,
+                relational,
+                rev.path,
+                rev.blob_sha,
+                &file_artefact.language,
+                &file_artefact.extraction_fingerprint,
+                record,
+            )
+        })
+        .collect::<Vec<_>>();
+    relational
+        .exec_batch_transactional_for_role(RelationalStorageRole::SharedRelational, &sql_batch)
+        .await?;
+
+    Ok(symbol_records.len())
+}

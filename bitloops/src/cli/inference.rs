@@ -9,9 +9,9 @@ pub use args::{InferenceArgs, InferenceCommand, run};
 #[allow(unused_imports)]
 pub(crate) use managed::{
     ManagedInferenceInstallPhase, ManagedInferenceInstallProgress,
-    ensure_managed_inference_runtime, install_or_bootstrap_inference,
-    install_or_bootstrap_inference_with_progress, managed_inference_binary_dir,
-    managed_inference_binary_path, managed_inference_metadata_path,
+    ensure_managed_inference_runtime, ensure_required_managed_inference_runtime_for_init,
+    install_or_bootstrap_inference, install_or_bootstrap_inference_with_progress,
+    managed_inference_binary_dir, managed_inference_binary_path, managed_inference_metadata_path,
     managed_runtime_command_is_eligible, managed_runtime_version_for_command,
 };
 pub use setup::TextGenerationRuntime;

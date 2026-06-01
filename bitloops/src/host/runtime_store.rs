@@ -17,16 +17,20 @@ mod util;
 #[cfg(test)]
 mod tests;
 
+#[cfg(any(feature = "slow-tests", feature = "qat-tests"))]
+pub(crate) use repo_lifecycle_spool::lifecycle_spool_has_running_repo_work;
 pub(crate) use repo_lifecycle_spool::{
-    LifecycleStopHookEnqueueResult, LifecycleStopJobInsert, LifecycleStopJobRecord,
-    LifecycleStopWorkspaceSnapshot, claim_next_lifecycle_stop_jobs, delete_lifecycle_stop_job,
-    enqueue_lifecycle_stop_job_hook_safe_at, lifecycle_stop_spool_has_repo_work,
-    lifecycle_stop_spool_repo_ids_with_work, recover_running_lifecycle_stop_jobs,
-    requeue_lifecycle_stop_job, unix_timestamp_now,
+    LifecycleBoundarySnapshot, LifecycleHookEnqueueResult, LifecycleJobInsert, LifecycleJobRecord,
+    LifecycleJobStatus, LifecycleWorkspaceSnapshot, MAX_LIFECYCLE_JOB_ATTEMPTS,
+    claim_next_lifecycle_job, delete_lifecycle_job, enqueue_lifecycle_job_hook_safe_at,
+    fail_or_requeue_lifecycle_job, lifecycle_spool_has_repo_work,
+    lifecycle_spool_repo_ids_with_work, mark_lifecycle_job_failed, recover_running_lifecycle_jobs,
+    requeue_lifecycle_job, unix_timestamp_now,
 };
 #[cfg(test)]
 pub(crate) use repo_lifecycle_spool::{
-    enqueue_lifecycle_stop_job_sqlite, list_lifecycle_stop_jobs_for_tests,
+    enqueue_lifecycle_job_sqlite, force_pending_job_available_for_tests,
+    list_lifecycle_jobs_for_tests,
 };
 pub(crate) use repo_open::open_runtime_sqlite_for_config_root;
 pub use repo_workplane::{

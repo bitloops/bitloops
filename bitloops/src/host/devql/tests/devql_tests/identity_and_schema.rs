@@ -170,6 +170,10 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("PRIMARY KEY (repo_id, path, symbol_id)"));
     assert!(!sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS commit_ingest_ledger"));
+    assert!(!sql.contains("CREATE TABLE IF NOT EXISTS commit_file_deltas"));
+    assert!(!sql.contains("CREATE TABLE IF NOT EXISTS commit_hunks"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS commit_artefacts"));
+    assert!(sql.contains("PRIMARY KEY (repo_id, commit_sha, artefact_id)"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges"));
     assert!(sql.contains("CONSTRAINT artefact_edges_target_chk"));
     assert!(sql.contains("CONSTRAINT artefact_edges_line_range_chk"));
@@ -208,6 +212,10 @@ fn sqlite_schema_sql_includes_sync_state_table() {
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
     assert!(sql.contains("PRIMARY KEY (repo_id, state_key)"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS commit_ingest_ledger"));
+    assert!(!sql.contains("CREATE TABLE IF NOT EXISTS commit_file_deltas"));
+    assert!(!sql.contains("CREATE TABLE IF NOT EXISTS commit_hunks"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS commit_artefacts"));
+    assert!(sql.contains("PRIMARY KEY (repo_id, commit_sha, artefact_id)"));
     assert!(sql.contains("checkpoint_status TEXT NOT NULL"));
 }
 

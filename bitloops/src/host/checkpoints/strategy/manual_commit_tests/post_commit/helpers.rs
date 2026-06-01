@@ -45,12 +45,46 @@ pub(crate) fn seed_interaction_turn(
     );
 }
 
+pub(crate) fn seed_interaction_turn_with_pending_spool(
+    repo_root: &Path,
+    session_id: &str,
+    turn_id: &str,
+    files: &[&str],
+) {
+    seed_interaction_turn_inner(
+        repo_root,
+        session_id,
+        turn_id,
+        files,
+        "{\"type\":\"user\",\"content\":\"make the change\"}\n",
+        false,
+    );
+}
+
 pub(crate) fn seed_interaction_turn_with_fragment(
     repo_root: &Path,
     session_id: &str,
     turn_id: &str,
     files: &[&str],
     transcript_fragment: &str,
+) {
+    seed_interaction_turn_inner(
+        repo_root,
+        session_id,
+        turn_id,
+        files,
+        transcript_fragment,
+        true,
+    );
+}
+
+fn seed_interaction_turn_inner(
+    repo_root: &Path,
+    session_id: &str,
+    turn_id: &str,
+    files: &[&str],
+    transcript_fragment: &str,
+    flush_spool: bool,
 ) {
     let spool = open_test_spool(repo_root);
     let event_repo = open_test_event_repository(repo_root);
@@ -100,6 +134,11 @@ pub(crate) fn seed_interaction_turn_with_fragment(
     event_repo.upsert_turn(&turn).expect("record turn");
     spool.record_session(&session).expect("record session");
     spool.record_turn(&turn).expect("record turn");
+    if flush_spool {
+        spool
+            .flush(&event_repo)
+            .expect("flush seeded interaction spool mutations");
+    }
 }
 
 pub(crate) fn commit_file(repo_root: &Path, filename: &str, content: &str) {

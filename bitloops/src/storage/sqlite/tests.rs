@@ -393,6 +393,33 @@ fn initialise_devql_schema_is_idempotent() -> Result<()> {
 }
 
 #[test]
+fn initialise_devql_schema_drops_obsolete_commit_hunk_tables() -> Result<()> {
+    let temp = TempDir::new().context("creating temp dir")?;
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+    sqlite.execute_batch(
+        "CREATE TABLE commit_file_deltas (repo_id TEXT NOT NULL);
+         CREATE TABLE commit_hunks (repo_id TEXT NOT NULL);",
+    )?;
+
+    sqlite.initialise_devql_schema()?;
+
+    for table in ["commit_file_deltas", "commit_hunks"] {
+        let exists = sqlite.with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )?;
+            Ok(count == 1)
+        })?;
+        assert!(!exists, "obsolete table `{table}` should be dropped");
+    }
+
+    Ok(())
+}
+
+#[test]
 fn initialise_devql_schema_recovers_legacy_workspace_revision_duplicates() -> Result<()> {
     let temp = TempDir::new().context("creating temp dir")?;
     let sqlite_path = temp.path().join("devql.sqlite");
