@@ -69,12 +69,29 @@ jobs:
         run: |
           cross build --release --target ${{ matrix.target }} -p bitloops --features duckdb-bundled
 
-      - name: Build (non-musl targets)
-        if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
+      - name: Build (non-musl non-Windows targets)
+        if: ${{ !contains(matrix.target, 'unknown-linux-musl') && runner.os != 'Windows' }}
         env:
           LZMA_API_STATIC: ${{ runner.os == 'macOS' && '1' || '' }}
           DUCKDB_DOWNLOAD_LIB: "0"
         run: cargo build --release --target ${{ matrix.target }} -p bitloops --features duckdb-bundled
+
+      - name: Build (Windows targets)
+        if: runner.os == 'Windows'
+        env:
+          DUCKDB_DOWNLOAD_LIB: "1"
+        run: cargo build --release --target ${{ matrix.target }} -p bitloops
+
+      - name: Stage DuckDB runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binDir = "target/${{ matrix.target }}/release"
+          $dll = Join-Path $binDir "deps/duckdb.dll"
+          if (-not (Test-Path $dll)) {
+            throw "Missing expected DuckDB runtime: $dll"
+          }
+          Copy-Item $dll (Join-Path $binDir "duckdb.dll") -Force
 
       - name: Validate macOS runtime linkage
         if: runner.os == 'macOS'
@@ -111,7 +128,9 @@ jobs:
         run: |
           $binDir = "target/${{ matrix.target }}/release"
           $exe = Join-Path $binDir "bitloops.exe"
+          $dll = Join-Path $binDir "duckdb.dll"
           if (-not (Test-Path $exe)) { throw "Missing expected binary: $exe" }
+          if (-not (Test-Path $dll)) { throw "Missing expected DuckDB runtime: $dll" }
 
       - name: Import Apple signing certificate
         if: runner.os == 'macOS'
@@ -208,6 +227,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist/package -Force | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/bitloops.exe" "dist/package/bitloops.exe" -Force
+          Copy-Item "target/${{ matrix.target }}/release/duckdb.dll" "dist/package/duckdb.dll" -Force
           Compress-Archive -Path dist/package/* -DestinationPath dist/bitloops-${{ matrix.target }}.zip
 
       - name: Upload build artifact
