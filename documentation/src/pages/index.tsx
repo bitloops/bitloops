@@ -17,7 +17,7 @@ function HomepageHeader() {
           {siteConfig.title}
         </Heading>
         <p className="hero__subtitle">{siteConfig.tagline}</p>
-        <p>
+        <p className={styles.fastStart}>
           Fastest scripted start: installer <code>--default-config</code>, then{' '}
           <code>bitloops init</code>. Manual setup:{' '}
           <code>bitloops configure --web</code>, then <code>bitloops init</code>

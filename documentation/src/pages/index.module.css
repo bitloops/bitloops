@@ -13,6 +13,23 @@
   }
 }
 
+.fastStart {
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 1.05rem;
+  line-height: 1.6;
+  max-width: 42rem;
+  margin: 0.75rem auto 0;
+}
+
+.fastStart code {
+  background-color: rgba(0, 0, 0, 0.35);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  padding: 0.15em 0.45em;
+  border-radius: 0.35rem;
+  font-weight: 600;
+}
+
 .buttons {
   display: flex;
   align-items: center;
